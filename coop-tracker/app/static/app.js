@@ -423,5 +423,60 @@ restoreBtn.addEventListener("click", async () => {
   }
 });
 
+const notifyBackdrop = document.getElementById("notify-backdrop");
+const notifyOpenBtn = document.getElementById("notify-open-btn");
+const notifyCloseBtn = document.getElementById("notify-close-btn");
+const notifyTestBtn = document.getElementById("notify-test-btn");
+const notifyTestResult = document.getElementById("notify-test-result");
+
+async function loadNotifyPanel() {
+  const list = document.getElementById("notify-services-list");
+  list.innerHTML = '<li class="notify-services-empty">Loading…</li>';
+  try {
+    const res = await fetch("api/notifications");
+    const data = await res.json();
+    document.getElementById("notify-enabled").textContent = data.reminder.enabled ? "On" : "Off";
+    document.getElementById("notify-time").textContent = data.reminder.check_time;
+    document.getElementById("notify-threshold").textContent = `${data.reminder.threshold_days} days`;
+    document.getElementById("notify-service").textContent = data.reminder.notify_service || "Not set";
+
+    if (data.services_error) {
+      list.innerHTML = `<li class="notify-services-empty">${escapeHtml(data.services_error)}</li>`;
+    } else if (!data.services.length) {
+      list.innerHTML =
+        '<li class="notify-services-empty">No notify services found. Make sure the Home Assistant Companion App is installed on your phone.</li>';
+    } else {
+      list.innerHTML = data.services.map((s) => `<li>notify.${escapeHtml(s)}</li>`).join("");
+    }
+  } catch (e) {
+    list.innerHTML = '<li class="notify-services-empty">Could not reach the server.</li>';
+  }
+}
+
+notifyOpenBtn.addEventListener("click", () => {
+  notifyBackdrop.classList.add("open");
+  notifyTestResult.textContent = "";
+  loadNotifyPanel();
+});
+notifyCloseBtn.addEventListener("click", () => notifyBackdrop.classList.remove("open"));
+notifyBackdrop.addEventListener("click", (e) => {
+  if (e.target === notifyBackdrop) notifyBackdrop.classList.remove("open");
+});
+
+notifyTestBtn.addEventListener("click", async () => {
+  notifyTestBtn.disabled = true;
+  notifyTestResult.textContent = "Sending…";
+  try {
+    const res = await fetch("api/notify-test", { method: "POST" });
+    const data = await res.json();
+    notifyTestResult.textContent =
+      data.status === "sent" ? "Test notification sent!" : `Failed: ${data.error || "unknown error"}`;
+  } catch (e) {
+    notifyTestResult.textContent = "Failed to reach server.";
+  } finally {
+    notifyTestBtn.disabled = false;
+  }
+});
+
 loadSummary();
 loadHistory();

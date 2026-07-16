@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.6.0
+
+- Added a push notification reminder: if no eggs have been collected in
+  a configurable number of days (default 2), Coop Tracker sends a push
+  notification to your phone via the Home Assistant Companion App, once
+  a day at a configurable check time. No Home Assistant Automation
+  needed — configure `reminder_enabled`, `reminder_check_time`,
+  `reminder_threshold_days`, and `notify_service` on the add-on's
+  Configuration tab.
+- New 🔔 Notifications panel: shows current reminder settings, lists
+  discovered `notify.*` services to help you find your phone's exact
+  service name, and includes a "Send test notification" button.
+- Requires the add-on's new `homeassistant_api` permission to call Home
+  Assistant's `notify` service directly.
+
 ## 1.5.1
 
 - Changed the default currency to DKK ("kr").

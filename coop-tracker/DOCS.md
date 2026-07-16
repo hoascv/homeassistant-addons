@@ -12,6 +12,9 @@ your chickens, right from your phone via the Home Assistant sidebar.
 - Finances section: browse any month's revenue, costs, and net
 - Recent activity history with filtering and delete
 - Backup & Restore panel (download or restore the SQLite database)
+- Push notification reminder if eggs haven't been collected in a
+  configurable number of days, sent straight to your phone via the Home
+  Assistant Companion App
 - Mobile-first layout, no page reloads
 
 ## Installation
@@ -31,5 +34,34 @@ which Home Assistant persists across restarts and updates automatically.
 
 - **currency**: `DKK` (default), `USD`, `EUR`, `GBP`, `SEK`, `NOK`, `CHF`,
   `CAD`, `AUD`, or `JPY`. Controls the symbol and decimal formatting used
-  for revenue, costs, and net figures. Set it from the add-on's
-  **Configuration** tab, then restart the add-on for it to take effect.
+  for revenue, costs, and net figures.
+- **reminder_enabled**: `false` (default). Turn on to get a push
+  notification when eggs haven't been collected recently.
+- **reminder_check_time**: `18:00` (default). Time of day (24h `HH:MM`,
+  in your Home Assistant's local timezone) the add-on checks whether a
+  reminder is due.
+- **reminder_threshold_days**: `2` (default). Send the reminder once the
+  last egg collection is at least this many days old.
+- **notify_service**: empty by default. The Home Assistant notify service
+  for your phone, e.g. `mobile_app_johns_iphone` — **without** the
+  `notify.` prefix. Find the exact name via the app's Notifications panel
+  (🔔 icon in the top bar), which lists every `notify.*` service Home
+  Assistant knows about (this requires the Home Assistant Companion App
+  to be installed on your phone first). Use the panel's "Send test
+  notification" button to confirm the value works before waiting for the
+  real trigger.
+
+Set these from the add-on's **Configuration** tab, then restart the
+add-on for changes to take effect.
+
+### Notes on the reminder
+
+- The check runs once a day, in-process — no Home Assistant Automation
+  needed.
+- The "already notified today" guard is in-memory only (not persisted).
+  If the add-on restarts shortly after sending today's reminder, it may
+  send one extra duplicate that day; this is a deliberate simplicity
+  tradeoff, not a bug.
+- Requires the add-on's `homeassistant_api` permission (already granted
+  in `config.yaml`), which lets it call Home Assistant's `notify` service
+  directly — no long-lived access token setup needed on your end.

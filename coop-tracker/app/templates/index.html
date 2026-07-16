@@ -10,6 +10,7 @@
 <header class="topbar">
   <span class="topbar-icon">🥚</span>
   <h1>Coop Tracker</h1>
+  <button class="topbar-icon-btn" id="notify-open-btn" aria-label="Notifications">🔔</button>
   <button class="topbar-icon-btn" id="backup-open-btn" aria-label="Backup and restore">⚙️</button>
 </header>
 
@@ -142,6 +143,52 @@
 
     <div class="sheet-actions">
       <button type="button" class="btn-secondary" id="backup-close-btn">Close</button>
+    </div>
+  </div>
+</div>
+
+<div class="sheet-backdrop" id="notify-backdrop">
+  <div class="sheet">
+    <h2>Egg Collection Reminder</h2>
+    <p class="sheet-subtext">
+      Reminder settings are configured on this add-on's <strong>Configuration</strong>
+      tab in Home Assistant. This panel shows the current settings and lets
+      you test the connection.
+    </p>
+
+    <div class="summary summary-secondary">
+      <div class="stat-small">
+        <span class="stat-small-label">Reminder</span>
+        <span class="stat-small-value" id="notify-enabled">–</span>
+      </div>
+      <div class="stat-small">
+        <span class="stat-small-label">Check time</span>
+        <span class="stat-small-value" id="notify-time">–</span>
+      </div>
+    </div>
+    <div class="summary summary-secondary">
+      <div class="stat-small">
+        <span class="stat-small-label">Threshold</span>
+        <span class="stat-small-value" id="notify-threshold">–</span>
+      </div>
+      <div class="stat-small">
+        <span class="stat-small-label">Notify service</span>
+        <span class="stat-small-value" id="notify-service">–</span>
+      </div>
+    </div>
+
+    <div class="field">
+      <label>Notify services found on your Home Assistant</label>
+      <ul class="notify-services-list" id="notify-services-list"></ul>
+    </div>
+
+    <button type="button" class="btn-secondary sheet-link-btn" id="notify-test-btn">
+      Send test notification
+    </button>
+    <p class="sheet-subtext" id="notify-test-result"></p>
+
+    <div class="sheet-actions">
+      <button type="button" class="btn-secondary" id="notify-close-btn">Close</button>
     </div>
   </div>
 </div>

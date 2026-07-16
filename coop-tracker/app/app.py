@@ -1,12 +1,19 @@
 import json
 import os
 import sqlite3
-from datetime import datetime, timedelta
+import threading
+import time
+import urllib.error
+import urllib.request
+from datetime import datetime, time as dtime, timedelta
 
 from flask import Flask, g, jsonify, render_template, request, send_file
 
 DB_PATH = os.environ.get("COOP_DB_PATH", "/data/coop.db")
 OPTIONS_PATH = os.environ.get("COOP_OPTIONS_PATH", "/data/options.json")
+
+SUPERVISOR_TOKEN = os.environ.get("SUPERVISOR_TOKEN")
+HA_API_BASE = "http://supervisor/core/api"
 
 CURRENCIES = {
     "USD": {"symbol": "$", "position": "prefix", "decimals": 2},
@@ -25,14 +32,27 @@ DEFAULT_CURRENCY = "DKK"
 app = Flask(__name__)
 
 
-def get_currency():
-    code = DEFAULT_CURRENCY
+def _read_options():
     try:
         with open(OPTIONS_PATH) as f:
-            code = json.load(f).get("currency", DEFAULT_CURRENCY)
+            return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
-        pass
+        return {}
+
+
+def get_currency():
+    code = _read_options().get("currency", DEFAULT_CURRENCY)
     return CURRENCIES.get(code, CURRENCIES[DEFAULT_CURRENCY])
+
+
+def get_reminder_config():
+    opts = _read_options()
+    return {
+        "enabled": bool(opts.get("reminder_enabled", False)),
+        "check_time": opts.get("reminder_check_time", "18:00"),
+        "threshold_days": int(opts.get("reminder_threshold_days", 2)),
+        "notify_service": (opts.get("notify_service") or "").strip(),
+    }
 
 
 def get_db():
@@ -74,6 +94,108 @@ def init_db():
 
     conn.commit()
     conn.close()
+
+
+def _db_connect_standalone():
+    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def _last_egg_collection(conn):
+    row = conn.execute(
+        "SELECT ts FROM logs WHERE type = 'egg' ORDER BY ts DESC LIMIT 1"
+    ).fetchone()
+    return datetime.fromisoformat(row["ts"]) if row else None
+
+
+def _ha_api_request(method, path, payload=None, timeout=5):
+    if not SUPERVISOR_TOKEN:
+        return None, "SUPERVISOR_TOKEN not set (not running under Supervisor)"
+    req = urllib.request.Request(f"{HA_API_BASE}{path}", method=method)
+    req.add_header("Authorization", f"Bearer {SUPERVISOR_TOKEN}")
+    req.add_header("Content-Type", "application/json")
+    data = json.dumps(payload).encode() if payload is not None else None
+    try:
+        with urllib.request.urlopen(req, data=data, timeout=timeout) as resp:
+            body = resp.read()
+            return (json.loads(body) if body else None), None
+    except urllib.error.HTTPError as e:
+        return None, f"HTTP {e.code}: {e.read().decode('utf-8', 'ignore')}"
+    except urllib.error.URLError as e:
+        return None, f"connection error: {e.reason}"
+    except Exception as e:  # noqa: BLE001 - never let a notify failure crash a caller
+        return None, str(e)
+
+
+def send_notification(message, title="Coop Tracker"):
+    service = get_reminder_config()["notify_service"]
+    if not service:
+        return False, "no notify service configured"
+    _, err = _ha_api_request(
+        "POST", f"/services/notify/{service}", {"message": message, "title": title}
+    )
+    return err is None, err
+
+
+def get_notify_services():
+    data, err = _ha_api_request("GET", "/services")
+    if err or not data:
+        return [], err
+    for entry in data:
+        if entry.get("domain") == "notify":
+            return sorted(entry.get("services", {}).keys()), None
+    return [], None
+
+
+def _parse_hhmm(value):
+    try:
+        hh, mm = value.split(":")
+        return dtime(int(hh), int(mm))
+    except (ValueError, AttributeError, TypeError):
+        return None
+
+
+_reminder_last_checked_date = None
+
+
+def _reminder_tick(now, conn):
+    global _reminder_last_checked_date
+    cfg = get_reminder_config()
+    if not (cfg["enabled"] and cfg["notify_service"]):
+        return
+    target = _parse_hhmm(cfg["check_time"])
+    if target is None or now.time() < target:
+        return
+    if _reminder_last_checked_date == now.date():
+        return  # already evaluated today
+
+    _reminder_last_checked_date = now.date()
+
+    last_ts = _last_egg_collection(conn)
+    overdue = last_ts is None or (now - last_ts) >= timedelta(days=cfg["threshold_days"])
+    if overdue:
+        send_notification(
+            f"No eggs collected in {cfg['threshold_days']}+ days — check the coop!",
+            title="Coop Tracker reminder",
+        )
+
+
+def _background_loop():
+    if not SUPERVISOR_TOKEN:
+        app.logger.info("SUPERVISOR_TOKEN not set; reminder disabled (local/dev mode)")
+        return
+    while True:
+        try:
+            conn = _db_connect_standalone()
+            try:
+                _reminder_tick(datetime.now(), conn)
+            finally:
+                conn.close()
+        except Exception:  # noqa: BLE001 - keep the loop alive across any single failure
+            app.logger.exception("reminder loop iteration failed")
+        time.sleep(60)
 
 
 @app.route("/")
@@ -269,6 +391,26 @@ def api_delete_entry(entry_id):
     return "", 204
 
 
+@app.route("/api/notifications")
+def api_notifications():
+    services, err = get_notify_services()
+    return jsonify(
+        {
+            "reminder": get_reminder_config(),
+            "services": services,
+            "services_error": err,
+        }
+    )
+
+
+@app.route("/api/notify-test", methods=["POST"])
+def api_notify_test():
+    ok, err = send_notification(
+        "This is a test notification from Coop Tracker.", title="Coop Tracker test"
+    )
+    return jsonify({"status": "sent" if ok else "error", "error": err}), (200 if ok else 502)
+
+
 @app.route("/api/backup")
 def api_backup():
     db = get_db()
@@ -309,4 +451,5 @@ def api_restore():
 
 if __name__ == "__main__":
     init_db()
+    threading.Thread(target=_background_loop, daemon=True).start()
     app.run(host="0.0.0.0", port=8099)
