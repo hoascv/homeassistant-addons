@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.5.0
+
+- Added a "Currency" configuration option (add-on Configuration tab):
+  USD, EUR, GBP, DKK, SEK, NOK, CHF, CAD, AUD, or JPY. Revenue, cost, and
+  net figures are formatted accordingly (symbol placement and decimals
+  included). Restart the add-on after changing it.
+
 ## 1.4.0
 
 - Added a "Log Used" action to track eggs you consume yourself; "Eggs on

@@ -146,6 +146,13 @@
   </div>
 </div>
 
+<script>
+  window.CURRENCY = {
+    symbol: "{{ currency_symbol }}",
+    position: "{{ currency_position }}",
+    decimals: {{ currency_decimals }}
+  };
+</script>
 <script src="static/app.js"></script>
 </body>
 </html>

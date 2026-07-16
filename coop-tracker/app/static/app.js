@@ -51,8 +51,10 @@ function toLocalInputValue(date) {
 }
 
 function fmtMoney(value) {
-  if (value === null || value === undefined) return "$0.00";
-  return `$${Number(value).toFixed(2)}`;
+  const cfg = window.CURRENCY || { symbol: "$", position: "prefix", decimals: 2 };
+  const amount = value === null || value === undefined ? 0 : Number(value);
+  const formatted = amount.toFixed(cfg.decimals);
+  return cfg.position === "suffix" ? `${formatted} ${cfg.symbol}` : `${cfg.symbol}${formatted}`;
 }
 
 async function loadSummary() {

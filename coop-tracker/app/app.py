@@ -1,3 +1,4 @@
+import json
 import os
 import sqlite3
 from datetime import datetime, timedelta
@@ -5,8 +6,33 @@ from datetime import datetime, timedelta
 from flask import Flask, g, jsonify, render_template, request, send_file
 
 DB_PATH = os.environ.get("COOP_DB_PATH", "/data/coop.db")
+OPTIONS_PATH = os.environ.get("COOP_OPTIONS_PATH", "/data/options.json")
+
+CURRENCIES = {
+    "USD": {"symbol": "$", "position": "prefix", "decimals": 2},
+    "EUR": {"symbol": "€", "position": "prefix", "decimals": 2},
+    "GBP": {"symbol": "£", "position": "prefix", "decimals": 2},
+    "DKK": {"symbol": "kr", "position": "suffix", "decimals": 2},
+    "SEK": {"symbol": "kr", "position": "suffix", "decimals": 2},
+    "NOK": {"symbol": "kr", "position": "suffix", "decimals": 2},
+    "CHF": {"symbol": "CHF", "position": "prefix", "decimals": 2},
+    "CAD": {"symbol": "$", "position": "prefix", "decimals": 2},
+    "AUD": {"symbol": "$", "position": "prefix", "decimals": 2},
+    "JPY": {"symbol": "¥", "position": "prefix", "decimals": 0},
+}
+DEFAULT_CURRENCY = "USD"
 
 app = Flask(__name__)
+
+
+def get_currency():
+    code = DEFAULT_CURRENCY
+    try:
+        with open(OPTIONS_PATH) as f:
+            code = json.load(f).get("currency", DEFAULT_CURRENCY)
+    except (FileNotFoundError, json.JSONDecodeError):
+        pass
+    return CURRENCIES.get(code, CURRENCIES[DEFAULT_CURRENCY])
 
 
 def get_db():
@@ -52,7 +78,13 @@ def init_db():
 
 @app.route("/")
 def index():
-    return render_template("index.html")
+    currency = get_currency()
+    return render_template(
+        "index.html",
+        currency_symbol=currency["symbol"],
+        currency_position=currency["position"],
+        currency_decimals=currency["decimals"],
+    )
 
 
 def _month_bounds(year, month):
