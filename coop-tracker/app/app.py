@@ -2,7 +2,7 @@ import os
 import sqlite3
 from datetime import datetime, timedelta
 
-from flask import Flask, g, jsonify, render_template, request
+from flask import Flask, g, jsonify, render_template, request, send_file
 
 DB_PATH = os.environ.get("COOP_DB_PATH", "/data/coop.db")
 
@@ -173,6 +173,43 @@ def api_delete_entry(entry_id):
     db.execute("DELETE FROM logs WHERE id = ?", (entry_id,))
     db.commit()
     return "", 204
+
+
+@app.route("/api/backup")
+def api_backup():
+    db = get_db()
+    db.commit()
+    filename = f"coop-tracker-backup-{datetime.now().strftime('%Y%m%d-%H%M%S')}.db"
+    return send_file(DB_PATH, as_attachment=True, download_name=filename)
+
+
+def _is_valid_backup(path):
+    try:
+        conn = sqlite3.connect(path)
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(logs)")}
+        conn.close()
+    except sqlite3.Error:
+        return False
+    return {"type", "ts", "count", "food_type", "amount", "notes"}.issubset(columns)
+
+
+@app.route("/api/restore", methods=["POST"])
+def api_restore():
+    uploaded = request.files.get("file")
+    if uploaded is None or uploaded.filename == "":
+        return jsonify({"error": "no file provided"}), 400
+
+    tmp_path = DB_PATH + ".upload"
+    uploaded.save(tmp_path)
+
+    if not _is_valid_backup(tmp_path):
+        os.remove(tmp_path)
+        return jsonify({"error": "not a valid Coop Tracker backup file"}), 400
+
+    close_db()
+    os.replace(tmp_path, DB_PATH)
+
+    return jsonify({"status": "restored"}), 200
 
 
 if __name__ == "__main__":

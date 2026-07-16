@@ -10,6 +10,7 @@
 <header class="topbar">
   <span class="topbar-icon">🥚</span>
   <h1>Coop Tracker</h1>
+  <button class="topbar-icon-btn" id="backup-open-btn" aria-label="Backup and restore">⚙️</button>
 </header>
 
 <main>
@@ -74,6 +75,30 @@
         <button type="submit" class="btn-primary">Save</button>
       </div>
     </form>
+  </div>
+</div>
+
+<div class="sheet-backdrop" id="backup-backdrop">
+  <div class="sheet">
+    <h2>Backup &amp; Restore</h2>
+    <p class="sheet-subtext">
+      Download a copy of your log data any time. Restoring replaces all
+      current entries with the contents of the backup file.
+    </p>
+
+    <a class="btn-primary sheet-link-btn" id="backup-download-link" href="api/backup" download>
+      Download backup
+    </a>
+
+    <div class="field">
+      <label>Restore from a backup file</label>
+      <input type="file" id="restore-file" accept=".db">
+    </div>
+    <button type="button" class="btn-secondary sheet-link-btn" id="restore-btn">Restore</button>
+
+    <div class="sheet-actions">
+      <button type="button" class="btn-secondary" id="backup-close-btn">Close</button>
+    </div>
   </div>
 </div>
 

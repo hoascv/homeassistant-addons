@@ -227,5 +227,43 @@ historyList.addEventListener("click", async (e) => {
 
 historyFilter.addEventListener("change", loadHistory);
 
+const backupBackdrop = document.getElementById("backup-backdrop");
+const backupOpenBtn = document.getElementById("backup-open-btn");
+const backupCloseBtn = document.getElementById("backup-close-btn");
+const restoreBtn = document.getElementById("restore-btn");
+const restoreFile = document.getElementById("restore-file");
+
+backupOpenBtn.addEventListener("click", () => backupBackdrop.classList.add("open"));
+backupCloseBtn.addEventListener("click", () => backupBackdrop.classList.remove("open"));
+backupBackdrop.addEventListener("click", (e) => {
+  if (e.target === backupBackdrop) backupBackdrop.classList.remove("open");
+});
+
+restoreBtn.addEventListener("click", async () => {
+  const file = restoreFile.files[0];
+  if (!file) {
+    alert("Choose a backup file first.");
+    return;
+  }
+  if (!confirm("This will replace all current entries with the contents of this backup. Continue?")) {
+    return;
+  }
+
+  const formData = new FormData();
+  formData.append("file", file);
+
+  const res = await fetch("api/restore", { method: "POST", body: formData });
+  if (res.ok) {
+    alert("Backup restored.");
+    restoreFile.value = "";
+    backupBackdrop.classList.remove("open");
+    loadSummary();
+    loadHistory();
+  } else {
+    const data = await res.json().catch(() => ({}));
+    alert(data.error || "Restore failed.");
+  }
+});
+
 loadSummary();
 loadHistory();

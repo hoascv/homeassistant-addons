@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.2.0
+
+- Added a Backup & Restore panel (gear icon in the top bar): download the
+  raw SQLite database at any time, or restore from a previously downloaded
+  backup file. Restore validates the file before replacing existing data.
+
 ## 1.1.1
 
 - Fix `s6-overlay-suexec: fatal: can only run as pid 1` startup crash by
