@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.2.1
+
+- Added an egg icon (`icon.png`) shown in the Home Assistant add-on store
+  and add-on page.
+
 ## 1.2.0
 
 - Added a Backup & Restore panel (gear icon in the top bar): download the
