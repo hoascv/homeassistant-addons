@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<title>Coop Tracker</title>
+<link rel="stylesheet" href="static/style.css">
+</head>
+<body>
+<header class="topbar">
+  <span class="topbar-icon">🥚</span>
+  <h1>Coop Tracker</h1>
+</header>
+
+<main>
+  <section class="summary">
+    <div class="stat">
+      <span class="stat-value" id="stat-eggs-today">–</span>
+      <span class="stat-label">Eggs today</span>
+    </div>
+    <div class="stat">
+      <span class="stat-value" id="stat-eggs-week">–</span>
+      <span class="stat-label">Eggs this week</span>
+    </div>
+  </section>
+
+  <section class="summary summary-secondary">
+    <div class="stat-small">
+      <span class="stat-small-label">Last cleaning</span>
+      <span class="stat-small-value" id="stat-last-cleaning">–</span>
+    </div>
+    <div class="stat-small">
+      <span class="stat-small-label">Last feeding</span>
+      <span class="stat-small-value" id="stat-last-feeding">–</span>
+    </div>
+  </section>
+
+  <section class="quick-actions">
+    <button class="action-btn action-egg" data-action="egg">
+      <span class="action-icon">🥚</span>
+      <span>Log Eggs</span>
+    </button>
+    <button class="action-btn action-cleaning" data-action="cleaning">
+      <span class="action-icon">🧹</span>
+      <span>Log Cleaning</span>
+    </button>
+    <button class="action-btn action-feeding" data-action="feeding">
+      <span class="action-icon">🌾</span>
+      <span>Log Feeding</span>
+    </button>
+  </section>
+
+  <section class="history">
+    <div class="history-header">
+      <h2>Recent activity</h2>
+      <select id="history-filter">
+        <option value="">All</option>
+        <option value="egg">Eggs</option>
+        <option value="cleaning">Cleaning</option>
+        <option value="feeding">Feeding</option>
+      </select>
+    </div>
+    <ul id="history-list"></ul>
+  </section>
+</main>
+
+<div class="sheet-backdrop" id="sheet-backdrop">
+  <div class="sheet" id="sheet">
+    <h2 id="sheet-title">Log</h2>
+    <form id="sheet-form">
+      <div id="sheet-fields"></div>
+      <div class="sheet-actions">
+        <button type="button" class="btn-secondary" id="sheet-cancel">Cancel</button>
+        <button type="submit" class="btn-primary">Save</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script src="static/app.js"></script>
+</body>
+</html>
