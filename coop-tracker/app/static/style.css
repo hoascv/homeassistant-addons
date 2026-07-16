@@ -426,3 +426,35 @@ main {
   color: var(--text-muted);
   font-size: 0.85rem;
 }
+
+.debug-toggle {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  cursor: pointer;
+  margin-bottom: 0.5rem;
+  user-select: none;
+}
+
+.debug-list {
+  font-size: 0.78rem;
+  background: var(--bg);
+  border-radius: 10px;
+  padding: 0.6rem 0.75rem;
+  margin: 0 0 1rem;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.25rem 0.75rem;
+}
+
+.debug-list dt {
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.debug-list dd {
+  margin: 0;
+  word-break: break-word;
+}
+
+.debug-ok { color: var(--positive); }
+.debug-fail { color: var(--negative); }

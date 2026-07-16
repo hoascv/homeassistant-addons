@@ -428,6 +428,57 @@ const notifyOpenBtn = document.getElementById("notify-open-btn");
 const notifyCloseBtn = document.getElementById("notify-close-btn");
 const notifyTestBtn = document.getElementById("notify-test-btn");
 const notifyTestResult = document.getElementById("notify-test-result");
+const debugToggle = document.getElementById("debug-toggle");
+const debugList = document.getElementById("debug-list");
+
+const DEBUG_LABELS = {
+  container_time: "Container time",
+  container_timezone: "Container timezone",
+  supervisor_token_set: "SUPERVISOR_TOKEN set",
+  ha_api_reachable: "HA API reachable",
+  ha_api_error: "HA API error",
+  ha_location_name: "HA location",
+  ha_time_zone: "HA timezone",
+  options_path: "Options file",
+  options_path_exists: "Options file exists",
+  db_path: "Database path",
+  db_ok: "Database OK",
+  db_error: "Database error",
+  reminder_last_checked_date: "Reminder last checked",
+  python_version: "Python version",
+  flask_version: "Flask version",
+  platform: "Platform",
+};
+
+function debugValueHtml(key, value) {
+  if (value === null || value === undefined || value === "") return "<em>–</em>";
+  if (typeof value === "boolean") {
+    const label = value ? "yes" : "no";
+    const cls = key.endsWith("_error") ? "" : value ? "debug-ok" : "debug-fail";
+    return `<span class="${cls}">${label}</span>`;
+  }
+  return escapeHtml(String(value));
+}
+
+async function loadDebugInfo() {
+  debugList.innerHTML = "<dt>Loading…</dt>";
+  try {
+    const res = await fetch("api/debug");
+    const data = await res.json();
+    debugList.innerHTML = Object.entries(DEBUG_LABELS)
+      .map(([key, label]) => `<dt>${label}</dt><dd>${debugValueHtml(key, data[key])}</dd>`)
+      .join("");
+  } catch (e) {
+    debugList.innerHTML = "<dt>Error</dt><dd>Could not reach the server.</dd>";
+  }
+}
+
+debugToggle.addEventListener("click", () => {
+  const isHidden = debugList.hidden;
+  debugList.hidden = !isHidden;
+  debugToggle.textContent = isHidden ? "Debug info ▴" : "Debug info ▾";
+  if (isHidden) loadDebugInfo();
+});
 
 async function loadNotifyPanel() {
   const list = document.getElementById("notify-services-list");
@@ -456,6 +507,8 @@ async function loadNotifyPanel() {
 notifyOpenBtn.addEventListener("click", () => {
   notifyBackdrop.classList.add("open");
   notifyTestResult.textContent = "";
+  debugList.hidden = true;
+  debugToggle.textContent = "Debug info ▾";
   loadNotifyPanel();
 });
 notifyCloseBtn.addEventListener("click", () => notifyBackdrop.classList.remove("open"));

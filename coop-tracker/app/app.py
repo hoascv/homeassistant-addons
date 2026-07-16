@@ -1,12 +1,15 @@
 import json
 import os
+import platform
 import sqlite3
+import sys
 import threading
 import time
 import urllib.error
 import urllib.request
 from datetime import datetime, time as dtime, timedelta
 
+import flask
 from flask import Flask, g, jsonify, render_template, request, send_file
 
 DB_PATH = os.environ.get("COOP_DB_PATH", "/data/coop.db")
@@ -411,6 +414,45 @@ def api_notify_test():
     return jsonify({"status": "sent" if ok else "error", "error": err}), (200 if ok else 502)
 
 
+@app.route("/api/debug")
+def api_debug():
+    now = datetime.now()
+    db = get_db()
+
+    db_ok = True
+    db_error = None
+    try:
+        db.execute("SELECT COUNT(*) FROM logs").fetchone()
+    except sqlite3.Error as e:
+        db_ok = False
+        db_error = str(e)
+
+    ha_config, ha_error = _ha_api_request("GET", "/config")
+
+    return jsonify(
+        {
+            "container_time": now.isoformat(),
+            "container_timezone": time.tzname,
+            "supervisor_token_set": bool(SUPERVISOR_TOKEN),
+            "ha_api_reachable": ha_error is None,
+            "ha_api_error": ha_error,
+            "ha_location_name": (ha_config or {}).get("location_name") if ha_config else None,
+            "ha_time_zone": (ha_config or {}).get("time_zone") if ha_config else None,
+            "options_path": OPTIONS_PATH,
+            "options_path_exists": os.path.exists(OPTIONS_PATH),
+            "db_path": DB_PATH,
+            "db_ok": db_ok,
+            "db_error": db_error,
+            "reminder_last_checked_date": (
+                _reminder_last_checked_date.isoformat() if _reminder_last_checked_date else None
+            ),
+            "python_version": sys.version.split()[0],
+            "flask_version": flask.__version__,
+            "platform": platform.platform(),
+        }
+    )
+
+
 @app.route("/api/backup")
 def api_backup():
     db = get_db()
@@ -449,7 +491,23 @@ def api_restore():
     return jsonify({"status": "restored"}), 200
 
 
+def _log_startup_debug_info():
+    reminder = get_reminder_config()
+    print("[Coop Tracker] --- startup debug info ---")
+    print(f"[Coop Tracker] container time: {datetime.now().isoformat()} ({time.tzname})")
+    print(f"[Coop Tracker] SUPERVISOR_TOKEN set: {bool(SUPERVISOR_TOKEN)}")
+    print(f"[Coop Tracker] currency: {_read_options().get('currency', DEFAULT_CURRENCY)}")
+    print(
+        f"[Coop Tracker] reminder: enabled={reminder['enabled']} "
+        f"check_time={reminder['check_time']} threshold_days={reminder['threshold_days']} "
+        f"notify_service={reminder['notify_service'] or '(not set)'}"
+    )
+    print(f"[Coop Tracker] db path: {DB_PATH}")
+    print("[Coop Tracker] --- end startup debug info ---")
+
+
 if __name__ == "__main__":
     init_db()
+    _log_startup_debug_info()
     threading.Thread(target=_background_loop, daemon=True).start()
     app.run(host="0.0.0.0", port=8099)

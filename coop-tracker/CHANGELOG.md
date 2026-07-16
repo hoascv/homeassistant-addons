@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.7.0
+
+- Added a "Debug info" section to the 🔔 Notifications panel (collapsed
+  by default): container time/timezone, whether `SUPERVISOR_TOKEN` is
+  set, whether the Home Assistant API is reachable (with the error if
+  not), database path/health, and Python/Flask/platform versions.
+- The same key facts are now printed to the add-on's Log tab on every
+  startup, so most connectivity issues can be diagnosed without opening
+  the app at all.
+
 ## 1.6.1
 
 - Fix `SUPERVISOR_TOKEN` not being visible to the app, which broke push
