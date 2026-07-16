@@ -55,6 +55,15 @@ def index():
     return render_template("index.html")
 
 
+def _month_bounds(year, month):
+    start = datetime(year, month, 1)
+    if month == 12:
+        end = datetime(year + 1, 1, 1)
+    else:
+        end = datetime(year, month + 1, 1)
+    return start, end
+
+
 @app.route("/api/summary")
 def api_summary():
     db = get_db()
@@ -80,7 +89,12 @@ def api_summary():
         "SELECT ts FROM logs WHERE type = 'feeding' ORDER BY ts DESC LIMIT 1"
     ).fetchone()
 
-    month_start = today_start.replace(day=1)
+    month_param = request.args.get("month")
+    try:
+        year, month = (int(part) for part in month_param.split("-"))
+    except (AttributeError, ValueError):
+        year, month = now.year, now.month
+    month_start, month_end = _month_bounds(year, month)
 
     eggs_collected_total = db.execute(
         "SELECT COALESCE(SUM(count), 0) AS total FROM logs WHERE type = 'egg'"
@@ -90,14 +104,18 @@ def api_summary():
         "SELECT COALESCE(SUM(count), 0) AS total FROM logs WHERE type = 'sale'"
     ).fetchone()["total"]
 
+    eggs_used_total = db.execute(
+        "SELECT COALESCE(SUM(count), 0) AS total FROM logs WHERE type = 'used'"
+    ).fetchone()["total"]
+
     revenue_month = db.execute(
-        "SELECT COALESCE(SUM(price), 0) AS total FROM logs WHERE type = 'sale' AND ts >= ?",
-        (month_start.isoformat(),),
+        "SELECT COALESCE(SUM(price), 0) AS total FROM logs WHERE type = 'sale' AND ts >= ? AND ts < ?",
+        (month_start.isoformat(), month_end.isoformat()),
     ).fetchone()["total"]
 
     cost_month = db.execute(
-        "SELECT COALESCE(SUM(cost), 0) AS total FROM logs WHERE type = 'expense' AND ts >= ?",
-        (month_start.isoformat(),),
+        "SELECT COALESCE(SUM(cost), 0) AS total FROM logs WHERE type = 'expense' AND ts >= ? AND ts < ?",
+        (month_start.isoformat(), month_end.isoformat()),
     ).fetchone()["total"]
 
     return jsonify(
@@ -106,7 +124,8 @@ def api_summary():
             "eggs_week": eggs_week,
             "last_cleaning": last_cleaning["ts"] if last_cleaning else None,
             "last_feeding": last_feeding["ts"] if last_feeding else None,
-            "eggs_available": eggs_collected_total - eggs_sold_total,
+            "eggs_available": eggs_collected_total - eggs_sold_total - eggs_used_total,
+            "month": f"{year:04d}-{month:02d}",
             "revenue_month": revenue_month,
             "cost_month": cost_month,
             "net_month": revenue_month - cost_month,
@@ -138,7 +157,7 @@ def api_log():
     data = request.get_json(force=True, silent=True) or {}
     entry_type = data.get("type")
 
-    if entry_type not in ("egg", "cleaning", "feeding", "sale", "expense"):
+    if entry_type not in ("egg", "cleaning", "feeding", "sale", "expense", "used"):
         return jsonify({"error": "invalid type"}), 400
 
     count = data.get("count")

@@ -5,9 +5,11 @@ your chickens, right from your phone via the Home Assistant sidebar.
 
 ## Features
 
-- Quick-add buttons for eggs, cleaning, feeding, sales, and expenses
-- Today / this-week egg counts, last cleaning and feeding times
-- Finances section: eggs on hand, and this month's revenue, costs, and net
+- Quick-add buttons for eggs, cleaning, feeding, sales, expenses, and
+  eggs used/consumed
+- Today / this-week egg counts, eggs on hand, last cleaning and feeding
+  times
+- Finances section: browse any month's revenue, costs, and net
 - Recent activity history with filtering and delete
 - Backup & Restore panel (download or restore the SQLite database)
 - Mobile-first layout, no page reloads

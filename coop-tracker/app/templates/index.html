@@ -23,6 +23,10 @@
       <span class="stat-value" id="stat-eggs-week">–</span>
       <span class="stat-label">Eggs this week</span>
     </div>
+    <div class="stat">
+      <span class="stat-value" id="stat-eggs-available">–</span>
+      <span class="stat-label">Eggs on hand</span>
+    </div>
   </section>
 
   <section class="summary summary-secondary">
@@ -37,18 +41,19 @@
   </section>
 
   <section class="finances">
-    <h2>Finances <span class="finances-subtitle">this month</span></h2>
-    <div class="summary summary-secondary">
-      <div class="stat-small">
-        <span class="stat-small-label">Eggs on hand</span>
-        <span class="stat-small-value" id="stat-eggs-available">–</span>
+    <div class="finances-header">
+      <h2>Finances</h2>
+      <div class="month-nav">
+        <button type="button" class="month-nav-btn" id="finance-prev-month" aria-label="Previous month">‹</button>
+        <span class="month-nav-label" id="finance-month-label">–</span>
+        <button type="button" class="month-nav-btn" id="finance-next-month" aria-label="Next month">›</button>
       </div>
+    </div>
+    <div class="summary summary-secondary">
       <div class="stat-small">
         <span class="stat-small-label">Revenue</span>
         <span class="stat-small-value stat-positive" id="stat-revenue-month">–</span>
       </div>
-    </div>
-    <div class="summary summary-secondary">
       <div class="stat-small">
         <span class="stat-small-label">Costs</span>
         <span class="stat-small-value stat-negative" id="stat-cost-month">–</span>
@@ -81,6 +86,10 @@
       <span class="action-icon">🧾</span>
       <span>Log Expense</span>
     </button>
+    <button class="action-btn action-used" data-action="used">
+      <span class="action-icon">🍳</span>
+      <span>Log Used</span>
+    </button>
   </section>
 
   <section class="history">
@@ -93,6 +102,7 @@
         <option value="feeding">Feeding</option>
         <option value="sale">Sales</option>
         <option value="expense">Expenses</option>
+        <option value="used">Used</option>
       </select>
     </div>
     <ul id="history-list"></ul>

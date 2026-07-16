@@ -10,6 +10,7 @@
   --accent-feeding: #b0763a;
   --accent-sale: #3f9142;
   --accent-expense: #a4483d;
+  --accent-used: #8a6bb0;
   --danger: #c0453a;
   --positive: #3f9142;
   --negative: #a4483d;
@@ -130,15 +131,47 @@ main {
 .stat-positive { color: var(--positive); }
 .stat-negative { color: var(--negative); }
 
-.finances h2 {
-  font-size: 1rem;
-  margin: 0 0 0.5rem;
+.finances-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.5rem;
 }
 
-.finances-subtitle {
-  font-size: 0.8rem;
-  font-weight: 400;
+.finances-header h2 {
+  font-size: 1rem;
+  margin: 0;
+}
+
+.month-nav {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.month-nav-btn {
+  border: none;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  color: var(--text);
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 50%;
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.month-nav-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.month-nav-label {
+  font-size: 0.85rem;
   color: var(--text-muted);
+  min-width: 6.5rem;
+  text-align: center;
 }
 
 .quick-actions {
@@ -177,6 +210,7 @@ main {
 .action-feeding { background: var(--accent-feeding); }
 .action-sale { background: var(--accent-sale); }
 .action-expense { background: var(--accent-expense); }
+.action-used { background: var(--accent-used); }
 
 .history-header {
   display: flex;

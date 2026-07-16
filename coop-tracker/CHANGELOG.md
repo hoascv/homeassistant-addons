@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.4.0
+
+- Added a "Log Used" action to track eggs you consume yourself; "Eggs on
+  hand" now correctly subtracts both sold and used eggs from eggs
+  collected.
+- The Finances section can now browse past months (‹ / › navigation)
+  instead of always showing the current month only.
+
 ## 1.3.0
 
 - Added egg sales tracking (Log Sale: quantity + price received) and coop

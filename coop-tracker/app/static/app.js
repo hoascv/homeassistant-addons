@@ -1,11 +1,17 @@
-const ICONS = { egg: "🥚", cleaning: "🧹", feeding: "🌾", sale: "💰", expense: "🧾" };
+const ICONS = { egg: "🥚", cleaning: "🧹", feeding: "🌾", sale: "💰", expense: "🧾", used: "🍳" };
 const TITLES = {
   egg: "Log Eggs",
   cleaning: "Log Cleaning",
   feeding: "Log Feeding",
   sale: "Log Sale",
   expense: "Log Expense",
+  used: "Log Used",
 };
+
+const MONTH_NAMES = [
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December",
+];
 
 const sheetBackdrop = document.getElementById("sheet-backdrop");
 const sheetTitle = document.getElementById("sheet-title");
@@ -18,6 +24,10 @@ const historyList = document.getElementById("history-list");
 let currentType = null;
 let currentEntryId = null;
 let entriesCache = {};
+
+const CURRENT_DATE = new Date();
+let financeYear = CURRENT_DATE.getFullYear();
+let financeMonth = CURRENT_DATE.getMonth() + 1; // 1-12
 
 function fmtTime(iso) {
   if (!iso) return "Never";
@@ -46,7 +56,8 @@ function fmtMoney(value) {
 }
 
 async function loadSummary() {
-  const res = await fetch("api/summary");
+  const monthParam = `${financeYear}-${String(financeMonth).padStart(2, "0")}`;
+  const res = await fetch(`api/summary?month=${monthParam}`);
   const data = await res.json();
   document.getElementById("stat-eggs-today").textContent = data.eggs_today;
   document.getElementById("stat-eggs-week").textContent = data.eggs_week;
@@ -60,6 +71,13 @@ async function loadSummary() {
   netEl.textContent = fmtMoney(data.net_month);
   netEl.classList.toggle("stat-positive", data.net_month >= 0);
   netEl.classList.toggle("stat-negative", data.net_month < 0);
+
+  document.getElementById("finance-month-label").textContent =
+    `${MONTH_NAMES[financeMonth - 1]} ${financeYear}`;
+
+  const isCurrentMonth =
+    financeYear === CURRENT_DATE.getFullYear() && financeMonth === CURRENT_DATE.getMonth() + 1;
+  document.getElementById("finance-next-month").disabled = isCurrentMonth;
 }
 
 async function loadHistory() {
@@ -89,8 +107,9 @@ async function loadHistory() {
       title = `Fed${entry.food_type ? " " + entry.food_type : ""}${entry.amount ? " · " + entry.amount : ""}`;
     else if (entry.type === "sale")
       title = `${entry.count ?? 1} egg${entry.count === 1 ? "" : "s"} sold${entry.price != null ? " · " + fmtMoney(entry.price) : ""}`;
-    else
+    else if (entry.type === "expense")
       title = `${entry.category || "Expense"}${entry.cost != null ? " · " + fmtMoney(entry.cost) : ""}`;
+    else title = `${entry.count ?? 1} egg${entry.count === 1 ? "" : "s"} used`;
 
     li.innerHTML = `
       <span class="icon">${ICONS[entry.type]}</span>
@@ -231,6 +250,33 @@ function openSheet(type, entry = null) {
         <textarea name="notes">${entry ? entry.notes ?? "" : ""}</textarea>
       </div>
     `;
+  } else if (type === "used") {
+    const initialCount = entry ? entry.count ?? 1 : 1;
+    sheetFields.innerHTML = `
+      <div class="field">
+        <label>Eggs used</label>
+        <div class="stepper">
+          <button type="button" id="dec">−</button>
+          <span id="count-value">${initialCount}</span>
+          <button type="button" id="inc">+</button>
+        </div>
+      </div>
+      ${dateFieldHtml(tsValue)}
+      <div class="field">
+        <label>Notes (optional)</label>
+        <textarea name="notes" placeholder="e.g. baking">${entry ? entry.notes ?? "" : ""}</textarea>
+      </div>
+    `;
+    let count = initialCount;
+    const countValue = document.getElementById("count-value");
+    document.getElementById("dec").addEventListener("click", () => {
+      count = Math.max(0, count - 1);
+      countValue.textContent = count;
+    });
+    document.getElementById("inc").addEventListener("click", () => {
+      count += 1;
+      countValue.textContent = count;
+    });
   }
 
   sheetBackdrop.classList.add("open");
@@ -272,6 +318,9 @@ sheetForm.addEventListener("submit", async (e) => {
     payload.category = sheetForm.category.value || null;
     payload.cost = sheetForm.cost.value === "" ? null : parseFloat(sheetForm.cost.value);
     payload.notes = sheetForm.notes.value || null;
+  } else if (currentType === "used") {
+    payload.count = parseInt(document.getElementById("count-value").textContent, 10);
+    payload.notes = sheetForm.notes.value || null;
   }
 
   if (currentEntryId) {
@@ -311,6 +360,28 @@ historyList.addEventListener("click", async (e) => {
 });
 
 historyFilter.addEventListener("change", loadHistory);
+
+document.getElementById("finance-prev-month").addEventListener("click", () => {
+  financeMonth -= 1;
+  if (financeMonth < 1) {
+    financeMonth = 12;
+    financeYear -= 1;
+  }
+  loadSummary();
+});
+
+document.getElementById("finance-next-month").addEventListener("click", () => {
+  const isCurrentMonth =
+    financeYear === CURRENT_DATE.getFullYear() && financeMonth === CURRENT_DATE.getMonth() + 1;
+  if (isCurrentMonth) return;
+
+  financeMonth += 1;
+  if (financeMonth > 12) {
+    financeMonth = 1;
+    financeYear += 1;
+  }
+  loadSummary();
+});
 
 const backupBackdrop = document.getElementById("backup-backdrop");
 const backupOpenBtn = document.getElementById("backup-open-btn");
