@@ -29,7 +29,7 @@ which Home Assistant persists across restarts and updates automatically.
 
 ## Configuration
 
-- **currency**: `USD` (default), `EUR`, `GBP`, `DKK`, `SEK`, `NOK`, `CHF`,
+- **currency**: `DKK` (default), `USD`, `EUR`, `GBP`, `SEK`, `NOK`, `CHF`,
   `CAD`, `AUD`, or `JPY`. Controls the symbol and decimal formatting used
   for revenue, costs, and net figures. Set it from the add-on's
   **Configuration** tab, then restart the add-on for it to take effect.

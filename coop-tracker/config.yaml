@@ -1,5 +1,5 @@
 name: "Coop Tracker"
-version: "1.5.0"
+version: "1.5.1"
 slug: "coop-tracker"
 description: "Log egg collection, coop cleaning, and feeding for your chickens"
 url: "https://github.com/hoascv/homeassistant-addons/tree/main/coop-tracker"
@@ -17,6 +17,6 @@ ingress_port: 8099
 panel_icon: mdi:egg
 panel_title: "Coop Tracker"
 options:
-  currency: "USD"
+  currency: "DKK"
 schema:
   currency: "list(USD|EUR|GBP|DKK|SEK|NOK|CHF|CAD|AUD|JPY)"

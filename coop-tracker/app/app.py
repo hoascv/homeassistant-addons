@@ -20,7 +20,7 @@ CURRENCIES = {
     "AUD": {"symbol": "$", "position": "prefix", "decimals": 2},
     "JPY": {"symbol": "¥", "position": "prefix", "decimals": 0},
 }
-DEFAULT_CURRENCY = "USD"
+DEFAULT_CURRENCY = "DKK"
 
 app = Flask(__name__)
 

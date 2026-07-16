@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.5.1
+
+- Changed the default currency to DKK ("kr").
+
 ## 1.5.0
 
 - Added a "Currency" configuration option (add-on Configuration tab):
