@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/usr/bin/with-contenv bash
 set -e
 echo "[Coop Tracker] Starting..."
 cd /app

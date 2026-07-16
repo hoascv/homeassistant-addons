@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.6.1
+
+- Fix `SUPERVISOR_TOKEN` not being visible to the app, which broke push
+  notifications and the notify-service discovery list even with
+  `homeassistant_api: true` granted. The base image's s6-overlay v3 does
+  not expose the container's environment variables to a script unless it
+  explicitly requests them via `with-contenv`; `run.sh` now does.
+
 ## 1.6.0
 
 - Added a push notification reminder: if no eggs have been collected in
