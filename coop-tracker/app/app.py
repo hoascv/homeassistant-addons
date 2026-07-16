@@ -12,6 +12,8 @@ from datetime import datetime, time as dtime, timedelta
 import flask
 from flask import Flask, g, jsonify, render_template, request, send_file
 
+APP_VERSION = "1.8.0"  # keep in sync with the "version" field in config.yaml
+
 DB_PATH = os.environ.get("COOP_DB_PATH", "/data/coop.db")
 OPTIONS_PATH = os.environ.get("COOP_OPTIONS_PATH", "/data/options.json")
 
@@ -56,6 +58,10 @@ def get_reminder_config():
         "threshold_days": int(opts.get("reminder_threshold_days", 2)),
         "notify_service": (opts.get("notify_service") or "").strip(),
     }
+
+
+def get_ha_sensors_enabled():
+    return bool(_read_options().get("ha_sensors_enabled", False))
 
 
 def get_db():
@@ -163,6 +169,11 @@ def _parse_hhmm(value):
 _reminder_last_checked_date = None
 
 
+def _eggs_overdue(now, conn, threshold_days):
+    last_ts = _last_egg_collection(conn)
+    return last_ts is None or (now - last_ts) >= timedelta(days=threshold_days)
+
+
 def _reminder_tick(now, conn):
     global _reminder_last_checked_date
     cfg = get_reminder_config()
@@ -176,28 +187,103 @@ def _reminder_tick(now, conn):
 
     _reminder_last_checked_date = now.date()
 
-    last_ts = _last_egg_collection(conn)
-    overdue = last_ts is None or (now - last_ts) >= timedelta(days=cfg["threshold_days"])
-    if overdue:
+    if _eggs_overdue(now, conn, cfg["threshold_days"]):
         send_notification(
             f"No eggs collected in {cfg['threshold_days']}+ days — check the coop!",
             title="Coop Tracker reminder",
         )
 
 
+def _push_ha_state(entity_id, state, attributes=None):
+    _, err = _ha_api_request(
+        "POST", f"/states/{entity_id}", {"state": state, "attributes": attributes or {}}
+    )
+    return err
+
+
+def _push_ha_sensors(conn):
+    if not get_ha_sensors_enabled():
+        return
+    now = datetime.now()
+    summary = _compute_summary(conn, now)
+    currency = get_currency()
+    reminder_cfg = get_reminder_config()
+
+    _push_ha_state(
+        "sensor.coop_tracker_eggs_today",
+        summary["eggs_today"],
+        {"friendly_name": "Coop Tracker eggs today", "unit_of_measurement": "eggs", "icon": "mdi:egg"},
+    )
+    _push_ha_state(
+        "sensor.coop_tracker_eggs_week",
+        summary["eggs_week"],
+        {"friendly_name": "Coop Tracker eggs this week", "unit_of_measurement": "eggs", "icon": "mdi:egg"},
+    )
+    _push_ha_state(
+        "sensor.coop_tracker_eggs_available",
+        summary["eggs_available"],
+        {"friendly_name": "Coop Tracker eggs on hand", "unit_of_measurement": "eggs", "icon": "mdi:egg"},
+    )
+    _push_ha_state(
+        "sensor.coop_tracker_last_cleaning",
+        summary["last_cleaning"] or "unknown",
+        {"friendly_name": "Coop Tracker last cleaning", "icon": "mdi:broom"},
+    )
+    _push_ha_state(
+        "sensor.coop_tracker_last_feeding",
+        summary["last_feeding"] or "unknown",
+        {"friendly_name": "Coop Tracker last feeding", "icon": "mdi:food-drumstick"},
+    )
+    _push_ha_state(
+        "sensor.coop_tracker_revenue_month",
+        summary["revenue_month"],
+        {
+            "friendly_name": "Coop Tracker revenue this month",
+            "unit_of_measurement": currency["symbol"],
+            "icon": "mdi:cash-plus",
+        },
+    )
+    _push_ha_state(
+        "sensor.coop_tracker_cost_month",
+        summary["cost_month"],
+        {
+            "friendly_name": "Coop Tracker cost this month",
+            "unit_of_measurement": currency["symbol"],
+            "icon": "mdi:cash-minus",
+        },
+    )
+    _push_ha_state(
+        "sensor.coop_tracker_net_month",
+        summary["net_month"],
+        {
+            "friendly_name": "Coop Tracker net this month",
+            "unit_of_measurement": currency["symbol"],
+            "icon": "mdi:cash",
+        },
+    )
+    _push_ha_state(
+        "binary_sensor.coop_tracker_eggs_overdue",
+        "on" if _eggs_overdue(now, conn, reminder_cfg["threshold_days"]) else "off",
+        {"friendly_name": "Coop Tracker eggs overdue", "icon": "mdi:egg-off"},
+    )
+
+
 def _background_loop():
     if not SUPERVISOR_TOKEN:
-        app.logger.info("SUPERVISOR_TOKEN not set; reminder disabled (local/dev mode)")
+        app.logger.info(
+            "SUPERVISOR_TOKEN not set; reminder and HA sensor push disabled (local/dev mode)"
+        )
         return
     while True:
         try:
             conn = _db_connect_standalone()
             try:
                 _reminder_tick(datetime.now(), conn)
+                _push_ha_sensors(conn)
             finally:
                 conn.close()
         except Exception:  # noqa: BLE001 - keep the loop alive across any single failure
-            app.logger.exception("reminder loop iteration failed")
+            app.logger.exception("background loop iteration failed")
         time.sleep(60)
 
 
@@ -221,73 +307,79 @@ def _month_bounds(year, month):
     return start, end
 
 
-@app.route("/api/summary")
-def api_summary():
-    db = get_db()
-    now = datetime.now()
+def _compute_summary(conn, now, year=None, month=None):
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     week_start = today_start - timedelta(days=today_start.weekday())
 
-    eggs_today = db.execute(
+    eggs_today = conn.execute(
         "SELECT COALESCE(SUM(count), 0) AS total FROM logs WHERE type = 'egg' AND ts >= ?",
         (today_start.isoformat(),),
     ).fetchone()["total"]
 
-    eggs_week = db.execute(
+    eggs_week = conn.execute(
         "SELECT COALESCE(SUM(count), 0) AS total FROM logs WHERE type = 'egg' AND ts >= ?",
         (week_start.isoformat(),),
     ).fetchone()["total"]
 
-    last_cleaning = db.execute(
+    last_cleaning = conn.execute(
         "SELECT ts FROM logs WHERE type = 'cleaning' ORDER BY ts DESC LIMIT 1"
     ).fetchone()
 
-    last_feeding = db.execute(
+    last_feeding = conn.execute(
         "SELECT ts FROM logs WHERE type = 'feeding' ORDER BY ts DESC LIMIT 1"
     ).fetchone()
+
+    if year is None or month is None:
+        year, month = now.year, now.month
+    month_start, month_end = _month_bounds(year, month)
+
+    eggs_collected_total = conn.execute(
+        "SELECT COALESCE(SUM(count), 0) AS total FROM logs WHERE type = 'egg'"
+    ).fetchone()["total"]
+
+    eggs_sold_total = conn.execute(
+        "SELECT COALESCE(SUM(count), 0) AS total FROM logs WHERE type = 'sale'"
+    ).fetchone()["total"]
+
+    eggs_used_total = conn.execute(
+        "SELECT COALESCE(SUM(count), 0) AS total FROM logs WHERE type = 'used'"
+    ).fetchone()["total"]
+
+    revenue_month = conn.execute(
+        "SELECT COALESCE(SUM(price), 0) AS total FROM logs WHERE type = 'sale' AND ts >= ? AND ts < ?",
+        (month_start.isoformat(), month_end.isoformat()),
+    ).fetchone()["total"]
+
+    cost_month = conn.execute(
+        "SELECT COALESCE(SUM(cost), 0) AS total FROM logs WHERE type = 'expense' AND ts >= ? AND ts < ?",
+        (month_start.isoformat(), month_end.isoformat()),
+    ).fetchone()["total"]
+
+    return {
+        "eggs_today": eggs_today,
+        "eggs_week": eggs_week,
+        "last_cleaning": last_cleaning["ts"] if last_cleaning else None,
+        "last_feeding": last_feeding["ts"] if last_feeding else None,
+        "eggs_available": eggs_collected_total - eggs_sold_total - eggs_used_total,
+        "month": f"{year:04d}-{month:02d}",
+        "revenue_month": revenue_month,
+        "cost_month": cost_month,
+        "net_month": revenue_month - cost_month,
+    }
+
+
+@app.route("/api/summary")
+def api_summary():
+    db = get_db()
+    now = datetime.now()
 
     month_param = request.args.get("month")
     try:
         year, month = (int(part) for part in month_param.split("-"))
     except (AttributeError, ValueError):
-        year, month = now.year, now.month
-    month_start, month_end = _month_bounds(year, month)
+        year, month = None, None
 
-    eggs_collected_total = db.execute(
-        "SELECT COALESCE(SUM(count), 0) AS total FROM logs WHERE type = 'egg'"
-    ).fetchone()["total"]
-
-    eggs_sold_total = db.execute(
-        "SELECT COALESCE(SUM(count), 0) AS total FROM logs WHERE type = 'sale'"
-    ).fetchone()["total"]
-
-    eggs_used_total = db.execute(
-        "SELECT COALESCE(SUM(count), 0) AS total FROM logs WHERE type = 'used'"
-    ).fetchone()["total"]
-
-    revenue_month = db.execute(
-        "SELECT COALESCE(SUM(price), 0) AS total FROM logs WHERE type = 'sale' AND ts >= ? AND ts < ?",
-        (month_start.isoformat(), month_end.isoformat()),
-    ).fetchone()["total"]
-
-    cost_month = db.execute(
-        "SELECT COALESCE(SUM(cost), 0) AS total FROM logs WHERE type = 'expense' AND ts >= ? AND ts < ?",
-        (month_start.isoformat(), month_end.isoformat()),
-    ).fetchone()["total"]
-
-    return jsonify(
-        {
-            "eggs_today": eggs_today,
-            "eggs_week": eggs_week,
-            "last_cleaning": last_cleaning["ts"] if last_cleaning else None,
-            "last_feeding": last_feeding["ts"] if last_feeding else None,
-            "eggs_available": eggs_collected_total - eggs_sold_total - eggs_used_total,
-            "month": f"{year:04d}-{month:02d}",
-            "revenue_month": revenue_month,
-            "cost_month": cost_month,
-            "net_month": revenue_month - cost_month,
-        }
-    )
+    return jsonify(_compute_summary(db, now, year, month))
 
 
 @app.route("/api/entries")
@@ -343,6 +435,7 @@ def api_log():
         (entry_type, ts, count, food_type, amount, notes, price, cost, category),
     )
     db.commit()
+    _push_ha_sensors(db)
 
     return jsonify({"id": cur.lastrowid, "type": entry_type, "ts": ts}), 201
 
@@ -382,6 +475,7 @@ def api_update_entry(entry_id):
         (ts, count, food_type, amount, notes, price, cost, category, entry_id),
     )
     db.commit()
+    _push_ha_sensors(db)
 
     return jsonify({"id": entry_id, "ts": ts}), 200
 
@@ -391,6 +485,7 @@ def api_delete_entry(entry_id):
     db = get_db()
     db.execute("DELETE FROM logs WHERE id = ?", (entry_id,))
     db.commit()
+    _push_ha_sensors(db)
     return "", 204
 
 
@@ -431,6 +526,7 @@ def api_debug():
 
     return jsonify(
         {
+            "app_version": APP_VERSION,
             "container_time": now.isoformat(),
             "container_timezone": time.tzname,
             "supervisor_token_set": bool(SUPERVISOR_TOKEN),
@@ -494,6 +590,7 @@ def api_restore():
 def _log_startup_debug_info():
     reminder = get_reminder_config()
     print("[Coop Tracker] --- startup debug info ---")
+    print(f"[Coop Tracker] version: {APP_VERSION}")
     print(f"[Coop Tracker] container time: {datetime.now().isoformat()} ({time.tzname})")
     print(f"[Coop Tracker] SUPERVISOR_TOKEN set: {bool(SUPERVISOR_TOKEN)}")
     print(f"[Coop Tracker] currency: {_read_options().get('currency', DEFAULT_CURRENCY)}")

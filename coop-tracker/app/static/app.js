@@ -432,6 +432,7 @@ const debugToggle = document.getElementById("debug-toggle");
 const debugList = document.getElementById("debug-list");
 
 const DEBUG_LABELS = {
+  app_version: "App version",
   container_time: "Container time",
   container_timezone: "Container timezone",
   supervisor_token_set: "SUPERVISOR_TOKEN set",

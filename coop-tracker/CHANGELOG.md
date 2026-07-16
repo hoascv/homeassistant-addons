@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.8.0
+
+- Added optional Home Assistant sensor integration: when `ha_sensors_enabled`
+  is turned on, Coop Tracker pushes egg counts, last cleaning/feeding times,
+  monthly finances, and an "eggs overdue" binary sensor into Home Assistant
+  as real entities (`sensor.coop_tracker_*` / `binary_sensor.coop_tracker_*`),
+  so they can be used on dashboards and in automations — not just the
+  existing one-way push notification. Uses the same Supervisor API access
+  already granted via `homeassistant_api`; no MQTT broker needed. Entities
+  update immediately after logging/editing/deleting an entry, and once a
+  minute in the background otherwise.
+- The 🔔 Notifications panel's "Debug info" section (and the startup log
+  line) now also shows the running add-on version.
+
 ## 1.7.0
 
 - Added a "Debug info" section to the 🔔 Notifications panel (collapsed
