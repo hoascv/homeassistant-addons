@@ -8,7 +8,11 @@
   --accent-egg: #e0a83e;
   --accent-cleaning: #4f8a6d;
   --accent-feeding: #b0763a;
+  --accent-sale: #3f9142;
+  --accent-expense: #a4483d;
   --danger: #c0453a;
+  --positive: #3f9142;
+  --negative: #a4483d;
   --radius: 14px;
   --shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
 }
@@ -123,6 +127,20 @@ main {
   margin-top: 0.15rem;
 }
 
+.stat-positive { color: var(--positive); }
+.stat-negative { color: var(--negative); }
+
+.finances h2 {
+  font-size: 1rem;
+  margin: 0 0 0.5rem;
+}
+
+.finances-subtitle {
+  font-size: 0.8rem;
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
 .quick-actions {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
@@ -157,6 +175,8 @@ main {
 .action-egg { background: var(--accent-egg); }
 .action-cleaning { background: var(--accent-cleaning); }
 .action-feeding { background: var(--accent-feeding); }
+.action-sale { background: var(--accent-sale); }
+.action-expense { background: var(--accent-expense); }
 
 .history-header {
   display: flex;

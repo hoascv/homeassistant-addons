@@ -36,6 +36,30 @@
     </div>
   </section>
 
+  <section class="finances">
+    <h2>Finances <span class="finances-subtitle">this month</span></h2>
+    <div class="summary summary-secondary">
+      <div class="stat-small">
+        <span class="stat-small-label">Eggs on hand</span>
+        <span class="stat-small-value" id="stat-eggs-available">–</span>
+      </div>
+      <div class="stat-small">
+        <span class="stat-small-label">Revenue</span>
+        <span class="stat-small-value stat-positive" id="stat-revenue-month">–</span>
+      </div>
+    </div>
+    <div class="summary summary-secondary">
+      <div class="stat-small">
+        <span class="stat-small-label">Costs</span>
+        <span class="stat-small-value stat-negative" id="stat-cost-month">–</span>
+      </div>
+      <div class="stat-small">
+        <span class="stat-small-label">Net</span>
+        <span class="stat-small-value" id="stat-net-month">–</span>
+      </div>
+    </div>
+  </section>
+
   <section class="quick-actions">
     <button class="action-btn action-egg" data-action="egg">
       <span class="action-icon">🥚</span>
@@ -49,6 +73,14 @@
       <span class="action-icon">🌾</span>
       <span>Log Feeding</span>
     </button>
+    <button class="action-btn action-sale" data-action="sale">
+      <span class="action-icon">💰</span>
+      <span>Log Sale</span>
+    </button>
+    <button class="action-btn action-expense" data-action="expense">
+      <span class="action-icon">🧾</span>
+      <span>Log Expense</span>
+    </button>
   </section>
 
   <section class="history">
@@ -59,6 +91,8 @@
         <option value="egg">Eggs</option>
         <option value="cleaning">Cleaning</option>
         <option value="feeding">Feeding</option>
+        <option value="sale">Sales</option>
+        <option value="expense">Expenses</option>
       </select>
     </div>
     <ul id="history-list"></ul>

@@ -1,5 +1,11 @@
-const ICONS = { egg: "🥚", cleaning: "🧹", feeding: "🌾" };
-const TITLES = { egg: "Log Eggs", cleaning: "Log Cleaning", feeding: "Log Feeding" };
+const ICONS = { egg: "🥚", cleaning: "🧹", feeding: "🌾", sale: "💰", expense: "🧾" };
+const TITLES = {
+  egg: "Log Eggs",
+  cleaning: "Log Cleaning",
+  feeding: "Log Feeding",
+  sale: "Log Sale",
+  expense: "Log Expense",
+};
 
 const sheetBackdrop = document.getElementById("sheet-backdrop");
 const sheetTitle = document.getElementById("sheet-title");
@@ -34,6 +40,11 @@ function toLocalInputValue(date) {
   );
 }
 
+function fmtMoney(value) {
+  if (value === null || value === undefined) return "$0.00";
+  return `$${Number(value).toFixed(2)}`;
+}
+
 async function loadSummary() {
   const res = await fetch("api/summary");
   const data = await res.json();
@@ -41,6 +52,14 @@ async function loadSummary() {
   document.getElementById("stat-eggs-week").textContent = data.eggs_week;
   document.getElementById("stat-last-cleaning").textContent = fmtTime(data.last_cleaning);
   document.getElementById("stat-last-feeding").textContent = fmtTime(data.last_feeding);
+  document.getElementById("stat-eggs-available").textContent = data.eggs_available;
+  document.getElementById("stat-revenue-month").textContent = fmtMoney(data.revenue_month);
+  document.getElementById("stat-cost-month").textContent = fmtMoney(data.cost_month);
+
+  const netEl = document.getElementById("stat-net-month");
+  netEl.textContent = fmtMoney(data.net_month);
+  netEl.classList.toggle("stat-positive", data.net_month >= 0);
+  netEl.classList.toggle("stat-negative", data.net_month < 0);
 }
 
 async function loadHistory() {
@@ -66,7 +85,12 @@ async function loadHistory() {
     let title;
     if (entry.type === "egg") title = `${entry.count ?? 1} egg${entry.count === 1 ? "" : "s"} collected`;
     else if (entry.type === "cleaning") title = "Coop cleaned";
-    else title = `Fed${entry.food_type ? " " + entry.food_type : ""}${entry.amount ? " · " + entry.amount : ""}`;
+    else if (entry.type === "feeding")
+      title = `Fed${entry.food_type ? " " + entry.food_type : ""}${entry.amount ? " · " + entry.amount : ""}`;
+    else if (entry.type === "sale")
+      title = `${entry.count ?? 1} egg${entry.count === 1 ? "" : "s"} sold${entry.price != null ? " · " + fmtMoney(entry.price) : ""}`;
+    else
+      title = `${entry.category || "Expense"}${entry.cost != null ? " · " + fmtMoney(entry.cost) : ""}`;
 
     li.innerHTML = `
       <span class="icon">${ICONS[entry.type]}</span>
@@ -154,6 +178,59 @@ function openSheet(type, entry = null) {
         <textarea name="notes">${entry ? entry.notes ?? "" : ""}</textarea>
       </div>
     `;
+  } else if (type === "sale") {
+    const initialCount = entry ? entry.count ?? 1 : 1;
+    sheetFields.innerHTML = `
+      <div class="field">
+        <label>Eggs sold</label>
+        <div class="stepper">
+          <button type="button" id="dec">−</button>
+          <span id="count-value">${initialCount}</span>
+          <button type="button" id="inc">+</button>
+        </div>
+      </div>
+      <div class="field">
+        <label>Total price received</label>
+        <input type="number" step="0.01" min="0" inputmode="decimal" name="price" placeholder="e.g. 6.00" value="${entry && entry.price != null ? entry.price : ""}">
+      </div>
+      ${dateFieldHtml(tsValue)}
+      <div class="field">
+        <label>Notes (optional)</label>
+        <textarea name="notes" placeholder="e.g. sold to neighbor">${entry ? entry.notes ?? "" : ""}</textarea>
+      </div>
+    `;
+    let count = initialCount;
+    const countValue = document.getElementById("count-value");
+    document.getElementById("dec").addEventListener("click", () => {
+      count = Math.max(0, count - 1);
+      countValue.textContent = count;
+    });
+    document.getElementById("inc").addEventListener("click", () => {
+      count += 1;
+      countValue.textContent = count;
+    });
+  } else if (type === "expense") {
+    sheetFields.innerHTML = `
+      <div class="field">
+        <label>Category</label>
+        <input type="text" name="category" placeholder="e.g. Food, Bedding, Medical" value="${entry ? entry.category ?? "" : ""}" list="expense-categories">
+        <datalist id="expense-categories">
+          <option value="Food"></option>
+          <option value="Material"></option>
+          <option value="Medical"></option>
+          <option value="Other"></option>
+        </datalist>
+      </div>
+      <div class="field">
+        <label>Amount spent</label>
+        <input type="number" step="0.01" min="0" inputmode="decimal" name="cost" placeholder="e.g. 24.99" value="${entry && entry.cost != null ? entry.cost : ""}">
+      </div>
+      ${dateFieldHtml(tsValue)}
+      <div class="field">
+        <label>Notes (optional)</label>
+        <textarea name="notes">${entry ? entry.notes ?? "" : ""}</textarea>
+      </div>
+    `;
   }
 
   sheetBackdrop.classList.add("open");
@@ -186,6 +263,14 @@ sheetForm.addEventListener("submit", async (e) => {
   } else if (currentType === "feeding") {
     payload.food_type = sheetForm.food_type.value || null;
     payload.amount = sheetForm.amount.value || null;
+    payload.notes = sheetForm.notes.value || null;
+  } else if (currentType === "sale") {
+    payload.count = parseInt(document.getElementById("count-value").textContent, 10);
+    payload.price = sheetForm.price.value === "" ? null : parseFloat(sheetForm.price.value);
+    payload.notes = sheetForm.notes.value || null;
+  } else if (currentType === "expense") {
+    payload.category = sheetForm.category.value || null;
+    payload.cost = sheetForm.cost.value === "" ? null : parseFloat(sheetForm.cost.value);
     payload.notes = sheetForm.notes.value || null;
   }
 

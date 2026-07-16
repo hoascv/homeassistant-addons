@@ -40,6 +40,12 @@ def init_db():
         )
         """
     )
+
+    existing_columns = {row[1] for row in conn.execute("PRAGMA table_info(logs)")}
+    for column, coltype in (("price", "REAL"), ("cost", "REAL"), ("category", "TEXT")):
+        if column not in existing_columns:
+            conn.execute(f"ALTER TABLE logs ADD COLUMN {column} {coltype}")
+
     conn.commit()
     conn.close()
 
@@ -74,12 +80,36 @@ def api_summary():
         "SELECT ts FROM logs WHERE type = 'feeding' ORDER BY ts DESC LIMIT 1"
     ).fetchone()
 
+    month_start = today_start.replace(day=1)
+
+    eggs_collected_total = db.execute(
+        "SELECT COALESCE(SUM(count), 0) AS total FROM logs WHERE type = 'egg'"
+    ).fetchone()["total"]
+
+    eggs_sold_total = db.execute(
+        "SELECT COALESCE(SUM(count), 0) AS total FROM logs WHERE type = 'sale'"
+    ).fetchone()["total"]
+
+    revenue_month = db.execute(
+        "SELECT COALESCE(SUM(price), 0) AS total FROM logs WHERE type = 'sale' AND ts >= ?",
+        (month_start.isoformat(),),
+    ).fetchone()["total"]
+
+    cost_month = db.execute(
+        "SELECT COALESCE(SUM(cost), 0) AS total FROM logs WHERE type = 'expense' AND ts >= ?",
+        (month_start.isoformat(),),
+    ).fetchone()["total"]
+
     return jsonify(
         {
             "eggs_today": eggs_today,
             "eggs_week": eggs_week,
             "last_cleaning": last_cleaning["ts"] if last_cleaning else None,
             "last_feeding": last_feeding["ts"] if last_feeding else None,
+            "eggs_available": eggs_collected_total - eggs_sold_total,
+            "revenue_month": revenue_month,
+            "cost_month": cost_month,
+            "net_month": revenue_month - cost_month,
         }
     )
 
@@ -108,13 +138,16 @@ def api_log():
     data = request.get_json(force=True, silent=True) or {}
     entry_type = data.get("type")
 
-    if entry_type not in ("egg", "cleaning", "feeding"):
+    if entry_type not in ("egg", "cleaning", "feeding", "sale", "expense"):
         return jsonify({"error": "invalid type"}), 400
 
     count = data.get("count")
     food_type = data.get("food_type")
     amount = data.get("amount")
     notes = data.get("notes")
+    price = data.get("price")
+    cost = data.get("cost")
+    category = data.get("category")
 
     ts_input = data.get("ts")
     if ts_input:
@@ -127,8 +160,11 @@ def api_log():
 
     db = get_db()
     cur = db.execute(
-        "INSERT INTO logs (type, ts, count, food_type, amount, notes) VALUES (?, ?, ?, ?, ?, ?)",
-        (entry_type, ts, count, food_type, amount, notes),
+        """
+        INSERT INTO logs (type, ts, count, food_type, amount, notes, price, cost, category)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (entry_type, ts, count, food_type, amount, notes, price, cost, category),
     )
     db.commit()
 
@@ -157,10 +193,17 @@ def api_update_entry(entry_id):
     food_type = data.get("food_type", row["food_type"])
     amount = data.get("amount", row["amount"])
     notes = data.get("notes", row["notes"])
+    price = data.get("price", row["price"])
+    cost = data.get("cost", row["cost"])
+    category = data.get("category", row["category"])
 
     db.execute(
-        "UPDATE logs SET ts = ?, count = ?, food_type = ?, amount = ?, notes = ? WHERE id = ?",
-        (ts, count, food_type, amount, notes, entry_id),
+        """
+        UPDATE logs
+        SET ts = ?, count = ?, food_type = ?, amount = ?, notes = ?, price = ?, cost = ?, category = ?
+        WHERE id = ?
+        """,
+        (ts, count, food_type, amount, notes, price, cost, category, entry_id),
     )
     db.commit()
 
@@ -208,6 +251,7 @@ def api_restore():
 
     close_db()
     os.replace(tmp_path, DB_PATH)
+    init_db()  # backfill any columns added since the backup was taken
 
     return jsonify({"status": "restored"}), 200
 

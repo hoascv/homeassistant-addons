@@ -1,13 +1,15 @@
 # Coop Tracker
 
-Log egg collection, coop cleaning, and feeding for your chickens, right from
-your phone via the Home Assistant sidebar.
+Log egg collection, coop cleaning, feeding, egg sales, and coop costs for
+your chickens, right from your phone via the Home Assistant sidebar.
 
 ## Features
 
-- Quick-add buttons for eggs, cleaning, and feeding
+- Quick-add buttons for eggs, cleaning, feeding, sales, and expenses
 - Today / this-week egg counts, last cleaning and feeding times
+- Finances section: eggs on hand, and this month's revenue, costs, and net
 - Recent activity history with filtering and delete
+- Backup & Restore panel (download or restore the SQLite database)
 - Mobile-first layout, no page reloads
 
 ## Installation
