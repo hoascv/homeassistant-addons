@@ -6,6 +6,7 @@ Personal Home Assistant add-on repository.
 
 - **[Coop Tracker](coop-tracker/DOCS.md)** — log egg collection, coop
   cleaning, and feeding for your chickens from your phone.
+  ([architecture](coop-tracker/ARCHITECTURE.md))
 
 ## Installing this repository
 
