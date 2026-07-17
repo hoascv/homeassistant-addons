@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.9.0
+
+- The Finances section now also shows an "All time" revenue/costs/net
+  overview below the per-month figures, so you don't have to page through
+  every month to see the running total.
+
 ## 1.8.0
 
 - Added optional Home Assistant sensor integration: when `ha_sensors_enabled`

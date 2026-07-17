@@ -9,7 +9,8 @@ your chickens, right from your phone via the Home Assistant sidebar.
   eggs used/consumed
 - Today / this-week egg counts, eggs on hand, last cleaning and feeding
   times
-- Finances section: browse any month's revenue, costs, and net
+- Finances section: browse any month's revenue, costs, and net, plus an
+  all-time total
 - Recent activity history with filtering and delete
 - Backup & Restore panel (download or restore the SQLite database)
 - Push notification reminder if eggs haven't been collected in a

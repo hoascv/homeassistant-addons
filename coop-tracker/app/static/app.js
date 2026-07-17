@@ -74,6 +74,14 @@ async function loadSummary() {
   netEl.classList.toggle("stat-positive", data.net_month >= 0);
   netEl.classList.toggle("stat-negative", data.net_month < 0);
 
+  document.getElementById("stat-revenue-total").textContent = fmtMoney(data.revenue_total);
+  document.getElementById("stat-cost-total").textContent = fmtMoney(data.cost_total);
+
+  const netTotalEl = document.getElementById("stat-net-total");
+  netTotalEl.textContent = fmtMoney(data.net_total);
+  netTotalEl.classList.toggle("stat-positive", data.net_total >= 0);
+  netTotalEl.classList.toggle("stat-negative", data.net_total < 0);
+
   document.getElementById("finance-month-label").textContent =
     `${MONTH_NAMES[financeMonth - 1]} ${financeYear}`;
 

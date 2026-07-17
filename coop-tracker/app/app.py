@@ -12,7 +12,7 @@ from datetime import datetime, time as dtime, timedelta
 import flask
 from flask import Flask, g, jsonify, render_template, request, send_file
 
-APP_VERSION = "1.8.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.9.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("COOP_DB_PATH", "/data/coop.db")
 OPTIONS_PATH = os.environ.get("COOP_OPTIONS_PATH", "/data/options.json")
@@ -355,6 +355,14 @@ def _compute_summary(conn, now, year=None, month=None):
         (month_start.isoformat(), month_end.isoformat()),
     ).fetchone()["total"]
 
+    revenue_total = conn.execute(
+        "SELECT COALESCE(SUM(price), 0) AS total FROM logs WHERE type = 'sale'"
+    ).fetchone()["total"]
+
+    cost_total = conn.execute(
+        "SELECT COALESCE(SUM(cost), 0) AS total FROM logs WHERE type = 'expense'"
+    ).fetchone()["total"]
+
     return {
         "eggs_today": eggs_today,
         "eggs_week": eggs_week,
@@ -365,6 +373,9 @@ def _compute_summary(conn, now, year=None, month=None):
         "revenue_month": revenue_month,
         "cost_month": cost_month,
         "net_month": revenue_month - cost_month,
+        "revenue_total": revenue_total,
+        "cost_total": cost_total,
+        "net_total": revenue_total - cost_total,
     }
 
 
