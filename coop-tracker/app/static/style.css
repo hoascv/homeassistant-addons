@@ -515,16 +515,21 @@ main {
 }
 
 .trends-swatch {
-  width: 0.7rem;
-  height: 0.7rem;
-  border-radius: 3px;
+  width: 0.9rem;
+  height: 2px;
+  border-radius: 1px;
   display: inline-block;
 }
 
 .trends-swatch-collected { background: var(--accent-egg); }
 .trends-swatch-sold { background: var(--accent-sale); }
 .trends-swatch-used { background: var(--accent-used); }
-.trends-swatch-forecast { background: var(--accent-egg); opacity: 0.4; }
+.trends-swatch-forecast {
+  background: none;
+  height: 0;
+  border-top: 2px dashed var(--accent-egg);
+  opacity: 0.7;
+}
 
 .trends-chart-wrap {
   background: var(--surface);

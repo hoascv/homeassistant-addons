@@ -553,49 +553,63 @@ function monthLabel(ym) {
 }
 
 function buildTrendsSvg(data) {
-  const groupW = 56;
-  const barW = 14;
-  const barGap = 3;
+  const pointSpacing = 48;
   const chartH = 120;
   const topPad = 10;
   const labelH = 16;
-  const groupPad = (groupW - (barW * 3 + barGap * 2)) / 2;
   const forecastMonths = data.forecast_months || [];
   const forecastCollected = data.forecast_collected || [];
+  const forecastBacktest = data.forecast_backtest || [];
   const historyCount = data.months.length;
-  const width = (historyCount + forecastMonths.length) * groupW;
+  const totalCount = historyCount + forecastMonths.length;
+  const width = totalCount * pointSpacing;
   const height = topPad + chartH + labelH;
-  const maxVal = Math.max(1, ...data.collected, ...data.sold, ...data.used, ...forecastCollected);
+  const maxVal = Math.max(
+    1,
+    ...data.collected,
+    ...data.sold,
+    ...data.used,
+    ...forecastCollected,
+    ...forecastBacktest
+  );
 
-  const bar = (x, value, colorVar, opacity = 1) => {
-    const h = (value / maxVal) * chartH;
-    const y = topPad + chartH - h;
-    return `<rect x="${x}" y="${y}" width="${barW}" height="${h}" rx="2" fill="var(${colorVar})" fill-opacity="${opacity}"></rect>`;
+  const xAt = (i) => i * pointSpacing + pointSpacing / 2;
+  const yAt = (value) => topPad + chartH - (value / maxVal) * chartH;
+
+  const line = (values, colorVar, { dashed = false, opacity = 1 } = {}) => {
+    const points = values.map((v, i) => `${xAt(i)},${yAt(v)}`).join(" ");
+    const dash = dashed ? ' stroke-dasharray="4,3"' : "";
+    let svg = `<polyline points="${points}" fill="none" stroke="var(${colorVar})" stroke-width="2" stroke-opacity="${opacity}"${dash}></polyline>`;
+    values.forEach((v, i) => {
+      svg += `<circle cx="${xAt(i)}" cy="${yAt(v)}" r="2.5" fill="var(${colorVar})" fill-opacity="${opacity}"></circle>`;
+    });
+    return svg;
   };
 
-  let bars = "";
-  data.months.forEach((ym, i) => {
-    const groupX = i * groupW + groupPad;
-    bars += bar(groupX, data.collected[i], "--accent-egg");
-    bars += bar(groupX + barW + barGap, data.sold[i], "--accent-sale");
-    bars += bar(groupX + (barW + barGap) * 2, data.used[i], "--accent-used");
-    bars += `<text class="trends-bar-label" x="${i * groupW + groupW / 2}" y="${height - 2}" text-anchor="middle">${monthLabel(ym).split(" ")[0]}</text>`;
+  let content = "";
+  content += line(data.sold, "--accent-sale");
+  content += line(data.used, "--accent-used");
+  // one continuous dashed line: backtest over history, projection over the future
+  content += line([...forecastBacktest, ...forecastCollected], "--accent-egg", {
+    dashed: true,
+    opacity: 0.55,
   });
+  content += line(data.collected, "--accent-egg");
 
+  data.months.forEach((ym, i) => {
+    content += `<text class="trends-bar-label" x="${xAt(i)}" y="${height - 2}" text-anchor="middle">${monthLabel(ym).split(" ")[0]}</text>`;
+  });
   forecastMonths.forEach((ym, i) => {
-    const groupIndex = historyCount + i;
-    const groupX = groupIndex * groupW + groupPad;
-    bars += bar(groupX, forecastCollected[i], "--accent-egg", 0.4);
-    bars += `<text class="trends-bar-label trends-bar-label-forecast" x="${groupIndex * groupW + groupW / 2}" y="${height - 2}" text-anchor="middle">${monthLabel(ym).split(" ")[0]}</text>`;
+    content += `<text class="trends-bar-label trends-bar-label-forecast" x="${xAt(historyCount + i)}" y="${height - 2}" text-anchor="middle">${monthLabel(ym).split(" ")[0]}</text>`;
   });
 
   let divider = "";
   if (forecastMonths.length > 0) {
-    const dividerX = historyCount * groupW;
+    const dividerX = historyCount * pointSpacing;
     divider = `<line x1="${dividerX}" y1="${topPad}" x2="${dividerX}" y2="${topPad + chartH}" stroke="var(--border)" stroke-width="1" stroke-dasharray="3,3"></line>`;
   }
 
-  return `<svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet">${bars}${divider}</svg>`;
+  return `<svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet">${content}${divider}</svg>`;
 }
 
 async function loadTrends() {
@@ -611,12 +625,14 @@ async function loadTrends() {
     trendsChartWrap.insertAdjacentHTML("beforeend", buildTrendsSvg(data));
   }
 
+  const backtest = data.forecast_backtest || [];
   const historyRows = data.months
     .map(
       (ym, i) => `
         <tr>
           <td>${monthLabel(ym)}</td>
           <td>${data.collected[i]}</td>
+          <td>${backtest[i]}</td>
           <td>${data.sold[i]}</td>
           <td>${data.used[i]}</td>
         </tr>
@@ -629,6 +645,7 @@ async function loadTrends() {
       (ym, i) => `
         <tr class="trends-row-forecast">
           <td>${monthLabel(ym)} (forecast)</td>
+          <td>–</td>
           <td>${data.forecast_collected[i]}</td>
           <td>–</td>
           <td>–</td>
@@ -641,8 +658,8 @@ async function loadTrends() {
 
   trendsForecastCaption.textContent =
     data.forecast_basis === "breed_standard"
-      ? "Collected forecast is based on breed averages for your flock — log a few weeks of collection to refine it."
-      : "Collected forecast is based on breed averages for your flock, adjusted by your last 30 days of collection.";
+      ? "The dashed line is based on breed averages for your flock — log a few weeks of collection to refine it. It also shows what it would have predicted for past months, so you can see how it's tracking."
+      : "The dashed line is based on breed averages for your flock, adjusted by your last 30 days of collection. Past months show what it would have predicted at the time, so you can see how it's tracking.";
 }
 
 function switchTab(pageId) {

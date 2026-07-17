@@ -12,7 +12,7 @@ from datetime import datetime, time as dtime, timedelta
 import flask
 from flask import Flask, g, jsonify, render_template, request, send_file
 
-APP_VERSION = "1.11.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.12.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("COOP_DB_PATH", "/data/coop.db")
 OPTIONS_PATH = os.environ.get("COOP_OPTIONS_PATH", "/data/options.json")
@@ -411,9 +411,10 @@ def api_summary():
     return jsonify(_compute_summary(db, now, year, month))
 
 
-def _compute_trends(conn, now, months):
+def _recent_month_starts(now, months):
+    """The last `months` calendar months up to and including `now`'s
+    month, oldest first, as (year, month) tuples."""
     months = max(1, min(months, 24))
-
     month_starts = []
     year, month = now.year, now.month
     for i in range(months):
@@ -423,8 +424,12 @@ def _compute_trends(conn, now, months):
             m += 12
             y -= 1
         month_starts.append((y, m))
-    month_starts.reverse()  # oldest first
+    month_starts.reverse()
+    return month_starts
 
+
+def _compute_trends(conn, now, months):
+    month_starts = _recent_month_starts(now, months)
     labels = [f"{y:04d}-{m:02d}" for y, m in month_starts]
     range_start, _ = _month_bounds(*month_starts[0])
 
@@ -507,6 +512,22 @@ def _compute_forecast(conn, now, months=FORECAST_MONTHS):
     }
 
 
+def _compute_backtest(conn, now, months):
+    """For each of the same historical months _compute_trends just
+    returned, what would the forecast have predicted for that month, using
+    only data available as of that month's start? Reuses
+    _forecast_daily_rate as-is — a backtest is just calling it with a past
+    `now` instead of the real one."""
+    month_starts = _recent_month_starts(now, months)
+    values = []
+    for y, m in month_starts:
+        month_start, month_end = _month_bounds(y, m)
+        days_in_month = (month_end - month_start).days
+        daily_rate = _forecast_daily_rate(conn, month_start)
+        values.append(round(daily_rate * days_in_month))
+    return {"forecast_backtest": values}
+
+
 @app.route("/api/trends")
 def api_trends():
     db = get_db()
@@ -517,6 +538,7 @@ def api_trends():
         months = 6
     result = _compute_trends(db, now, months)
     result.update(_compute_forecast(db, now))
+    result.update(_compute_backtest(db, now, months))
     return jsonify(result)
 
 

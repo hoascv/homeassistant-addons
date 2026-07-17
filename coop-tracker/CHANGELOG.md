@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.12.0
+
+- The Trends tab chart is now a line chart instead of a grouped bar chart.
+- Added a forecast backtest: the dashed forecast line now runs back
+  through your history too, showing what it would have predicted for each
+  past month using only the data available at the time — next to what
+  actually happened, so you can see how well it's tracking. Also shown as
+  a new "Forecast" column in the table.
+
 ## 1.11.0
 
 - Added a 3-month egg collection forecast to the Trends tab, shown as

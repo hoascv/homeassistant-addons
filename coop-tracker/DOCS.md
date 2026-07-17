@@ -11,9 +11,10 @@ your chickens, right from your phone via the Home Assistant sidebar.
   times
 - Finances section: browse any month's revenue, costs, and net, plus an
   all-time total
-- Trends tab: monthly chart and table of eggs collected/sold/used over the
+- Trends tab: line chart and table of eggs collected/sold/used over the
   last 3, 6, or 12 months, plus a 3-month egg-collection forecast based on
-  your flock's breed composition
+  your flock's breed composition — and how that forecast would have
+  performed in past months, so you can see how well it's tracking
 - Recent activity history with filtering and delete
 - Backup & Restore panel (download or restore the SQLite database)
 - Push notification reminder if eggs haven't been collected in a
@@ -71,17 +72,24 @@ add-on for changes to take effect.
 ### Egg collection forecast
 
 The Trends tab projects the next 3 months of expected egg collection,
-shown as lighter bars after your actual history. It starts from published
-average annual laying rates for your configured breeds (Isabrown ~300
-eggs/year/hen, Sussex ~260 eggs/year/hen), then — once you've logged at
-least one egg — scales that baseline by how your actual collection over
-the last 30 days compares to it. There's no training step: it's
-recomputed from scratch every time you open the Trends tab, so it
-naturally tracks your flock's real performance (a hen going broody,
+shown as a dashed line continuing past your actual history. It starts
+from published average annual laying rates for your configured breeds
+(Isabrown ~300 eggs/year/hen, Sussex ~260 eggs/year/hen), then — once
+you've logged at least one egg — scales that baseline by how your actual
+collection over the last 30 days compares to it. There's no training
+step: it's recomputed from scratch every time you open the Trends tab, so
+it naturally tracks your flock's real performance (a hen going broody,
 molting, or a new hen coming into lay) without you doing anything. The
 forecast is intentionally a flat rate — it doesn't yet account for
 seasonal changes in day length, so a projection made in summer may run a
 little high once winter arrives, and vice versa.
+
+The same dashed line also runs back through your history: for each past
+month it shows what the forecast *would have* predicted using only the
+data available at the time, next to what actually happened (also broken
+out in the table's "Forecast" column). Early months, with little or no
+prior data to work from, will tend to be less accurate; the forecast
+should track closer to actual as more collection history builds up.
 
 ### Home Assistant sensors
 

@@ -94,3 +94,49 @@ def test_forecast_basis_switches_to_blended_after_any_egg_logged(client):
     client.post("/api/log", json={"type": "egg", "count": 1})
     body = client.get("/api/trends?months=1").get_json()
     assert body["forecast_basis"] == "blended"
+
+
+def test_backtest_matches_length_of_history_months(client):
+    body = client.get("/api/trends?months=6").get_json()
+    assert len(body["forecast_backtest"]) == len(body["months"]) == 6
+
+
+def test_backtest_is_pure_breed_standard_with_no_history(client):
+    body = client.get("/api/trends?months=3").get_json()
+    baseline = _baseline_daily()
+    for ym, backtest in zip(body["months"], body["forecast_backtest"]):
+        year, month = (int(p) for p in ym.split("-"))
+        start, end = coopapp._month_bounds(year, month)
+        days = (end - start).days
+        assert backtest == round(baseline * days)
+
+
+def test_backtest_converges_to_actual_with_enough_steady_history(client):
+    now = datetime.now()
+    # 90 days of a perfectly steady rate — more than the 30-day trailing
+    # window the forecast looks back over.
+    for i in range(90):
+        ts = (now - timedelta(days=i, hours=2)).isoformat()
+        client.post("/api/log", json={"type": "egg", "count": 5, "ts": ts})
+
+    body = client.get("/api/trends?months=3").get_json()
+    # The most recent *fully elapsed* historical month (index -2, since -1
+    # is the current, still-partial month) already had a full trailing
+    # window of steady history behind it — the backtest should land exactly
+    # on what actually happened.
+    assert body["forecast_backtest"][-2] == body["collected"][-2]
+
+
+def test_backtest_error_shrinks_as_more_history_accumulates(client):
+    now = datetime.now()
+    for i in range(90):
+        ts = (now - timedelta(days=i, hours=2)).isoformat()
+        client.post("/api/log", json={"type": "egg", "count": 5, "ts": ts})
+
+    body = client.get("/api/trends?months=3").get_json()
+    # Exclude the current (still-partial) month — comparing a full-month
+    # forecast against a partial month's actual isn't a fair test.
+    backtest = body["forecast_backtest"][:-1]
+    actual = body["collected"][:-1]
+    errors = [abs(b - a) for b, a in zip(backtest, actual)]
+    assert errors[0] >= errors[-1]  # oldest month had the least prior data

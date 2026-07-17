@@ -178,12 +178,17 @@ size, and would slow down "edit `app.js`, refresh the ingress panel" to
 library** (Chart.js, etc.): pulling in a chart library either means an
 external CDN `<script>` tag — a dependency the ingress panel shouldn't have
 on internet access — or vendoring + bundling it, which reopens the "no
-build step" decision above. Three series, at most 12 data points each,
-is comfortably within what a ~40-line `buildTrendsSvg()` function can
-draw directly as `<rect>`/`<text>` elements, styled with the same CSS
-custom properties (`--accent-egg`, `--accent-sale`, `--accent-used`)
-already used for the action buttons, so it stays visually consistent for
-free and themes correctly in light/dark mode.
+build step" decision above. A handful of series, at most ~15 data points
+each (12 months of history + 3 forecast), is comfortably within what
+`buildTrendsSvg()` can draw directly as `<polyline>`/`<circle>`/`<text>`
+elements, styled with the same CSS custom properties (`--accent-egg`,
+`--accent-sale`, `--accent-used`) already used for the action buttons, so
+it stays visually consistent for free and themes correctly in light/dark
+mode. It's a line chart (one `<polyline>` + point `<circle>`s per series)
+rather than bars — clearer for reading a trend over many points, and it's
+what makes overlaying the continuous forecast/backtest line (§9) read
+naturally as one line the actual data either matches or diverges from,
+instead of a second set of bars competing for the same x-position.
 
 **Why colors/icons are a shared vocabulary across the app:** `--accent-egg`
 / `--accent-sale` / `--accent-used` are defined once in `style.css` and
@@ -210,8 +215,8 @@ conservative default — not because the code requires it.
 ## 9. Egg collection forecast
 
 The Trends tab projects 3 months of expected egg collection
-(`_forecast_daily_rate`, `_compute_forecast`), shown as lighter bars after
-the actual history. It's a blend of two inputs:
+(`_forecast_daily_rate`, `_compute_forecast`), shown as a dashed line
+continuing past the actual history. It's a blend of two inputs:
 
 1. A **breed-standard baseline**: published average annual eggs/hen for
    the configured flock (`BREED_ANNUAL_EGGS`, `flock_isabrown_count` /
@@ -251,6 +256,29 @@ DOCS.md's forecast section, which states the limitation directly) rather
 than build a month-by-month seasonal adjustment curve — that's the
 natural next step if the flat forecast proves noticeably off across a
 season boundary.
+
+### Backtest: how the forecast performed in past months
+
+`_compute_backtest` answers "what would the forecast have said for this
+month, back when it started?" for every month `_compute_trends` already
+returns, so the user can see forecast accuracy directly against actual
+history rather than just trusting the forward projection.
+
+**Why this needed no new forecasting logic:** `_forecast_daily_rate(conn,
+now)` already takes `now` as a parameter and only ever looks *backward*
+from it (§9). A backtest for month M is just calling that exact same
+function with `now` set to month M's start instead of the real current
+time — it naturally only sees data that existed before that point,
+because that's how the function was already written. `_compute_backtest`
+is a ~10-line loop over `_recent_month_starts` (factored out of
+`_compute_trends` for this reuse) calling the existing function once per
+historical month; there's no separate backtesting engine or simulation
+framework.
+
+One consequence worth knowing: the current, still-in-progress month's
+backtest/forecast is a *full-month* projection, compared in the UI against
+that month's *partial* actual-so-far — they're expected to diverge until
+the month ends, that's not a forecast miss.
 
 ## 10. Backup & restore
 
