@@ -11,6 +11,8 @@ your chickens, right from your phone via the Home Assistant sidebar.
   times
 - Finances section: browse any month's revenue, costs, and net, plus an
   all-time total
+- Trends tab: monthly chart and table of eggs collected/sold/used over the
+  last 3, 6, or 12 months
 - Recent activity history with filtering and delete
 - Backup & Restore panel (download or restore the SQLite database)
 - Push notification reminder if eggs haven't been collected in a

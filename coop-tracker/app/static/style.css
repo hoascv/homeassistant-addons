@@ -38,7 +38,7 @@ body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   background: var(--bg);
   color: var(--text);
-  padding-bottom: 2rem;
+  padding-bottom: calc(4.5rem + env(safe-area-inset-bottom));
 }
 
 .topbar {
@@ -230,7 +230,8 @@ main {
   margin: 0;
 }
 
-#history-filter {
+#history-filter,
+#trends-range {
   border: 1px solid var(--border);
   background: var(--surface);
   color: var(--text);
@@ -464,3 +465,101 @@ main {
 
 .debug-ok { color: var(--positive); }
 .debug-fail { color: var(--negative); }
+
+.tabbar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  padding: 0.4rem 0 max(0.4rem, env(safe-area-inset-bottom));
+  z-index: 5;
+}
+
+.tabbar-btn {
+  flex: 1;
+  border: none;
+  background: none;
+  color: var(--text-muted);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.15rem;
+  font-size: 0.7rem;
+  padding: 0.3rem 0;
+  cursor: pointer;
+}
+
+.tabbar-icon {
+  font-size: 1.25rem;
+}
+
+.tabbar-btn.active {
+  color: var(--accent);
+}
+
+.trends-legend {
+  display: flex;
+  gap: 1rem;
+  margin-bottom: 0.75rem;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.trends-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.trends-swatch {
+  width: 0.7rem;
+  height: 0.7rem;
+  border-radius: 3px;
+  display: inline-block;
+}
+
+.trends-swatch-collected { background: var(--accent-egg); }
+.trends-swatch-sold { background: var(--accent-sale); }
+.trends-swatch-used { background: var(--accent-used); }
+
+.trends-chart-wrap {
+  background: var(--surface);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 1rem 0.75rem 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.trends-chart-wrap svg {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.trends-bar-label {
+  font-size: 6px;
+  fill: var(--text-muted);
+}
+
+.trends-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8rem;
+  margin-bottom: 1.5rem;
+}
+
+.trends-table th,
+.trends-table td {
+  text-align: right;
+  padding: 0.4rem 0.3rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.trends-table th:first-child,
+.trends-table td:first-child {
+  text-align: left;
+  color: var(--text-muted);
+}

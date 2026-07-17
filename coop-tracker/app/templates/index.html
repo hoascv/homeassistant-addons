@@ -14,7 +14,7 @@
   <button class="topbar-icon-btn" id="backup-open-btn" aria-label="Backup and restore">⚙️</button>
 </header>
 
-<main>
+<main id="page-home" class="page">
   <section class="summary">
     <div class="stat">
       <span class="stat-value" id="stat-eggs-today">–</span>
@@ -125,6 +125,52 @@
     <ul id="history-list"></ul>
   </section>
 </main>
+
+<main id="page-trends" class="page" hidden>
+  <section class="trends">
+    <div class="finances-header">
+      <h2>Trends</h2>
+      <select id="trends-range">
+        <option value="3">3 months</option>
+        <option value="6" selected>6 months</option>
+        <option value="12">12 months</option>
+      </select>
+    </div>
+
+    <div class="trends-legend">
+      <span class="trends-legend-item"><span class="trends-swatch trends-swatch-collected"></span>Collected</span>
+      <span class="trends-legend-item"><span class="trends-swatch trends-swatch-sold"></span>Sold</span>
+      <span class="trends-legend-item"><span class="trends-swatch trends-swatch-used"></span>Used</span>
+    </div>
+
+    <div class="trends-chart-wrap" id="trends-chart-wrap">
+      <p class="empty-state" id="trends-empty" hidden>No egg activity logged yet</p>
+    </div>
+
+    <table class="trends-table" id="trends-table">
+      <thead>
+        <tr>
+          <th>Month</th>
+          <th>Collected</th>
+          <th>Sold</th>
+          <th>Used</th>
+        </tr>
+      </thead>
+      <tbody id="trends-table-body"></tbody>
+    </table>
+  </section>
+</main>
+
+<nav class="tabbar">
+  <button type="button" class="tabbar-btn active" id="tab-home-btn" data-page="page-home">
+    <span class="tabbar-icon">🏠</span>
+    <span>Home</span>
+  </button>
+  <button type="button" class="tabbar-btn" id="tab-trends-btn" data-page="page-trends">
+    <span class="tabbar-icon">📈</span>
+    <span>Trends</span>
+  </button>
+</nav>
 
 <div class="sheet-backdrop" id="sheet-backdrop">
   <div class="sheet" id="sheet">

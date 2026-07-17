@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.10.0
+
+- Added a new **Trends** tab (bottom navigation) with a monthly bar chart
+  and table of eggs collected, sold, and used, so you can see how they
+  trend over time instead of just the current totals. Choose a 3, 6, or
+  12-month window from the dropdown.
+
 ## 1.9.0
 
 - The Finances section now also shows an "All time" revenue/costs/net

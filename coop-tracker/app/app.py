@@ -12,7 +12,7 @@ from datetime import datetime, time as dtime, timedelta
 import flask
 from flask import Flask, g, jsonify, render_template, request, send_file
 
-APP_VERSION = "1.9.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.10.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("COOP_DB_PATH", "/data/coop.db")
 OPTIONS_PATH = os.environ.get("COOP_OPTIONS_PATH", "/data/options.json")
@@ -391,6 +391,55 @@ def api_summary():
         year, month = None, None
 
     return jsonify(_compute_summary(db, now, year, month))
+
+
+def _compute_trends(conn, now, months):
+    months = max(1, min(months, 24))
+
+    month_starts = []
+    year, month = now.year, now.month
+    for i in range(months):
+        m = month - i
+        y = year
+        while m <= 0:
+            m += 12
+            y -= 1
+        month_starts.append((y, m))
+    month_starts.reverse()  # oldest first
+
+    labels = [f"{y:04d}-{m:02d}" for y, m in month_starts]
+    range_start, _ = _month_bounds(*month_starts[0])
+
+    def series_for(entry_type):
+        rows = conn.execute(
+            """
+            SELECT strftime('%Y-%m', ts) AS ym, COALESCE(SUM(count), 0) AS total
+            FROM logs
+            WHERE type = ? AND ts >= ?
+            GROUP BY ym
+            """,
+            (entry_type, range_start.isoformat()),
+        ).fetchall()
+        by_month = {row["ym"]: row["total"] for row in rows}
+        return [by_month.get(label, 0) for label in labels]
+
+    return {
+        "months": labels,
+        "collected": series_for("egg"),
+        "sold": series_for("sale"),
+        "used": series_for("used"),
+    }
+
+
+@app.route("/api/trends")
+def api_trends():
+    db = get_db()
+    now = datetime.now()
+    try:
+        months = int(request.args.get("months", 6))
+    except ValueError:
+        months = 6
+    return jsonify(_compute_trends(db, now, months))
 
 
 @app.route("/api/entries")

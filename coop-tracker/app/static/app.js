@@ -540,5 +540,86 @@ notifyTestBtn.addEventListener("click", async () => {
   }
 });
 
+const tabButtons = document.querySelectorAll(".tabbar-btn");
+const trendsRangeSelect = document.getElementById("trends-range");
+const trendsChartWrap = document.getElementById("trends-chart-wrap");
+const trendsEmpty = document.getElementById("trends-empty");
+const trendsTableBody = document.getElementById("trends-table-body");
+
+function monthLabel(ym) {
+  const [year, month] = ym.split("-").map(Number);
+  return `${MONTH_NAMES[month - 1].slice(0, 3)} ${year}`;
+}
+
+function buildTrendsSvg(data) {
+  const groupW = 56;
+  const barW = 14;
+  const barGap = 3;
+  const chartH = 120;
+  const topPad = 10;
+  const labelH = 16;
+  const groupPad = (groupW - (barW * 3 + barGap * 2)) / 2;
+  const width = data.months.length * groupW;
+  const height = topPad + chartH + labelH;
+  const maxVal = Math.max(1, ...data.collected, ...data.sold, ...data.used);
+
+  const bar = (x, value, colorVar) => {
+    const h = (value / maxVal) * chartH;
+    const y = topPad + chartH - h;
+    return `<rect x="${x}" y="${y}" width="${barW}" height="${h}" rx="2" fill="var(${colorVar})"></rect>`;
+  };
+
+  let bars = "";
+  data.months.forEach((ym, i) => {
+    const groupX = i * groupW + groupPad;
+    bars += bar(groupX, data.collected[i], "--accent-egg");
+    bars += bar(groupX + barW + barGap, data.sold[i], "--accent-sale");
+    bars += bar(groupX + (barW + barGap) * 2, data.used[i], "--accent-used");
+    bars += `<text class="trends-bar-label" x="${i * groupW + groupW / 2}" y="${height - 2}" text-anchor="middle">${monthLabel(ym).split(" ")[0]}</text>`;
+  });
+
+  return `<svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet">${bars}</svg>`;
+}
+
+async function loadTrends() {
+  const months = trendsRangeSelect.value;
+  const res = await fetch(`api/trends?months=${months}`);
+  const data = await res.json();
+
+  const total = [...data.collected, ...data.sold, ...data.used].reduce((a, b) => a + b, 0);
+  trendsEmpty.hidden = total > 0;
+  trendsChartWrap.querySelector("svg")?.remove();
+  if (total > 0) {
+    trendsChartWrap.insertAdjacentHTML("beforeend", buildTrendsSvg(data));
+  }
+
+  trendsTableBody.innerHTML = data.months
+    .map(
+      (ym, i) => `
+        <tr>
+          <td>${monthLabel(ym)}</td>
+          <td>${data.collected[i]}</td>
+          <td>${data.sold[i]}</td>
+          <td>${data.used[i]}</td>
+        </tr>
+      `
+    )
+    .join("");
+}
+
+function switchTab(pageId) {
+  document.querySelectorAll(".page").forEach((page) => {
+    page.hidden = page.id !== pageId;
+  });
+  tabButtons.forEach((btn) => btn.classList.toggle("active", btn.dataset.page === pageId));
+  if (pageId === "page-trends") loadTrends();
+}
+
+tabButtons.forEach((btn) => {
+  btn.addEventListener("click", () => switchTab(btn.dataset.page));
+});
+
+trendsRangeSelect.addEventListener("change", loadTrends);
+
 loadSummary();
 loadHistory();
