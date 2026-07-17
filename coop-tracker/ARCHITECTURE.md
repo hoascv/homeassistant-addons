@@ -56,6 +56,7 @@ Supervisor's ingress proxy.
 | Config | HA add-on options, schema-validated by Supervisor | `config.yaml` (schema) → `/data/options.json` (values) |
 | Background work | One daemon thread, 60s poll loop | `_background_loop()` in `app.py` |
 | Packaging | Multi-arch Docker image, Alpine + Python base | `Dockerfile`, `build.yaml`, `run.sh` |
+| Tests | pytest against a real Flask test client + temp SQLite | `app/tests/`, `pytest.ini` (see §13) |
 
 There is deliberately no service layer, no ORM, no separate frontend
 build — `app.py` is the whole backend, read top to bottom.
@@ -264,14 +265,46 @@ things together, by hand:
 and a build step just to avoid typing the version twice; the comment next
 to `APP_VERSION` exists specifically to flag this manual-sync requirement.
 
-## 13. Known limitations (accepted, not oversights)
+## 13. Testing
 
-- **No automated test suite.** Changes are verified by hand: `python3 -m
-  py_compile`, running the Flask dev server against a scratch SQLite file
-  and curling the API, and for UI changes, a headless-Chrome pass. For a
-  single-user hobby add-on with a tiny surface area, the cost of a test
-  harness hasn't been worth it yet — this is the most likely thing to
-  revisit if the app grows.
+Backend tests live in `app/tests/`, run with `pytest` from `coop-tracker/`:
+
+```
+pip install -r app/requirements-dev.txt
+pytest
+```
+
+`pytest.ini` (at the repo root of the add-on) puts `app/` on `sys.path` so
+tests `import app` directly — the same module the container runs, not a
+copy or a reimplementation.
+
+**Approach:** tests go through Flask's `test_client()` against a real
+(temporary, per-test) SQLite file — not mocks of the database — since the
+SQL itself (`_compute_summary`, `_compute_trends`, the polymorphic `logs`
+queries) is most of the app's actual logic. `app.DB_PATH` / `OPTIONS_PATH`
+/ `SUPERVISOR_TOKEN` are monkeypatched per test via fixtures in
+`conftest.py`, since the app reads all three as module-level globals
+rather than through an injectable config object (see §8) — the tests work
+with that design rather than restructuring the app to be more
+"testable" for its own sake.
+
+HA integration (`_push_ha_sensors`, `send_notification`, `/api/debug`'s
+reachability check) is tested against a real local `http.server` instance
+standing in for the Supervisor Core API (the `fake_ha_server` fixture),
+not a mocking library — it asserts on the actual HTTP paths and JSON
+bodies `_ha_api_request` sends, which is what would actually reach Home
+Assistant.
+
+**Not covered:** the frontend (`app.js`/`style.css`/`index.html`) has no
+automated tests. Adding one (e.g. via Playwright) would mean a Node
+toolchain purely for testing, in a project that deliberately has none for
+the app itself (§7) — UI changes are still verified by hand (a headless-
+Chrome pass during development), not by CI. This is the most likely gap
+to revisit if the frontend grows past what a manual pass can reliably
+cover.
+
+## 14. Known limitations (accepted, not oversights)
+
 - **Reminder's "already notified today" guard is in-memory only**
   (`_reminder_last_checked_date` is a module-level global, not persisted).
   An add-on restart shortly after today's reminder fired could send one
