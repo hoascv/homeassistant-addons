@@ -1,0 +1,96 @@
+from datetime import datetime, timedelta
+
+import app as coopapp
+
+
+def _baseline_daily(isabrown=3, sussex=2):
+    return isabrown * (coopapp.BREED_ANNUAL_EGGS["isabrown"] / 365) + sussex * (
+        coopapp.BREED_ANNUAL_EGGS["sussex"] / 365
+    )
+
+
+def test_forecast_pure_breed_standard_when_no_history(client):
+    body = client.get("/api/trends?months=1").get_json()
+    assert body["forecast_basis"] == "breed_standard"
+    assert body["forecast_daily_rate"] == round(_baseline_daily(), 2)
+    assert len(body["forecast_months"]) == coopapp.FORECAST_MONTHS
+    assert len(body["forecast_collected"]) == coopapp.FORECAST_MONTHS
+
+
+def test_forecast_months_follow_the_current_month(client):
+    body = client.get("/api/trends?months=1").get_json()
+    now = datetime.now()
+    year, month = now.year, now.month
+    expected = []
+    for i in range(1, coopapp.FORECAST_MONTHS + 1):
+        m = month + i
+        y = year
+        while m > 12:
+            m -= 12
+            y += 1
+        expected.append(f"{y:04d}-{m:02d}")
+    assert body["forecast_months"] == expected
+
+
+def test_forecast_collected_matches_daily_rate_times_days_in_month(client):
+    body = client.get("/api/trends?months=1").get_json()
+    daily_rate = body["forecast_daily_rate"]
+    for ym, projected in zip(body["forecast_months"], body["forecast_collected"]):
+        year, month = (int(p) for p in ym.split("-"))
+        start, end = coopapp._month_bounds(year, month)
+        days = (end - start).days
+        assert projected == round(daily_rate * days)
+
+
+def test_forecast_zero_flock_produces_zero_forecast(client, set_options):
+    set_options(flock_isabrown_count=0, flock_sussex_count=0)
+    body = client.get("/api/trends?months=1").get_json()
+    assert body["forecast_daily_rate"] == 0.0
+    assert all(v == 0 for v in body["forecast_collected"])
+
+
+def test_forecast_reflects_custom_flock_composition(client, set_options):
+    set_options(flock_isabrown_count=1, flock_sussex_count=0)
+    body = client.get("/api/trends?months=1").get_json()
+    assert body["forecast_daily_rate"] == round(_baseline_daily(isabrown=1, sussex=0), 2)
+
+
+def test_forecast_blends_with_actual_recent_rate(client):
+    now = datetime.now()
+    for i in range(coopapp.FORECAST_TRAILING_DAYS):
+        ts = (now - timedelta(days=i, hours=1)).isoformat()
+        client.post("/api/log", json={"type": "egg", "count": 2, "ts": ts})
+
+    body = client.get("/api/trends?months=1").get_json()
+    assert body["forecast_basis"] == "blended"
+    assert body["forecast_daily_rate"] == 2.0  # actual rate, well within clamp bounds
+
+
+def test_forecast_ratio_clamped_on_high_end(client):
+    now = datetime.now()
+    for i in range(coopapp.FORECAST_TRAILING_DAYS):
+        ts = (now - timedelta(days=i, hours=1)).isoformat()
+        client.post("/api/log", json={"type": "egg", "count": 50, "ts": ts})
+
+    body = client.get("/api/trends?months=1").get_json()
+    expected_ceiling = round(_baseline_daily() * coopapp.FORECAST_RATIO_BOUNDS[1], 2)
+    assert body["forecast_daily_rate"] == expected_ceiling
+
+
+def test_forecast_ratio_clamped_on_low_end(client):
+    now = datetime.now()
+    # A single egg well inside the trailing window: real history, but a
+    # near-zero actual rate — should floor at the clamp, not collapse to 0.
+    client.post(
+        "/api/log",
+        json={"type": "egg", "count": 1, "ts": (now - timedelta(days=25)).isoformat()},
+    )
+    body = client.get("/api/trends?months=1").get_json()
+    expected_floor = round(_baseline_daily() * coopapp.FORECAST_RATIO_BOUNDS[0], 2)
+    assert body["forecast_daily_rate"] == expected_floor
+
+
+def test_forecast_basis_switches_to_blended_after_any_egg_logged(client):
+    client.post("/api/log", json={"type": "egg", "count": 1})
+    body = client.get("/api/trends?months=1").get_json()
+    assert body["forecast_basis"] == "blended"

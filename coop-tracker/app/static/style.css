@@ -524,6 +524,7 @@ main {
 .trends-swatch-collected { background: var(--accent-egg); }
 .trends-swatch-sold { background: var(--accent-sale); }
 .trends-swatch-used { background: var(--accent-used); }
+.trends-swatch-forecast { background: var(--accent-egg); opacity: 0.4; }
 
 .trends-chart-wrap {
   background: var(--surface);
@@ -542,6 +543,22 @@ main {
 .trends-bar-label {
   font-size: 6px;
   fill: var(--text-muted);
+}
+
+.trends-bar-label-forecast {
+  fill: var(--text-muted);
+  opacity: 0.7;
+}
+
+.trends-forecast-caption {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin: -0.5rem 0 1rem;
+}
+
+.trends-row-forecast td {
+  font-style: italic;
+  color: var(--text-muted);
 }
 
 .trends-table {

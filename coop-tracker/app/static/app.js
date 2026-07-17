@@ -545,6 +545,7 @@ const trendsRangeSelect = document.getElementById("trends-range");
 const trendsChartWrap = document.getElementById("trends-chart-wrap");
 const trendsEmpty = document.getElementById("trends-empty");
 const trendsTableBody = document.getElementById("trends-table-body");
+const trendsForecastCaption = document.getElementById("trends-forecast-caption");
 
 function monthLabel(ym) {
   const [year, month] = ym.split("-").map(Number);
@@ -559,14 +560,17 @@ function buildTrendsSvg(data) {
   const topPad = 10;
   const labelH = 16;
   const groupPad = (groupW - (barW * 3 + barGap * 2)) / 2;
-  const width = data.months.length * groupW;
+  const forecastMonths = data.forecast_months || [];
+  const forecastCollected = data.forecast_collected || [];
+  const historyCount = data.months.length;
+  const width = (historyCount + forecastMonths.length) * groupW;
   const height = topPad + chartH + labelH;
-  const maxVal = Math.max(1, ...data.collected, ...data.sold, ...data.used);
+  const maxVal = Math.max(1, ...data.collected, ...data.sold, ...data.used, ...forecastCollected);
 
-  const bar = (x, value, colorVar) => {
+  const bar = (x, value, colorVar, opacity = 1) => {
     const h = (value / maxVal) * chartH;
     const y = topPad + chartH - h;
-    return `<rect x="${x}" y="${y}" width="${barW}" height="${h}" rx="2" fill="var(${colorVar})"></rect>`;
+    return `<rect x="${x}" y="${y}" width="${barW}" height="${h}" rx="2" fill="var(${colorVar})" fill-opacity="${opacity}"></rect>`;
   };
 
   let bars = "";
@@ -578,7 +582,20 @@ function buildTrendsSvg(data) {
     bars += `<text class="trends-bar-label" x="${i * groupW + groupW / 2}" y="${height - 2}" text-anchor="middle">${monthLabel(ym).split(" ")[0]}</text>`;
   });
 
-  return `<svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet">${bars}</svg>`;
+  forecastMonths.forEach((ym, i) => {
+    const groupIndex = historyCount + i;
+    const groupX = groupIndex * groupW + groupPad;
+    bars += bar(groupX, forecastCollected[i], "--accent-egg", 0.4);
+    bars += `<text class="trends-bar-label trends-bar-label-forecast" x="${groupIndex * groupW + groupW / 2}" y="${height - 2}" text-anchor="middle">${monthLabel(ym).split(" ")[0]}</text>`;
+  });
+
+  let divider = "";
+  if (forecastMonths.length > 0) {
+    const dividerX = historyCount * groupW;
+    divider = `<line x1="${dividerX}" y1="${topPad}" x2="${dividerX}" y2="${topPad + chartH}" stroke="var(--border)" stroke-width="1" stroke-dasharray="3,3"></line>`;
+  }
+
+  return `<svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet">${bars}${divider}</svg>`;
 }
 
 async function loadTrends() {
@@ -586,14 +603,15 @@ async function loadTrends() {
   const res = await fetch(`api/trends?months=${months}`);
   const data = await res.json();
 
-  const total = [...data.collected, ...data.sold, ...data.used].reduce((a, b) => a + b, 0);
-  trendsEmpty.hidden = total > 0;
+  const historyTotal = [...data.collected, ...data.sold, ...data.used].reduce((a, b) => a + b, 0);
+  const forecastTotal = (data.forecast_collected || []).reduce((a, b) => a + b, 0);
+  trendsEmpty.hidden = historyTotal > 0 || forecastTotal > 0;
   trendsChartWrap.querySelector("svg")?.remove();
-  if (total > 0) {
+  if (historyTotal > 0 || forecastTotal > 0) {
     trendsChartWrap.insertAdjacentHTML("beforeend", buildTrendsSvg(data));
   }
 
-  trendsTableBody.innerHTML = data.months
+  const historyRows = data.months
     .map(
       (ym, i) => `
         <tr>
@@ -605,6 +623,26 @@ async function loadTrends() {
       `
     )
     .join("");
+
+  const forecastRows = (data.forecast_months || [])
+    .map(
+      (ym, i) => `
+        <tr class="trends-row-forecast">
+          <td>${monthLabel(ym)} (forecast)</td>
+          <td>${data.forecast_collected[i]}</td>
+          <td>–</td>
+          <td>–</td>
+        </tr>
+      `
+    )
+    .join("");
+
+  trendsTableBody.innerHTML = historyRows + forecastRows;
+
+  trendsForecastCaption.textContent =
+    data.forecast_basis === "breed_standard"
+      ? "Collected forecast is based on breed averages for your flock — log a few weeks of collection to refine it."
+      : "Collected forecast is based on breed averages for your flock, adjusted by your last 30 days of collection.";
 }
 
 function switchTab(pageId) {

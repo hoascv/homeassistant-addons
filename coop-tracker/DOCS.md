@@ -12,7 +12,8 @@ your chickens, right from your phone via the Home Assistant sidebar.
 - Finances section: browse any month's revenue, costs, and net, plus an
   all-time total
 - Trends tab: monthly chart and table of eggs collected/sold/used over the
-  last 3, 6, or 12 months
+  last 3, 6, or 12 months, plus a 3-month egg-collection forecast based on
+  your flock's breed composition
 - Recent activity history with filtering and delete
 - Backup & Restore panel (download or restore the SQLite database)
 - Push notification reminder if eggs haven't been collected in a
@@ -59,9 +60,28 @@ which Home Assistant persists across restarts and updates automatically.
 - **ha_sensors_enabled**: `false` (default). Turn on to push Coop Tracker's
   stats into Home Assistant as real entities (see below), so you can put
   them on a dashboard or use them in automations.
+- **flock_isabrown_count** / **flock_sussex_count**: `3` / `2` by default.
+  How many hens of each breed you keep — used only to compute the egg
+  collection forecast on the Trends tab (see below). Set both to `0` to
+  turn the forecast off.
 
 Set these from the add-on's **Configuration** tab, then restart the
 add-on for changes to take effect.
+
+### Egg collection forecast
+
+The Trends tab projects the next 3 months of expected egg collection,
+shown as lighter bars after your actual history. It starts from published
+average annual laying rates for your configured breeds (Isabrown ~300
+eggs/year/hen, Sussex ~260 eggs/year/hen), then — once you've logged at
+least one egg — scales that baseline by how your actual collection over
+the last 30 days compares to it. There's no training step: it's
+recomputed from scratch every time you open the Trends tab, so it
+naturally tracks your flock's real performance (a hen going broody,
+molting, or a new hen coming into lay) without you doing anything. The
+forecast is intentionally a flat rate — it doesn't yet account for
+seasonal changes in day length, so a projection made in summer may run a
+little high once winter arrives, and vice versa.
 
 ### Home Assistant sensors
 

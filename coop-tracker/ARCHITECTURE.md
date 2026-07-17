@@ -207,7 +207,52 @@ didn't take" bugs that a cache would need explicit invalidation to avoid.
 DOCS.md still tells users to restart after a config change, as a
 conservative default — not because the code requires it.
 
-## 9. Backup & restore
+## 9. Egg collection forecast
+
+The Trends tab projects 3 months of expected egg collection
+(`_forecast_daily_rate`, `_compute_forecast`), shown as lighter bars after
+the actual history. It's a blend of two inputs:
+
+1. A **breed-standard baseline**: published average annual eggs/hen for
+   the configured flock (`BREED_ANNUAL_EGGS`, `flock_isabrown_count` /
+   `flock_sussex_count` options), converted to eggs/day.
+2. The **actual daily rate** over the trailing 30 days, once at least one
+   egg has ever been logged.
+
+`forecast_daily_rate = baseline × (actual ÷ baseline)`, with the ratio
+clamped to `[0.2, 1.8]` so one unusually good or bad week can't swing the
+forecast wildly. Each future month's projection is just that rate × the
+number of days in that month.
+
+**Why a blend instead of pure breed-standard or pure historical trend:**
+pure breed-standard math is accurate on day one (no history needed) but
+never reflects how a specific flock actually performs (age, molting, a
+lost hen). Pure historical extrapolation reflects reality but is noisy
+or meaningless with little data — a brand-new install has nothing to
+extrapolate from. The blend gets a sensible number immediately and leans
+on real data as it accumulates, without needing a threshold like "wait 30
+days before showing anything."
+
+**Why this "self-corrects" without a stored model:** there's no training
+step, no persisted forecast state. `_forecast_daily_rate` is a pure
+function of `(conn, now)` — it's recomputed from scratch every time the
+Trends tab loads, always looking at "the last 30 days as of right now."
+If the flock's actual laying rate changes, the very next computation
+already reflects it. This is the same "read fresh, no cache" philosophy
+as options.json (§8) applied to a derived value instead of raw config.
+
+**Why flat (no seasonal curve) for now:** the actual-rate half of the
+blend already reflects current real-world conditions for the *near*
+future — a currently-depressed winter rate is already priced in. The gap
+is only projecting *across* a season boundary (e.g. forecasting from
+November into February), which a flat rate will over/under-shoot. This
+was a deliberate choice to ship something simple and honest first (see
+DOCS.md's forecast section, which states the limitation directly) rather
+than build a month-by-month seasonal adjustment curve — that's the
+natural next step if the flat forecast proves noticeably off across a
+season boundary.
+
+## 10. Backup & restore
 
 `/api/backup` streams the raw SQLite file back to the browser as a
 download; `/api/restore` accepts an uploaded file, validates it has the
@@ -221,7 +266,7 @@ maintain, no version-to-version export format compatibility to worry
 about. The cost (an opaque binary file instead of something a user could
 eyeball or edit) is acceptable for a single-user backup feature.
 
-## 10. Serving model
+## 11. Serving model
 
 Flask's built-in dev server (`app.run(host="0.0.0.0", port=8099)`) *is*
 the production server here — there's no gunicorn/uWSGI in front of it.
@@ -232,7 +277,7 @@ authenticated ingress proxy (never a directly exposed port — there's no
 `ports:` mapping in `config.yaml`). The concurrency and hardening a
 production WSGI server buys don't apply to that traffic profile.
 
-## 11. Packaging & init
+## 12. Packaging & init
 
 Multi-arch build (`aarch64`, `amd64`, `armhf`, `armv7`, `i386`) against
 Home Assistant's own per-arch Python/Alpine base images (`build.yaml`), so
@@ -247,7 +292,7 @@ Supervisor-injected env vars actually visible to `python3 app.py` (v1.6.1
 fix; s6-overlay v3 doesn't pass its environment to a plain script
 otherwise).
 
-## 12. Versioning
+## 13. Versioning
 
 There's no release automation. Each user-visible change bumps three
 things together, by hand:
@@ -265,7 +310,7 @@ things together, by hand:
 and a build step just to avoid typing the version twice; the comment next
 to `APP_VERSION` exists specifically to flag this manual-sync requirement.
 
-## 13. Testing
+## 14. Testing
 
 Backend tests live in `app/tests/`, run with `pytest` from `coop-tracker/`:
 
@@ -303,7 +348,7 @@ Chrome pass during development), not by CI. This is the most likely gap
 to revisit if the frontend grows past what a manual pass can reliably
 cover.
 
-## 14. Known limitations (accepted, not oversights)
+## 15. Known limitations (accepted, not oversights)
 
 - **Reminder's "already notified today" guard is in-memory only**
   (`_reminder_last_checked_date` is a module-level global, not persisted).
@@ -315,3 +360,7 @@ cover.
   multi-tenant or multi-coop model; adding one would mean threading a
   coop/flock ID through the schema, every query, and the UI, which isn't
   justified by the current use case.
+- **The egg collection forecast (§9) doesn't model seasonality.** A flat
+  daily rate projected across a season boundary (e.g. summer → winter)
+  will run high or low. Deferred deliberately in favor of shipping a
+  simple, honest forecast first — see §9 for the reasoning.

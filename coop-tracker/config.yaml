@@ -1,5 +1,5 @@
 name: "Coop Tracker"
-version: "1.10.0"
+version: "1.11.0"
 slug: "coop-tracker"
 description: "Log egg collection, coop cleaning, and feeding for your chickens"
 url: "https://github.com/hoascv/homeassistant-addons/tree/main/coop-tracker"
@@ -24,6 +24,8 @@ options:
   reminder_threshold_days: 2
   notify_service: ""
   ha_sensors_enabled: false
+  flock_isabrown_count: 3
+  flock_sussex_count: 2
 schema:
   currency: "list(USD|EUR|GBP|DKK|SEK|NOK|CHF|CAD|AUD|JPY)"
   reminder_enabled: "bool"
@@ -31,3 +33,5 @@ schema:
   reminder_threshold_days: "int(1,30)"
   notify_service: "str?"
   ha_sensors_enabled: "bool"
+  flock_isabrown_count: "int(0,100)"
+  flock_sussex_count: "int(0,100)"

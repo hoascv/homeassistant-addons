@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.11.0
+
+- Added a 3-month egg collection forecast to the Trends tab, shown as
+  lighter bars after your actual history. It's based on published laying
+  rates for your flock's breeds (new **flock_isabrown_count** /
+  **flock_sussex_count** options, defaulting to 3 and 2), scaled by your
+  actual collection over the last 30 days once you've logged at least one
+  egg — so it adapts to your real flock without any manual retraining.
+
 ## 1.10.0
 
 - Added a new **Trends** tab (bottom navigation) with a monthly bar chart

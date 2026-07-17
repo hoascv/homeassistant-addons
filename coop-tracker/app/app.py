@@ -12,7 +12,7 @@ from datetime import datetime, time as dtime, timedelta
 import flask
 from flask import Flask, g, jsonify, render_template, request, send_file
 
-APP_VERSION = "1.10.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.11.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("COOP_DB_PATH", "/data/coop.db")
 OPTIONS_PATH = os.environ.get("COOP_OPTIONS_PATH", "/data/options.json")
@@ -33,6 +33,16 @@ CURRENCIES = {
     "JPY": {"symbol": "¥", "position": "prefix", "decimals": 0},
 }
 DEFAULT_CURRENCY = "DKK"
+
+# Published average annual eggs/hen/year, used as the forecast baseline
+# before/alongside actual logged history — see _forecast_daily_rate().
+BREED_ANNUAL_EGGS = {
+    "isabrown": 300,
+    "sussex": 260,
+}
+FORECAST_MONTHS = 3
+FORECAST_TRAILING_DAYS = 30
+FORECAST_RATIO_BOUNDS = (0.2, 1.8)  # dampens noise from a single unusual week
 
 app = Flask(__name__)
 
@@ -62,6 +72,14 @@ def get_reminder_config():
 
 def get_ha_sensors_enabled():
     return bool(_read_options().get("ha_sensors_enabled", False))
+
+
+def get_flock_counts():
+    opts = _read_options()
+    return {
+        "isabrown": int(opts.get("flock_isabrown_count", 3)),
+        "sussex": int(opts.get("flock_sussex_count", 2)),
+    }
 
 
 def get_db():
@@ -431,6 +449,64 @@ def _compute_trends(conn, now, months):
     }
 
 
+def _forecast_daily_rate(conn, now):
+    """Expected eggs/day, blending breed-standard rates with recent actual
+    performance. Recomputed from scratch on every call — no stored model,
+    no training step — so it "self-corrects" simply by always looking at
+    the last FORECAST_TRAILING_DAYS as of `now`."""
+    counts = get_flock_counts()
+    baseline_daily = sum(
+        counts[breed] * (BREED_ANNUAL_EGGS[breed] / 365) for breed in BREED_ANNUAL_EGGS
+    )
+    if baseline_daily <= 0:
+        return 0.0
+
+    ever_logged = conn.execute(
+        "SELECT COUNT(*) AS n FROM logs WHERE type = 'egg'"
+    ).fetchone()["n"]
+    if ever_logged == 0:
+        return baseline_daily  # no history yet: pure breed-standard estimate
+
+    window_start = now - timedelta(days=FORECAST_TRAILING_DAYS)
+    actual_eggs = conn.execute(
+        "SELECT COALESCE(SUM(count), 0) AS total FROM logs WHERE type = 'egg' AND ts >= ? AND ts <= ?",
+        (window_start.isoformat(), now.isoformat()),
+    ).fetchone()["total"]
+    actual_daily = actual_eggs / FORECAST_TRAILING_DAYS
+
+    ratio = actual_daily / baseline_daily
+    ratio = max(FORECAST_RATIO_BOUNDS[0], min(FORECAST_RATIO_BOUNDS[1], ratio))
+    return baseline_daily * ratio
+
+
+def _compute_forecast(conn, now, months=FORECAST_MONTHS):
+    daily_rate = _forecast_daily_rate(conn, now)
+    ever_logged = conn.execute(
+        "SELECT COUNT(*) AS n FROM logs WHERE type = 'egg'"
+    ).fetchone()["n"]
+
+    labels = []
+    values = []
+    year, month = now.year, now.month
+    for i in range(1, months + 1):
+        m = month + i
+        y = year
+        while m > 12:
+            m -= 12
+            y += 1
+        start, end = _month_bounds(y, m)
+        days_in_month = (end - start).days
+        labels.append(f"{y:04d}-{m:02d}")
+        values.append(round(daily_rate * days_in_month))
+
+    return {
+        "forecast_months": labels,
+        "forecast_collected": values,
+        "forecast_daily_rate": round(daily_rate, 2),
+        "forecast_basis": "breed_standard" if ever_logged == 0 else "blended",
+    }
+
+
 @app.route("/api/trends")
 def api_trends():
     db = get_db()
@@ -439,7 +515,9 @@ def api_trends():
         months = int(request.args.get("months", 6))
     except ValueError:
         months = 6
-    return jsonify(_compute_trends(db, now, months))
+    result = _compute_trends(db, now, months)
+    result.update(_compute_forecast(db, now))
+    return jsonify(result)
 
 
 @app.route("/api/entries")
