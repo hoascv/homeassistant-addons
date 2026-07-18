@@ -196,6 +196,20 @@ reused for the quick-action buttons *and* the Trends legend/bars — a
 new chart series reads as "the same thing" as its quick-add button
 without extra explanation.
 
+**Why the chart's "expand to full screen" is a CSS class toggle
+(`.is-fullscreen` on the existing `#trends-chart-wrap`, `position: fixed;
+inset: 0`) instead of the browser's real Fullscreen API
+(`element.requestFullscreen()`):** the page runs inside Home Assistant's
+ingress `<iframe>`, which this add-on doesn't control the `allow`
+attribute of — the Fullscreen API silently fails in an iframe that wasn't
+given `allow="fullscreen"`. A same-page fixed-position overlay works
+regardless, is the same pattern already used for the log-entry/backup/
+notify sheets (just full-bleed instead of a bottom sheet), and — since
+it's the identical SVG, not a re-rendered copy — automatically reflows
+wider if the user rotates their phone to landscape while it's open,
+which is the main practical win over the compact view's fixed 480px-max
+container.
+
 ## 8. Config & options
 
 Add-on configuration flows one direction: `config.yaml`'s `schema` defines

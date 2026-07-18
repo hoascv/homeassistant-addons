@@ -532,6 +532,7 @@ main {
 }
 
 .trends-chart-wrap {
+  position: relative;
   background: var(--surface);
   border-radius: var(--radius);
   box-shadow: var(--shadow);
@@ -543,6 +544,41 @@ main {
   width: 100%;
   height: auto;
   display: block;
+}
+
+.trends-expand-btn {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  border: none;
+  background: var(--bg);
+  color: var(--text-muted);
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 50%;
+  font-size: 0.95rem;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: var(--shadow);
+  z-index: 1;
+}
+
+.trends-chart-wrap.is-fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 8;
+  margin: 0;
+  border-radius: 0;
+  box-shadow: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2.5rem 1rem 1rem;
+}
+
+.trends-chart-wrap.is-fullscreen svg {
+  width: 100%;
+  max-height: 80vh;
 }
 
 .trends-bar-label {

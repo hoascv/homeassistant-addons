@@ -546,6 +546,23 @@ const trendsChartWrap = document.getElementById("trends-chart-wrap");
 const trendsEmpty = document.getElementById("trends-empty");
 const trendsTableBody = document.getElementById("trends-table-body");
 const trendsForecastCaption = document.getElementById("trends-forecast-caption");
+const trendsExpandBtn = document.getElementById("trends-expand-btn");
+
+function setTrendsFullscreen(isFullscreen) {
+  trendsChartWrap.classList.toggle("is-fullscreen", isFullscreen);
+  trendsExpandBtn.textContent = isFullscreen ? "✕" : "⛶";
+  trendsExpandBtn.setAttribute("aria-label", isFullscreen ? "Collapse chart" : "Expand chart");
+}
+
+trendsExpandBtn.addEventListener("click", () => {
+  setTrendsFullscreen(!trendsChartWrap.classList.contains("is-fullscreen"));
+});
+
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && trendsChartWrap.classList.contains("is-fullscreen")) {
+    setTrendsFullscreen(false);
+  }
+});
 
 function monthLabel(ym) {
   const [year, month] = ym.split("-").map(Number);
@@ -667,6 +684,7 @@ function switchTab(pageId) {
     page.hidden = page.id !== pageId;
   });
   tabButtons.forEach((btn) => btn.classList.toggle("active", btn.dataset.page === pageId));
+  if (pageId !== "page-trends") setTrendsFullscreen(false);
   if (pageId === "page-trends") loadTrends();
 }
 

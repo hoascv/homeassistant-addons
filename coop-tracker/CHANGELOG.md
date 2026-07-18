@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.13.0
+
+- Added an expand (⛶) button to the Trends chart to view it full-screen —
+  tap again or press Esc to go back. Especially useful in landscape,
+  which gives a long history much more room to read.
+
 ## 1.12.0
 
 - The Trends tab chart is now a line chart instead of a grouped bar chart.

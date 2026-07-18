@@ -11,10 +11,11 @@ your chickens, right from your phone via the Home Assistant sidebar.
   times
 - Finances section: browse any month's revenue, costs, and net, plus an
   all-time total
-- Trends tab: line chart and table of eggs collected/sold/used over the
-  last 3, 6, or 12 months, plus a 3-month egg-collection forecast based on
-  your flock's breed composition — and how that forecast would have
-  performed in past months, so you can see how well it's tracking
+- Trends tab: line chart (expandable to full screen) and table of eggs
+  collected/sold/used over the last 3, 6, or 12 months, plus a 3-month
+  egg-collection forecast based on your flock's breed composition — and
+  how that forecast would have performed in past months, so you can see
+  how well it's tracking
 - Recent activity history with filtering and delete
 - Backup & Restore panel (download or restore the SQLite database)
 - Push notification reminder if eggs haven't been collected in a
@@ -90,6 +91,10 @@ data available at the time, next to what actually happened (also broken
 out in the table's "Forecast" column). Early months, with little or no
 prior data to work from, will tend to be less accurate; the forecast
 should track closer to actual as more collection history builds up.
+
+Tap the ⛶ icon on the chart to expand it to fill the screen (tap again,
+or press Esc, to go back) — turning your phone to landscape while
+expanded gives noticeably more width to read a long history at a glance.
 
 ### Home Assistant sensors
 
