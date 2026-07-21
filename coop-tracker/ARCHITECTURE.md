@@ -337,23 +337,35 @@ feeding entry as "the container was empty, this is a refill."
 consecutive ones to answer "how long does a container of this actually
 last?" — exposed at `/api/feeding-stats?food_type=...`.
 
-**Why grouped by the existing free-text `food_type` field instead of a
-new fixed list of feed types:** the app already has this field for
-exactly this purpose (distinguishing "layer feed" from "scratch grains"),
-and a personal add-on for one flock doesn't need a managed feed-type
-registry — the tradeoff is that matching is exact (case/whitespace
-normalized via `LOWER(TRIM(...))`, but not fuzzy), so typos create a
-second, separate history. The frontend mitigates this by pre-filling the
-field with whatever `food_type` was used last time (`prefillLastFoodType`
-in `app.js`), so the common case — feeding the same thing you always
-feed — never requires retyping it.
+**Why `food_type` is a fixed dropdown (`FOOD_TYPES` in `app.js`) instead
+of free text (v1.15.0):** grouping by `food_type` only works if the same
+feed is always logged with the exact same string — free text meant a
+single typo ("Pellets" vs "Pellet") silently created a second, separate
+history. The list itself is a plain JS constant, not an add-on option or
+a database-level constraint: `food_type` in `logs` is still a plain
+`TEXT` column (matching is still exact, `LOWER(TRIM(...))`-normalized, in
+`_compute_feeding_stats`), so this is entirely a frontend decision, not a
+schema change — kept deliberately simple (one array to edit) over a
+managed, user-configurable registry a single-flock add-on doesn't need.
+
+**Why editing an entry logged before the dropdown existed doesn't
+silently change its food type:** a `<select>` with a fixed option list
+has nowhere to put a value that isn't one of its options — naively
+building it would leave such an entry on whatever option happens to be
+first, and saving would then quietly overwrite its real value.
+`ensureFoodTypeOption()` checks for this and, if the entry's stored value
+isn't in `FOOD_TYPES`, inserts it as one extra selected option instead —
+old data is preserved exactly as logged rather than corrected or lost.
+The same function backs the "pre-fill with what I used last time" case,
+so a not-yet-standard value carries forward the same way on a new entry
+too.
 
 **Why the estimate is shown inline in the Log Feeding sheet** rather than
 as a Home-page stat or a Trends chart: that's where the question
 ("how's this container doing, is it about time to check on more feed?")
 actually comes up — right as you're about to log a feeding, not as an
 always-on dashboard number. `updateFeedingStatsHint()` fetches and
-re-renders it as the food-type field changes (debounced), so it stays
+re-renders it whenever the food-type dropdown changes, so it stays
 relevant if you're logging a different feed than usual in the same
 session.
 

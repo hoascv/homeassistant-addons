@@ -13,6 +13,23 @@ const MONTH_NAMES = [
   "July", "August", "September", "October", "November", "December",
 ];
 
+// Fixed on purpose (not user-editable) — a consistent, exact food_type
+// string is what makes the feed-duration estimate's history grouping
+// (see api/feeding-stats) reliable across entries.
+const FOOD_TYPES = [
+  "Layer feed",
+  "Grower feed",
+  "Starter feed",
+  "Pellets",
+  "Crumbles",
+  "Mash",
+  "Scratch grains",
+  "Mixed grain",
+  "Kitchen scraps",
+  "Grit",
+  "Oyster shell",
+];
+
 const sheetBackdrop = document.getElementById("sheet-backdrop");
 const sheetTitle = document.getElementById("sheet-title");
 const sheetFields = document.getElementById("sheet-fields");
@@ -175,17 +192,32 @@ async function updateFeedingStatsHint(foodType) {
   }
 }
 
-async function prefillLastFoodType(inputEl) {
+function ensureFoodTypeOption(selectEl, value) {
+  if (!value) return;
+  const hasOption = Array.from(selectEl.options).some((opt) => opt.value === value);
+  if (!hasOption) {
+    // Preserves food types logged before the fixed list existed (or since
+    // removed from it) instead of silently swapping them for whatever the
+    // first option happens to be.
+    const opt = document.createElement("option");
+    opt.value = value;
+    opt.textContent = value;
+    selectEl.insertBefore(opt, selectEl.firstChild);
+  }
+  selectEl.value = value;
+}
+
+async function prefillLastFoodType(selectEl) {
   try {
     const res = await fetch("api/entries?type=feeding&limit=1");
     const entries = await res.json();
     if (entries.length && entries[0].food_type) {
-      inputEl.value = entries[0].food_type;
+      ensureFoodTypeOption(selectEl, entries[0].food_type);
     }
   } catch (err) {
-    // leave the field blank
+    // leave the default selection
   }
-  updateFeedingStatsHint(inputEl.value);
+  updateFeedingStatsHint(selectEl.value);
 }
 
 function openSheet(type, entry = null) {
@@ -235,7 +267,9 @@ function openSheet(type, entry = null) {
     sheetFields.innerHTML = `
       <div class="field">
         <label>Food type</label>
-        <input type="text" name="food_type" id="feeding-food-type" placeholder="e.g. layer feed, scratch grains" value="${entry ? entry.food_type ?? "" : ""}">
+        <select name="food_type" id="feeding-food-type">
+          ${FOOD_TYPES.map((opt) => `<option value="${escapeHtml(opt)}">${escapeHtml(opt)}</option>`).join("")}
+        </select>
       </div>
       <p class="feeding-stats-hint" id="feeding-stats-hint"></p>
       <div class="field">
@@ -253,17 +287,14 @@ function openSheet(type, entry = null) {
       </div>
     `;
 
-    const foodTypeInput = document.getElementById("feeding-food-type");
-    let statsDebounce;
-    foodTypeInput.addEventListener("input", () => {
-      clearTimeout(statsDebounce);
-      statsDebounce = setTimeout(() => updateFeedingStatsHint(foodTypeInput.value), 400);
-    });
+    const foodTypeSelect = document.getElementById("feeding-food-type");
+    foodTypeSelect.addEventListener("change", () => updateFeedingStatsHint(foodTypeSelect.value));
 
     if (entry) {
-      updateFeedingStatsHint(foodTypeInput.value);
+      ensureFoodTypeOption(foodTypeSelect, entry.food_type);
+      updateFeedingStatsHint(foodTypeSelect.value);
     } else {
-      prefillLastFoodType(foodTypeInput);
+      prefillLastFoodType(foodTypeSelect);
     }
   } else if (type === "sale") {
     const initialCount = entry ? entry.count ?? 1 : 1;

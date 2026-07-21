@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.15.0
+
+- Food type on the Log Feeding sheet is now a fixed dropdown (Layer feed,
+  Pellets, Scratch grains, etc.) instead of free text, pre-filled with
+  whatever you used last time — guarantees consistent spelling, which is
+  what the feed-duration estimate's history grouping depends on. Entries
+  logged before this change with a food type not on the list keep showing
+  their original text rather than having it silently swapped out.
+
 ## 1.14.0
 
 - Added a **Container was empty** checkbox to the Log Feeding sheet. Once

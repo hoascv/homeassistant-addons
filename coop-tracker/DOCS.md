@@ -43,17 +43,27 @@ which Home Assistant persists across restarts and updates automatically.
 
 ## Feed duration estimate
 
-The Log Feeding sheet has a **Container was empty** checkbox — check it
-when you feed and notice the container/bag was completely empty
-beforehand (i.e. this feeding is a refill). As soon as you've logged it
-twice for the same **food type**, the sheet shows a live estimate right
-where you're logging: the average number of days between refills, and
-how many days it's been since the last one. Food type matching ignores
-case and extra spaces, but is otherwise an exact match — use the same
-food type text consistently (the field is pre-filled with whatever you
-used last time) to keep the estimate accurate. Different food types are
-tracked separately, so pellets and layer feed (for example) each get
-their own estimate.
+**Food type** on the Log Feeding sheet is a fixed dropdown (Layer feed,
+Grower feed, Starter feed, Pellets, Crumbles, Mash, Scratch grains, Mixed
+grain, Kitchen scraps, Grit, Oyster shell) rather than free text, and
+pre-fills with whichever one you used last time — so logging the same
+feed you always feed takes no typing. It's a fixed list on purpose (not
+configurable) so the exact same text is always used for the same food,
+which is what makes the estimate below reliable.
+
+There's also a **Container was empty** checkbox — check it when you feed
+and notice the container/bag was completely empty beforehand (i.e. this
+feeding is a refill). As soon as you've logged it twice for the same food
+type, the sheet shows a live estimate right where you're logging: the
+average number of days between refills, and how many days it's been
+since the last one. Different food types are tracked separately, so
+pellets and layer feed, for example, each get their own estimate.
+
+If you logged feeding entries before this dropdown existed with a food
+type that isn't on the list, editing that entry (or logging a new one
+right after it) keeps showing your original text as an extra option
+rather than silently swapping it for something else — nothing already
+logged gets lost or renamed.
 
 ## Configuration
 
