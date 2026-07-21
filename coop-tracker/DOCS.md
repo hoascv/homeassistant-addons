@@ -43,13 +43,17 @@ which Home Assistant persists across restarts and updates automatically.
 
 ## Feed duration estimate
 
-**Food type** on the Log Feeding sheet is a fixed dropdown (Layer feed,
-Grower feed, Starter feed, Pellets, Crumbles, Mash, Scratch grains, Mixed
-grain, Kitchen scraps, Grit, Oyster shell) rather than free text, and
-pre-fills with whichever one you used last time — so logging the same
-feed you always feed takes no typing. It's a fixed list on purpose (not
-configurable) so the exact same text is always used for the same food,
-which is what makes the estimate below reliable.
+**Food type** on the Log Feeding sheet is a dropdown rather than free
+text, pre-filled with whichever one you used last time — so logging the
+same feed you always feed takes no typing. It comes pre-loaded with
+common types (Layer feed, Grower feed, Starter feed, Pellets, Crumbles,
+Mash, Scratch grains, Mixed grain, Kitchen scraps, Grit, Oyster shell),
+and you can add or remove entries yourself via the **Manage list** link
+next to the Food type label. It's a dropdown rather than free text so the
+exact same text is always used for the same food, which is what makes
+the estimate below reliable — removing a food type only affects what's
+offered for *new* entries; anything already logged with it keeps
+displaying and editing correctly regardless.
 
 There's also a **Container was empty** checkbox — check it when you feed
 and notice the container/bag was completely empty beforehand (i.e. this
@@ -59,11 +63,11 @@ average number of days between refills, and how many days it's been
 since the last one. Different food types are tracked separately, so
 pellets and layer feed, for example, each get their own estimate.
 
-If you logged feeding entries before this dropdown existed with a food
-type that isn't on the list, editing that entry (or logging a new one
-right after it) keeps showing your original text as an extra option
-rather than silently swapping it for something else — nothing already
-logged gets lost or renamed.
+If an entry's food type isn't in the current list — logged before the
+dropdown existed, or since removed via Manage list — editing that entry
+(or logging a new one right after it) keeps showing the original text as
+an extra option rather than silently swapping it for something else;
+nothing already logged gets lost or renamed.
 
 ## Configuration
 

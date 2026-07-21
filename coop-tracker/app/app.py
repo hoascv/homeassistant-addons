@@ -12,7 +12,7 @@ from datetime import datetime, time as dtime, timedelta
 import flask
 from flask import Flask, g, jsonify, render_template, request, send_file
 
-APP_VERSION = "1.15.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.16.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("COOP_DB_PATH", "/data/coop.db")
 OPTIONS_PATH = os.environ.get("COOP_OPTIONS_PATH", "/data/options.json")
@@ -43,6 +43,22 @@ BREED_ANNUAL_EGGS = {
 FORECAST_MONTHS = 3
 FORECAST_TRAILING_DAYS = 30
 FORECAST_RATIO_BOUNDS = (0.2, 1.8)  # dampens noise from a single unusual week
+
+# Seeded into the food_types table the first time it's created (empty
+# table only — see init_db()); editable afterwards via /api/food-types.
+DEFAULT_FOOD_TYPES = [
+    "Layer feed",
+    "Grower feed",
+    "Starter feed",
+    "Pellets",
+    "Crumbles",
+    "Mash",
+    "Scratch grains",
+    "Mixed grain",
+    "Kitchen scraps",
+    "Grit",
+    "Oyster shell",
+]
 
 app = Flask(__name__)
 
@@ -123,6 +139,21 @@ def init_db():
     ):
         if column not in existing_columns:
             conn.execute(f"ALTER TABLE logs ADD COLUMN {column} {coltype}")
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS food_types (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE
+        )
+        """
+    )
+    food_type_count = conn.execute("SELECT COUNT(*) FROM food_types").fetchone()[0]
+    if food_type_count == 0:
+        conn.executemany(
+            "INSERT INTO food_types (name) VALUES (?)",
+            [(name,) for name in DEFAULT_FOOD_TYPES],
+        )
 
     conn.commit()
     conn.close()
@@ -330,6 +361,7 @@ def index():
         currency_symbol=currency["symbol"],
         currency_position=currency["position"],
         currency_decimals=currency["decimals"],
+        app_version=APP_VERSION,
     )
 
 
@@ -605,6 +637,40 @@ def _compute_feeding_stats(conn, food_type, now):
 def api_feeding_stats():
     db = get_db()
     return jsonify(_compute_feeding_stats(db, request.args.get("food_type", ""), datetime.now()))
+
+
+@app.route("/api/food-types")
+def api_food_types():
+    db = get_db()
+    rows = db.execute("SELECT id, name FROM food_types ORDER BY id ASC").fetchall()
+    return jsonify([dict(row) for row in rows])
+
+
+@app.route("/api/food-types", methods=["POST"])
+def api_add_food_type():
+    data = request.get_json(force=True, silent=True) or {}
+    name = (data.get("name") or "").strip()
+    if not name:
+        return jsonify({"error": "name is required"}), 400
+
+    db = get_db()
+    existing = db.execute(
+        "SELECT id FROM food_types WHERE LOWER(name) = LOWER(?)", (name,)
+    ).fetchone()
+    if existing:
+        return jsonify({"error": "that food type is already in the list"}), 400
+
+    cur = db.execute("INSERT INTO food_types (name) VALUES (?)", (name,))
+    db.commit()
+    return jsonify({"id": cur.lastrowid, "name": name}), 201
+
+
+@app.route("/api/food-types/<int:food_type_id>", methods=["DELETE"])
+def api_delete_food_type(food_type_id):
+    db = get_db()
+    db.execute("DELETE FROM food_types WHERE id = ?", (food_type_id,))
+    db.commit()
+    return "", 204
 
 
 @app.route("/api/entries")

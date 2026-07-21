@@ -13,23 +13,6 @@ const MONTH_NAMES = [
   "July", "August", "September", "October", "November", "December",
 ];
 
-// Fixed on purpose (not user-editable) — a consistent, exact food_type
-// string is what makes the feed-duration estimate's history grouping
-// (see api/feeding-stats) reliable across entries.
-const FOOD_TYPES = [
-  "Layer feed",
-  "Grower feed",
-  "Starter feed",
-  "Pellets",
-  "Crumbles",
-  "Mash",
-  "Scratch grains",
-  "Mixed grain",
-  "Kitchen scraps",
-  "Grit",
-  "Oyster shell",
-];
-
 const sheetBackdrop = document.getElementById("sheet-backdrop");
 const sheetTitle = document.getElementById("sheet-title");
 const sheetFields = document.getElementById("sheet-fields");
@@ -192,13 +175,26 @@ async function updateFeedingStatsHint(foodType) {
   }
 }
 
+async function loadFoodTypeOptions(selectEl, currentValue = null) {
+  try {
+    const res = await fetch("api/food-types");
+    const foodTypes = await res.json();
+    selectEl.innerHTML = foodTypes
+      .map((ft) => `<option value="${escapeHtml(ft.name)}">${escapeHtml(ft.name)}</option>`)
+      .join("");
+  } catch (err) {
+    selectEl.innerHTML = "";
+  }
+  if (currentValue) ensureFoodTypeOption(selectEl, currentValue);
+}
+
 function ensureFoodTypeOption(selectEl, value) {
   if (!value) return;
   const hasOption = Array.from(selectEl.options).some((opt) => opt.value === value);
   if (!hasOption) {
-    // Preserves food types logged before the fixed list existed (or since
-    // removed from it) instead of silently swapping them for whatever the
-    // first option happens to be.
+    // Preserves a food type that was logged before it existed in the list
+    // (or was since removed from it) instead of silently swapping it for
+    // whatever the first option happens to be.
     const opt = document.createElement("option");
     opt.value = value;
     opt.textContent = value;
@@ -218,6 +214,28 @@ async function prefillLastFoodType(selectEl) {
     // leave the default selection
   }
   updateFeedingStatsHint(selectEl.value);
+}
+
+async function renderFoodTypeManagerList() {
+  const listEl = document.getElementById("food-type-manager-list");
+  if (!listEl) return;
+  listEl.innerHTML = "<li>Loading…</li>";
+  try {
+    const res = await fetch("api/food-types");
+    const foodTypes = await res.json();
+    listEl.innerHTML = foodTypes
+      .map(
+        (ft) => `
+          <li>
+            <span>${escapeHtml(ft.name)}</span>
+            <button type="button" class="food-type-delete-btn" data-id="${ft.id}" aria-label="Remove ${escapeHtml(ft.name)}">✕</button>
+          </li>
+        `
+      )
+      .join("");
+  } catch (err) {
+    listEl.innerHTML = "<li>Could not load the list.</li>";
+  }
 }
 
 function openSheet(type, entry = null) {
@@ -266,10 +284,20 @@ function openSheet(type, entry = null) {
   } else if (type === "feeding") {
     sheetFields.innerHTML = `
       <div class="field">
-        <label>Food type</label>
+        <div class="field-label-row">
+          <label>Food type</label>
+          <button type="button" class="link-btn" id="food-type-manage-btn">Manage list</button>
+        </div>
         <select name="food_type" id="feeding-food-type">
-          ${FOOD_TYPES.map((opt) => `<option value="${escapeHtml(opt)}">${escapeHtml(opt)}</option>`).join("")}
+          <option>Loading…</option>
         </select>
+      </div>
+      <div class="food-type-manager" id="food-type-manager" hidden>
+        <ul class="food-type-manager-list" id="food-type-manager-list"></ul>
+        <div class="food-type-manager-add">
+          <input type="text" id="food-type-new-input" placeholder="Add a new food type">
+          <button type="button" class="btn-secondary" id="food-type-add-btn">Add</button>
+        </div>
       </div>
       <p class="feeding-stats-hint" id="feeding-stats-hint"></p>
       <div class="field">
@@ -288,13 +316,52 @@ function openSheet(type, entry = null) {
     `;
 
     const foodTypeSelect = document.getElementById("feeding-food-type");
+    const foodTypeManageBtn = document.getElementById("food-type-manage-btn");
+    const foodTypeManager = document.getElementById("food-type-manager");
+    const foodTypeNewInput = document.getElementById("food-type-new-input");
+    const foodTypeAddBtn = document.getElementById("food-type-add-btn");
+
     foodTypeSelect.addEventListener("change", () => updateFeedingStatsHint(foodTypeSelect.value));
 
+    foodTypeManageBtn.addEventListener("click", () => {
+      const isHidden = foodTypeManager.hidden;
+      foodTypeManager.hidden = !isHidden;
+      if (isHidden) renderFoodTypeManagerList();
+    });
+
+    foodTypeManager.addEventListener("click", async (e) => {
+      const deleteBtn = e.target.closest(".food-type-delete-btn");
+      if (!deleteBtn) return;
+      await fetch(`api/food-types/${deleteBtn.dataset.id}`, { method: "DELETE" });
+      await loadFoodTypeOptions(foodTypeSelect, foodTypeSelect.value);
+      renderFoodTypeManagerList();
+    });
+
+    foodTypeAddBtn.addEventListener("click", async () => {
+      const name = foodTypeNewInput.value.trim();
+      if (!name) return;
+      const previousValue = foodTypeSelect.value;
+      const res = await fetch("api/food-types", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      if (res.ok) {
+        foodTypeNewInput.value = "";
+        await loadFoodTypeOptions(foodTypeSelect, previousValue); // keep the current selection, don't jump to the new one
+        renderFoodTypeManagerList();
+      } else {
+        const data = await res.json().catch(() => ({}));
+        alert(data.error || "Couldn't add that food type.");
+      }
+    });
+
     if (entry) {
-      ensureFoodTypeOption(foodTypeSelect, entry.food_type);
-      updateFeedingStatsHint(foodTypeSelect.value);
+      loadFoodTypeOptions(foodTypeSelect, entry.food_type).then(() =>
+        updateFeedingStatsHint(foodTypeSelect.value)
+      );
     } else {
-      prefillLastFoodType(foodTypeSelect);
+      loadFoodTypeOptions(foodTypeSelect).then(() => prefillLastFoodType(foodTypeSelect));
     }
   } else if (type === "sale") {
     const initialCount = entry ? entry.count ?? 1 : 1;

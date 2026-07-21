@@ -94,6 +94,13 @@ want to query "all activity" or "one type across time" without joins.
 Six tables would mean six near-identical CRUD paths for a data volume
 (a handful of rows a day) where normalization buys nothing.
 
+There is a second table, `food_types` (id, name — see §10), added in
+v1.16.0. It doesn't belong in `logs` and doesn't break the "one table"
+reasoning above: it isn't logged activity at all, it's a small reference
+list the Log Feeding dropdown reads from and writes to — categorically
+different from an entry type, with nothing to gain from being force-fit
+into the polymorphic table's shape.
+
 ## 5. Home Assistant integration
 
 Two independent integration points, both authenticated the same way:
@@ -191,6 +198,21 @@ lines of JS. A build step would add a toolchain (npm, bundler config, a
 `dist/` the Dockerfile has to know about) for no functional gain at this
 size, and would slow down "edit `app.js`, refresh the ingress panel" to
 "edit, rebuild, refresh."
+
+**Why `static/app.js` and `static/style.css` are loaded with a
+`?v={{ app_version }}` query string (v1.16.0):** without a build step
+there's no bundler-generated content hash to bust the cache with either,
+and browsers (and mobile webviews especially) cache static JS/CSS
+aggressively by default. Without something forcing the URL to change,
+updating the add-on updates the server but not necessarily what the
+client is actually running — someone could update and restart the
+add-on, see the Supervisor confirm success, and still be looking at the
+previous version's UI until they happen to hard-refresh (reported and
+fixed in v1.16.0). `index()` passes the already-existing `APP_VERSION`
+through to the template (`app.py:index`), so every version bump — which
+already happens on every release, see §14 — automatically forces a fresh
+fetch of both files, with no separate cache-busting mechanism to
+maintain.
 
 **Why the Trends chart is hand-rolled inline SVG instead of a charting
 library** (Chart.js, etc.): pulling in a chart library either means an
@@ -337,28 +359,49 @@ feeding entry as "the container was empty, this is a refill."
 consecutive ones to answer "how long does a container of this actually
 last?" — exposed at `/api/feeding-stats?food_type=...`.
 
-**Why `food_type` is a fixed dropdown (`FOOD_TYPES` in `app.js`) instead
-of free text (v1.15.0):** grouping by `food_type` only works if the same
-feed is always logged with the exact same string — free text meant a
-single typo ("Pellets" vs "Pellet") silently created a second, separate
-history. The list itself is a plain JS constant, not an add-on option or
-a database-level constraint: `food_type` in `logs` is still a plain
-`TEXT` column (matching is still exact, `LOWER(TRIM(...))`-normalized, in
-`_compute_feeding_stats`), so this is entirely a frontend decision, not a
-schema change — kept deliberately simple (one array to edit) over a
-managed, user-configurable registry a single-flock add-on doesn't need.
+**Why `food_type` is a dropdown instead of free text (v1.15.0):**
+grouping by `food_type` only works if the same feed is always logged with
+the exact same string — free text meant a single typo ("Pellets" vs
+"Pellet") silently created a second, separate history. `food_type` in
+`logs` itself is still a plain `TEXT` column, unconstrained, matched
+`LOWER(TRIM(...))`-normalized in `_compute_feeding_stats` exactly as
+before — the dropdown is a frontend behavior, not a schema constraint on
+`logs`.
 
-**Why editing an entry logged before the dropdown existed doesn't
-silently change its food type:** a `<select>` with a fixed option list
-has nowhere to put a value that isn't one of its options — naively
-building it would leave such an entry on whatever option happens to be
-first, and saving would then quietly overwrite its real value.
-`ensureFoodTypeOption()` checks for this and, if the entry's stored value
-isn't in `FOOD_TYPES`, inserts it as one extra selected option instead —
-old data is preserved exactly as logged rather than corrected or lost.
-The same function backs the "pre-fill with what I used last time" case,
-so a not-yet-standard value carries forward the same way on a new entry
-too.
+**Why the dropdown's options live in their own `food_types` table
+instead of a fixed list in the frontend code (v1.16.0):** the initial cut
+hardcoded the options directly in `app.js`, on the reasoning that a
+single-flock add-on doesn't need a managed registry — in practice, the
+whole point of a strict, no-free-text list is that it has to match what
+you actually feed, and a personal list of feeds is exactly the kind of
+thing that changes over time (new supplement, stop using a scratch mix).
+A separate table with `POST`/`DELETE /api/food-types` (seeded once from
+`DEFAULT_FOOD_TYPES` — see `init_db()` — the first time the table is
+created, empty afterwards) gets that editability without touching `logs`
+or its schema at all.
+
+**Why editing an entry whose food type isn't in the current list doesn't
+silently change it** (logged before the dropdown existed, or since
+removed via Manage list): a `<select>` has nowhere to put a value that
+isn't one of its options — naively building it would leave such an entry
+on whatever option happens to be first, and saving would then quietly
+overwrite its real value. `ensureFoodTypeOption()` checks for this and,
+if the entry's stored value isn't among the fetched options, inserts it
+as one extra selected option instead — old data is preserved exactly as
+logged rather than corrected or lost. The same function backs the
+"pre-fill with what I used last time" case, so a not-yet-standard value
+carries forward the same way on a new entry too. This is also why
+deleting a food type is safe: it only narrows what's offered for *new*
+entries, `logs` rows referencing it are untouched and still display/edit
+correctly.
+
+**Why the Manage list panel doesn't jump the current selection to
+whatever you just added:** it's opened from within the Log Feeding
+sheet, so adding a type while you're really just tidying up the list
+shouldn't change what you're about to log — `loadFoodTypeOptions()` is
+called with the food type that was already selected, not the new one, so
+the add flow only affects the dropdown's contents, never its
+current value.
 
 **Why the estimate is shown inline in the Log Feeding sheet** rather than
 as a Home-page stat or a Trends chart: that's where the question

@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.16.0
+
+- Food types are now stored in the database and editable from the app: a
+  new **Manage list** link next to the Food type dropdown on the Log
+  Feeding sheet lets you add or remove entries yourself, instead of a
+  fixed built-in list. Removing one only affects future entries — nothing
+  already logged is changed.
+- Fixed a bug where, after updating the add-on to a new version,
+  Home Assistant's browser/webview could keep showing the previous
+  version's UI (e.g. still showing the old free-text Food type field)
+  until a manual hard-refresh, because the app's JS/CSS files had no
+  cache-busting. They're now tagged with the running version, so a new
+  version is always fetched fresh after an update — no manual refresh
+  needed.
+
 ## 1.15.0
 
 - Food type on the Log Feeding sheet is now a fixed dropdown (Layer feed,
