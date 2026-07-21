@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.14.0
+
+- Added a **Container was empty** checkbox to the Log Feeding sheet. Once
+  logged twice for the same food type, the sheet shows a live estimate —
+  right there while you're logging — of the average days between refills
+  and days since the last one, to help gauge how long a bag/container of
+  feed typically lasts.
+
+## 1.13.1
+
+- Fixed a bug where logging, editing, or deleting an entry could silently
+  fail — the app would close the entry sheet as if it had saved even when
+  the request actually failed (e.g. a brief network hiccup, often after
+  the phone had been idle for a while), so the entry never showed up on a
+  later refresh with no error shown. Failed saves now show a clear error
+  and keep the entry sheet open with your input intact, instead of
+  discarding it silently.
+- Fixed a related issue where, if `ha_sensors_enabled` was on, a slow or
+  unreachable Home Assistant could make a simple "log an egg" request
+  hang for up to ~45 seconds (9 sequential HA API calls, 5s timeout each)
+  before it either succeeded or errored. That push now always runs in the
+  background instead of blocking the response — saving an entry is no
+  longer affected by whether Home Assistant is reachable at that moment.
+
 ## 1.13.0
 
 - Added an expand (⛶) button to the Trends chart to view it full-screen —

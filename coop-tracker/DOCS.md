@@ -7,6 +7,8 @@ your chickens, right from your phone via the Home Assistant sidebar.
 
 - Quick-add buttons for eggs, cleaning, feeding, sales, expenses, and
   eggs used/consumed
+- "Container was empty" checkbox on feeding entries, with a live estimate
+  of how long a container/bag of that food typically lasts
 - Today / this-week egg counts, eggs on hand, last cleaning and feeding
   times
 - Finances section: browse any month's revenue, costs, and net, plus an
@@ -38,6 +40,20 @@ your chickens, right from your phone via the Home Assistant sidebar.
 
 Entries are stored in a SQLite database at `/data/coop.db` inside the add-on,
 which Home Assistant persists across restarts and updates automatically.
+
+## Feed duration estimate
+
+The Log Feeding sheet has a **Container was empty** checkbox — check it
+when you feed and notice the container/bag was completely empty
+beforehand (i.e. this feeding is a refill). As soon as you've logged it
+twice for the same **food type**, the sheet shows a live estimate right
+where you're logging: the average number of days between refills, and
+how many days it's been since the last one. Food type matching ignores
+case and extra spaces, but is otherwise an exact match — use the same
+food type text consistently (the field is pre-filled with whatever you
+used last time) to keep the estimate accurate. Different food types are
+tracked separately, so pellets and layer feed (for example) each get
+their own estimate.
 
 ## Configuration
 

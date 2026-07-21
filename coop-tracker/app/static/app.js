@@ -114,7 +114,7 @@ async function loadHistory() {
     if (entry.type === "egg") title = `${entry.count ?? 1} egg${entry.count === 1 ? "" : "s"} collected`;
     else if (entry.type === "cleaning") title = "Coop cleaned";
     else if (entry.type === "feeding")
-      title = `Fed${entry.food_type ? " " + entry.food_type : ""}${entry.amount ? " · " + entry.amount : ""}`;
+      title = `Fed${entry.food_type ? " " + entry.food_type : ""}${entry.amount ? " · " + entry.amount : ""}${entry.container_empty ? " · container was empty" : ""}`;
     else if (entry.type === "sale")
       title = `${entry.count ?? 1} egg${entry.count === 1 ? "" : "s"} sold${entry.price != null ? " · " + fmtMoney(entry.price) : ""}`;
     else if (entry.type === "expense")
@@ -146,6 +146,46 @@ function dateFieldHtml(value) {
       <input type="datetime-local" name="ts" value="${value}" required>
     </div>
   `;
+}
+
+async function updateFeedingStatsHint(foodType) {
+  const hintEl = document.getElementById("feeding-stats-hint");
+  if (!hintEl) return;
+
+  const trimmed = (foodType || "").trim();
+  if (!trimmed) {
+    hintEl.textContent = "";
+    return;
+  }
+
+  try {
+    const res = await fetch(`api/feeding-stats?food_type=${encodeURIComponent(trimmed)}`);
+    const data = await res.json();
+    const daysSince = data.days_since_last_empty != null ? Math.round(data.days_since_last_empty) : null;
+
+    if (data.empty_count === 0) {
+      hintEl.textContent = `No "container was empty" history yet for ${trimmed}.`;
+    } else if (data.avg_days_between_empty == null) {
+      hintEl.textContent = `${trimmed}: container last emptied ${daysSince} day${daysSince === 1 ? "" : "s"} ago. Log one more empty container to see an average.`;
+    } else {
+      hintEl.textContent = `${trimmed}: avg ${data.avg_days_between_empty} days between refills · last emptied ${daysSince} day${daysSince === 1 ? "" : "s"} ago.`;
+    }
+  } catch (err) {
+    hintEl.textContent = "";
+  }
+}
+
+async function prefillLastFoodType(inputEl) {
+  try {
+    const res = await fetch("api/entries?type=feeding&limit=1");
+    const entries = await res.json();
+    if (entries.length && entries[0].food_type) {
+      inputEl.value = entries[0].food_type;
+    }
+  } catch (err) {
+    // leave the field blank
+  }
+  updateFeedingStatsHint(inputEl.value);
 }
 
 function openSheet(type, entry = null) {
@@ -195,18 +235,36 @@ function openSheet(type, entry = null) {
     sheetFields.innerHTML = `
       <div class="field">
         <label>Food type</label>
-        <input type="text" name="food_type" placeholder="e.g. layer feed, scratch grains" value="${entry ? entry.food_type ?? "" : ""}">
+        <input type="text" name="food_type" id="feeding-food-type" placeholder="e.g. layer feed, scratch grains" value="${entry ? entry.food_type ?? "" : ""}">
       </div>
+      <p class="feeding-stats-hint" id="feeding-stats-hint"></p>
       <div class="field">
         <label>Amount (optional)</label>
         <input type="text" name="amount" placeholder="e.g. 2 cups" value="${entry ? entry.amount ?? "" : ""}">
       </div>
+      <label class="field-checkbox">
+        <input type="checkbox" name="container_empty" id="feeding-container-empty" ${entry && entry.container_empty ? "checked" : ""}>
+        Container was empty
+      </label>
       ${dateFieldHtml(tsValue)}
       <div class="field">
         <label>Notes (optional)</label>
         <textarea name="notes">${entry ? entry.notes ?? "" : ""}</textarea>
       </div>
     `;
+
+    const foodTypeInput = document.getElementById("feeding-food-type");
+    let statsDebounce;
+    foodTypeInput.addEventListener("input", () => {
+      clearTimeout(statsDebounce);
+      statsDebounce = setTimeout(() => updateFeedingStatsHint(foodTypeInput.value), 400);
+    });
+
+    if (entry) {
+      updateFeedingStatsHint(foodTypeInput.value);
+    } else {
+      prefillLastFoodType(foodTypeInput);
+    }
   } else if (type === "sale") {
     const initialCount = entry ? entry.count ?? 1 : 1;
     sheetFields.innerHTML = `
@@ -320,6 +378,7 @@ sheetForm.addEventListener("submit", async (e) => {
     payload.food_type = sheetForm.food_type.value || null;
     payload.amount = sheetForm.amount.value || null;
     payload.notes = sheetForm.notes.value || null;
+    payload.container_empty = document.getElementById("feeding-container-empty").checked;
   } else if (currentType === "sale") {
     payload.count = parseInt(document.getElementById("count-value").textContent, 10);
     payload.price = sheetForm.price.value === "" ? null : parseFloat(sheetForm.price.value);
@@ -333,30 +392,47 @@ sheetForm.addEventListener("submit", async (e) => {
     payload.notes = sheetForm.notes.value || null;
   }
 
-  if (currentEntryId) {
-    await fetch(`api/entries/${currentEntryId}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-  } else {
-    await fetch("api/log", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-  }
+  const saveBtn = sheetForm.querySelector('button[type="submit"]');
+  saveBtn.disabled = true;
+  const originalLabel = saveBtn.textContent;
+  saveBtn.textContent = "Saving…";
 
-  closeSheet();
-  loadSummary();
-  loadHistory();
+  try {
+    const res = currentEntryId
+      ? await fetch(`api/entries/${currentEntryId}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        })
+      : await fetch("api/log", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+
+    if (!res.ok) throw new Error(`server returned ${res.status}`);
+
+    closeSheet();
+    loadSummary();
+    loadHistory();
+  } catch (err) {
+    alert("Couldn't save — check your connection and try again.");
+  } finally {
+    saveBtn.disabled = false;
+    saveBtn.textContent = originalLabel;
+  }
 });
 
 historyList.addEventListener("click", async (e) => {
   const deleteBtn = e.target.closest(".delete-btn");
   if (deleteBtn) {
     e.stopPropagation();
-    await fetch(`api/entries/${deleteBtn.dataset.id}`, { method: "DELETE" });
+    try {
+      const res = await fetch(`api/entries/${deleteBtn.dataset.id}`, { method: "DELETE" });
+      if (!res.ok) throw new Error(`server returned ${res.status}`);
+    } catch (err) {
+      alert("Couldn't delete — check your connection and try again.");
+    }
     loadSummary();
     loadHistory();
     return;
@@ -418,16 +494,20 @@ restoreBtn.addEventListener("click", async () => {
   const formData = new FormData();
   formData.append("file", file);
 
-  const res = await fetch("api/restore", { method: "POST", body: formData });
-  if (res.ok) {
-    alert("Backup restored.");
-    restoreFile.value = "";
-    backupBackdrop.classList.remove("open");
-    loadSummary();
-    loadHistory();
-  } else {
-    const data = await res.json().catch(() => ({}));
-    alert(data.error || "Restore failed.");
+  try {
+    const res = await fetch("api/restore", { method: "POST", body: formData });
+    if (res.ok) {
+      alert("Backup restored.");
+      restoreFile.value = "";
+      backupBackdrop.classList.remove("open");
+      loadSummary();
+      loadHistory();
+    } else {
+      const data = await res.json().catch(() => ({}));
+      alert(data.error || "Restore failed.");
+    }
+  } catch (err) {
+    alert("Couldn't reach the server — check your connection and try again.");
   }
 });
 

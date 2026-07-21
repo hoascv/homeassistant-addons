@@ -12,7 +12,7 @@ from datetime import datetime, time as dtime, timedelta
 import flask
 from flask import Flask, g, jsonify, render_template, request, send_file
 
-APP_VERSION = "1.13.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.14.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("COOP_DB_PATH", "/data/coop.db")
 OPTIONS_PATH = os.environ.get("COOP_OPTIONS_PATH", "/data/options.json")
@@ -115,7 +115,12 @@ def init_db():
     )
 
     existing_columns = {row[1] for row in conn.execute("PRAGMA table_info(logs)")}
-    for column, coltype in (("price", "REAL"), ("cost", "REAL"), ("category", "TEXT")):
+    for column, coltype in (
+        ("price", "REAL"),
+        ("cost", "REAL"),
+        ("category", "TEXT"),
+        ("container_empty", "INTEGER"),
+    ):
         if column not in existing_columns:
             conn.execute(f"ALTER TABLE logs ADD COLUMN {column} {coltype}")
 
@@ -284,6 +289,18 @@ def _push_ha_sensors(conn):
         "on" if _eggs_overdue(now, conn, reminder_cfg["threshold_days"]) else "off",
         {"friendly_name": "Coop Tracker eggs overdue", "icon": "mdi:egg-off"},
     )
+
+
+def _push_ha_sensors_async():
+    """Run _push_ha_sensors on its own connection, in its own thread, so a
+    slow/unreachable Home Assistant can't hold up the request that just
+    saved a log entry — sqlite3 connections aren't shareable across
+    threads, so this opens a fresh one rather than reusing the request's."""
+    conn = _db_connect_standalone()
+    try:
+        _push_ha_sensors(conn)
+    finally:
+        conn.close()
 
 
 def _background_loop():
@@ -542,6 +559,54 @@ def api_trends():
     return jsonify(result)
 
 
+def _compute_feeding_stats(conn, food_type, now):
+    food_type = (food_type or "").strip()
+    if not food_type:
+        return {
+            "food_type": food_type,
+            "empty_count": 0,
+            "last_empty": None,
+            "days_since_last_empty": None,
+            "avg_days_between_empty": None,
+        }
+
+    rows = conn.execute(
+        """
+        SELECT ts FROM logs
+        WHERE type = 'feeding' AND container_empty = 1 AND LOWER(TRIM(food_type)) = LOWER(TRIM(?))
+        ORDER BY ts ASC
+        """,
+        (food_type,),
+    ).fetchall()
+    timestamps = [datetime.fromisoformat(row["ts"]) for row in rows]
+
+    avg_days_between_empty = None
+    if len(timestamps) >= 2:
+        intervals = [
+            (timestamps[i] - timestamps[i - 1]).total_seconds() / 86400
+            for i in range(1, len(timestamps))
+        ]
+        avg_days_between_empty = round(sum(intervals) / len(intervals), 1)
+
+    last_empty = timestamps[-1] if timestamps else None
+
+    return {
+        "food_type": food_type,
+        "empty_count": len(timestamps),
+        "last_empty": last_empty.isoformat() if last_empty else None,
+        "days_since_last_empty": (
+            round((now - last_empty).total_seconds() / 86400, 1) if last_empty else None
+        ),
+        "avg_days_between_empty": avg_days_between_empty,
+    }
+
+
+@app.route("/api/feeding-stats")
+def api_feeding_stats():
+    db = get_db()
+    return jsonify(_compute_feeding_stats(db, request.args.get("food_type", ""), datetime.now()))
+
+
 @app.route("/api/entries")
 def api_entries():
     entry_type = request.args.get("type")
@@ -561,6 +626,10 @@ def api_entries():
     return jsonify([dict(row) for row in rows])
 
 
+def _normalize_container_empty(value):
+    return None if value is None else (1 if value else 0)
+
+
 @app.route("/api/log", methods=["POST"])
 def api_log():
     data = request.get_json(force=True, silent=True) or {}
@@ -576,6 +645,7 @@ def api_log():
     price = data.get("price")
     cost = data.get("cost")
     category = data.get("category")
+    container_empty = _normalize_container_empty(data.get("container_empty"))
 
     ts_input = data.get("ts")
     if ts_input:
@@ -589,13 +659,13 @@ def api_log():
     db = get_db()
     cur = db.execute(
         """
-        INSERT INTO logs (type, ts, count, food_type, amount, notes, price, cost, category)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO logs (type, ts, count, food_type, amount, notes, price, cost, category, container_empty)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (entry_type, ts, count, food_type, amount, notes, price, cost, category),
+        (entry_type, ts, count, food_type, amount, notes, price, cost, category, container_empty),
     )
     db.commit()
-    _push_ha_sensors(db)
+    threading.Thread(target=_push_ha_sensors_async, daemon=True).start()
 
     return jsonify({"id": cur.lastrowid, "type": entry_type, "ts": ts}), 201
 
@@ -625,17 +695,21 @@ def api_update_entry(entry_id):
     price = data.get("price", row["price"])
     cost = data.get("cost", row["cost"])
     category = data.get("category", row["category"])
+    container_empty = _normalize_container_empty(
+        data.get("container_empty", row["container_empty"])
+    )
 
     db.execute(
         """
         UPDATE logs
-        SET ts = ?, count = ?, food_type = ?, amount = ?, notes = ?, price = ?, cost = ?, category = ?
+        SET ts = ?, count = ?, food_type = ?, amount = ?, notes = ?, price = ?, cost = ?,
+            category = ?, container_empty = ?
         WHERE id = ?
         """,
-        (ts, count, food_type, amount, notes, price, cost, category, entry_id),
+        (ts, count, food_type, amount, notes, price, cost, category, container_empty, entry_id),
     )
     db.commit()
-    _push_ha_sensors(db)
+    threading.Thread(target=_push_ha_sensors_async, daemon=True).start()
 
     return jsonify({"id": entry_id, "ts": ts}), 200
 
@@ -645,7 +719,7 @@ def api_delete_entry(entry_id):
     db = get_db()
     db.execute("DELETE FROM logs WHERE id = ?", (entry_id,))
     db.commit()
-    _push_ha_sensors(db)
+    threading.Thread(target=_push_ha_sensors_async, daemon=True).start()
     return "", 204
 
 

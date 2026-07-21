@@ -5,6 +5,7 @@ resolves to `app/app.py` — the same module the container runs.
 """
 import json
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
@@ -104,3 +105,20 @@ def fake_ha_server(monkeypatch):
 
     server.shutdown()
     thread.join(timeout=2)
+
+
+@pytest.fixture
+def wait_until():
+    """Poll a predicate until it's true, for asserting on work done by the
+    background thread _push_ha_sensors_async spawns (the HA sensor push is
+    fire-and-forget from the request's point of view — see app.py)."""
+
+    def _wait(predicate, timeout=2.0, interval=0.02):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if predicate():
+                return True
+            time.sleep(interval)
+        return predicate()
+
+    return _wait

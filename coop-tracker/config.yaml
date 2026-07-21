@@ -1,5 +1,5 @@
 name: "Coop Tracker"
-version: "1.13.0"
+version: "1.14.0"
 slug: "coop-tracker"
 description: "Log egg collection, coop cleaning, and feeding for your chickens"
 url: "https://github.com/hoascv/homeassistant-addons/tree/main/coop-tracker"

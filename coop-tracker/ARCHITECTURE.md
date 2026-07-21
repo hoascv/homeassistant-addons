@@ -77,7 +77,8 @@ CREATE TABLE logs (
     notes TEXT,
     price REAL,             -- sale
     cost REAL,              -- expense
-    category TEXT           -- expense
+    category TEXT,          -- expense
+    container_empty INTEGER -- feeding: 0/1/NULL, see §10
 )
 ```
 
@@ -129,12 +130,13 @@ permissions — it reuses the exact `homeassistant_api` grant and
 backed by a real integration/config entry, so they don't survive a Home
 Assistant *core* restart on their own — HA drops orphan states on restart.
 This is mitigated by the existing 60-second background loop (`_push_ha_sensors`
-runs every tick regardless of whether anything changed) plus an immediate
-push after every write (`api_log`, `api_update_entry`, `api_delete_entry`),
-so entities reappear within a minute of both services being back up. This
-is documented as a known caveat in DOCS.md rather than solved with a real
-integration, which would mean a second codebase (a HACS/core integration)
-for a feature that's genuinely optional and low-stakes.
+runs every tick regardless of whether anything changed) plus a push after
+every write (`api_log`, `api_update_entry`, `api_delete_entry`, via
+`_push_ha_sensors_async` — see §6), so entities reappear within a minute
+of both services being back up. This is documented as a known caveat in
+DOCS.md rather than solved with a real integration, which would mean a
+second codebase (a HACS/core integration) for a feature that's genuinely
+optional and low-stakes.
 
 ## 6. Background work
 
@@ -154,12 +156,28 @@ the loop.
 a 60-second cadence with two cheap checks, a dependency for scheduling
 would be pure overhead. The whole loop is ~15 lines.
 
-**Why sensors are also pushed synchronously inside request handlers**
-(`api_log`, `api_update_entry`, `api_delete_entry`) **in addition to the
-background loop:** so the Home Assistant dashboard reflects a newly logged
-entry in under a second instead of up to 60. This mirrors the existing
-pattern of `send_notification` already being called synchronously from
-`/api/notify-test`.
+**Why sensors are also pushed from request handlers** (`api_log`,
+`api_update_entry`, `api_delete_entry`) **in addition to the background
+loop:** so the Home Assistant dashboard reflects a newly logged entry in
+under a second instead of up to 60.
+
+**Why that push runs in its own thread (`_push_ha_sensors_async`,
+`threading.Thread(target=_push_ha_sensors_async, daemon=True).start()`)
+instead of inline in the request:** `_push_ha_sensors` makes up to 9
+sequential HTTP calls to Home Assistant, each with its own 5-second
+timeout — if Home Assistant/Supervisor were ever slow or briefly
+unreachable, an inline call could make a simple "log an egg" request hang
+for up to ~45 seconds before it even responded (fixed in v1.13.1, after
+exactly this was reported as entries silently not saving). Since a
+`sqlite3` connection can't be shared across threads, the spawned thread
+opens its own via `_db_connect_standalone()` rather than reusing the
+request's — the same connection-per-thread pattern `_background_loop`
+already uses. The trade *for* this fire-and-forget approach: a push
+failure inside that thread has nowhere to report back to — but that's
+already true of the 60-second background loop's push, and is consistent
+with `_ha_api_request`'s existing fail-soft design (§5) where sensor/
+notification delivery should never be allowed to break the thing the user
+actually came to do.
 
 ## 7. Frontend architecture
 
@@ -209,6 +227,20 @@ it's the identical SVG, not a re-rendered copy — automatically reflows
 wider if the user rotates their phone to landscape while it's open,
 which is the main practical win over the compact view's fixed 480px-max
 container.
+
+**Why every write (`sheetForm`'s submit handler, the history delete
+button, restore) checks `res.ok` and wraps its `fetch()` in try/catch
+(v1.13.1):** `fetch()` only rejects on a network-level failure (DNS,
+connection refused) — it resolves normally for HTTP error statuses, and
+for anything that terminates the request before it reaches Flask at all
+(an ingress-proxy timeout, the add-on mid-restart), the response the
+browser sees usually isn't even the JSON the code expected. The original
+code did neither check, so any of those cases would silently fall through
+to `closeSheet(); loadSummary(); loadHistory();` exactly as if the save
+had succeeded — the entry was never written, but nothing told the user
+that. Now a failed write shows an alert and, critically, leaves the sheet
+open with the user's input intact instead of discarding it, so retrying
+doesn't mean re-typing everything.
 
 ## 8. Config & options
 
@@ -294,7 +326,49 @@ backtest/forecast is a *full-month* projection, compared in the UI against
 that month's *partial* actual-so-far — they're expected to diverge until
 the month ends, that's not a forecast miss.
 
-## 10. Backup & restore
+## 10. Feed duration estimate
+
+A `container_empty` boolean on `logs` (meaningful only for `type =
+'feeding'`, `NULL` otherwise — the same "extra nullable column on the one
+polymorphic table" pattern as `price`/`cost`/`category`, see §4) marks a
+feeding entry as "the container was empty, this is a refill."
+`_compute_feeding_stats(conn, food_type, now)` finds every `container_empty
+= 1` entry for a given `food_type`, and averages the intervals between
+consecutive ones to answer "how long does a container of this actually
+last?" — exposed at `/api/feeding-stats?food_type=...`.
+
+**Why grouped by the existing free-text `food_type` field instead of a
+new fixed list of feed types:** the app already has this field for
+exactly this purpose (distinguishing "layer feed" from "scratch grains"),
+and a personal add-on for one flock doesn't need a managed feed-type
+registry — the tradeoff is that matching is exact (case/whitespace
+normalized via `LOWER(TRIM(...))`, but not fuzzy), so typos create a
+second, separate history. The frontend mitigates this by pre-filling the
+field with whatever `food_type` was used last time (`prefillLastFoodType`
+in `app.js`), so the common case — feeding the same thing you always
+feed — never requires retyping it.
+
+**Why the estimate is shown inline in the Log Feeding sheet** rather than
+as a Home-page stat or a Trends chart: that's where the question
+("how's this container doing, is it about time to check on more feed?")
+actually comes up — right as you're about to log a feeding, not as an
+always-on dashboard number. `updateFeedingStatsHint()` fetches and
+re-renders it as the food-type field changes (debounced), so it stays
+relevant if you're logging a different feed than usual in the same
+session.
+
+**Why an average of historical intervals instead of, say, a countdown
+from projected days-remaining:** a countdown would need to know the bag
+size and daily consumption rate — data the app doesn't collect (it tracks
+*feeding events*, not quantity consumed per feeding in a comparable unit).
+The interval between "container was empty" checkboxes is something the
+app can compute exactly from data it already has, with no new fields
+beyond the one checkbox. Needs at least two "empty" events for the
+average to appear at all; with only one there's a "last emptied N days
+ago" but no average yet — shown as such rather than a misleadingly
+precise number from a single data point.
+
+## 11. Backup & restore
 
 `/api/backup` streams the raw SQLite file back to the browser as a
 download; `/api/restore` accepts an uploaded file, validates it has the
@@ -308,7 +382,7 @@ maintain, no version-to-version export format compatibility to worry
 about. The cost (an opaque binary file instead of something a user could
 eyeball or edit) is acceptable for a single-user backup feature.
 
-## 11. Serving model
+## 12. Serving model
 
 Flask's built-in dev server (`app.run(host="0.0.0.0", port=8099)`) *is*
 the production server here — there's no gunicorn/uWSGI in front of it.
@@ -319,7 +393,7 @@ authenticated ingress proxy (never a directly exposed port — there's no
 `ports:` mapping in `config.yaml`). The concurrency and hardening a
 production WSGI server buys don't apply to that traffic profile.
 
-## 12. Packaging & init
+## 13. Packaging & init
 
 Multi-arch build (`aarch64`, `amd64`, `armhf`, `armv7`, `i386`) against
 Home Assistant's own per-arch Python/Alpine base images (`build.yaml`), so
@@ -334,7 +408,7 @@ Supervisor-injected env vars actually visible to `python3 app.py` (v1.6.1
 fix; s6-overlay v3 doesn't pass its environment to a plain script
 otherwise).
 
-## 13. Versioning
+## 14. Versioning
 
 There's no release automation. Each user-visible change bumps three
 things together, by hand:
@@ -352,7 +426,7 @@ things together, by hand:
 and a build step just to avoid typing the version twice; the comment next
 to `APP_VERSION` exists specifically to flag this manual-sync requirement.
 
-## 14. Testing
+## 15. Testing
 
 Backend tests live in `app/tests/`, run with `pytest` from `coop-tracker/`:
 
@@ -390,7 +464,7 @@ Chrome pass during development), not by CI. This is the most likely gap
 to revisit if the frontend grows past what a manual pass can reliably
 cover.
 
-## 15. Known limitations (accepted, not oversights)
+## 16. Known limitations (accepted, not oversights)
 
 - **Reminder's "already notified today" guard is in-memory only**
   (`_reminder_last_checked_date` is a module-level global, not persisted).
