@@ -67,6 +67,26 @@ body {
   line-height: 1;
 }
 
+.ha-status-dot {
+  width: 0.65rem;
+  height: 0.65rem;
+  border-radius: 50%;
+  border: none;
+  padding: 0;
+  margin: 0 0.15rem;
+  cursor: pointer;
+  background: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.ha-status-dot.status-ok {
+  background: var(--positive);
+}
+
+.ha-status-dot.status-error {
+  background: var(--negative);
+}
+
 main {
   padding: 0 1rem;
   max-width: 480px;
@@ -461,8 +481,13 @@ main {
   padding: 0.5rem 0.75rem;
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 0.6rem;
   cursor: pointer;
+}
+
+.chicken-item .details {
+  flex: 1;
+  min-width: 0;
 }
 
 .chicken-item .title {
@@ -473,6 +498,31 @@ main {
 .chicken-item .meta {
   font-size: 0.75rem;
   color: var(--text-muted);
+}
+
+.chicken-avatar {
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+.chicken-avatar-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface);
+  font-size: 1.1rem;
+}
+
+.chicken-photo-preview {
+  width: 5rem;
+  height: 5rem;
+  border-radius: 10px;
+  object-fit: cover;
+  display: block;
+  margin-bottom: 0.4rem;
 }
 
 .chicken-form {

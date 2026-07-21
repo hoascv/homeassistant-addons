@@ -10,6 +10,7 @@
 <header class="topbar">
   <span class="topbar-icon">🥚</span>
   <h1>Coop Tracker</h1>
+  <button type="button" class="ha-status-dot" id="ha-status-dot" aria-label="Home Assistant connection status"></button>
   <button class="topbar-icon-btn" id="flock-open-btn" aria-label="My Flock">🐔</button>
   <button class="topbar-icon-btn" id="notify-open-btn" aria-label="Notifications">🔔</button>
   <button class="topbar-icon-btn" id="backup-open-btn" aria-label="Backup and restore">⚙️</button>
@@ -300,6 +301,12 @@
       <div class="field">
         <label>Name</label>
         <input type="text" id="chicken-form-name" placeholder="e.g. Henrietta">
+      </div>
+      <div class="field">
+        <label>Photo (optional)</label>
+        <img class="chicken-photo-preview" id="chicken-form-photo-preview" hidden>
+        <input type="file" id="chicken-form-photo-input" accept="image/*">
+        <button type="button" class="link-btn" id="chicken-form-remove-photo-btn" hidden>Remove photo</button>
       </div>
       <div class="field">
         <label>Breed</label>

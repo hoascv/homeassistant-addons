@@ -968,6 +968,35 @@ async function loadBreedList() {
 }
 
 let chickenCache = {};
+let pendingPhotoDataUri; // undefined = no change; a data URI = new photo; null = explicitly removed
+
+function resizeImageToDataUri(file, maxDim = 400, quality = 0.7) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        let { width, height } = img;
+        if (width > height && width > maxDim) {
+          height = Math.round((height * maxDim) / width);
+          width = maxDim;
+        } else if (height > maxDim) {
+          width = Math.round((width * maxDim) / height);
+          height = maxDim;
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        canvas.getContext("2d").drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL("image/jpeg", quality));
+      };
+      img.onerror = reject;
+      img.src = reader.result;
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
 
 async function loadChickenList() {
   const listEl = document.getElementById("chicken-list");
@@ -990,6 +1019,11 @@ async function loadChickenList() {
     .map(
       (c) => `
         <li class="chicken-item" data-id="${c.id}">
+          ${
+            c.has_photo
+              ? `<img class="chicken-avatar" src="api/chickens/${c.id}/photo" alt="">`
+              : `<span class="chicken-avatar chicken-avatar-placeholder">🐔</span>`
+          }
           <div class="details">
             <div class="title">${escapeHtml(c.name)}${c.status === "lost" ? " (lost)" : ""}</div>
             <div class="meta">${escapeHtml(c.breed || "No breed set")} · ${formatChickenAge(c.hatch_date)}</div>
@@ -1008,6 +1042,20 @@ function openChickenForm(chicken = null) {
   document.getElementById("chicken-form-hatch-date").value = chicken ? chicken.hatch_date || "" : "";
   document.getElementById("chicken-form-status").value = chicken ? chicken.status : "active";
   loadBreedDropdownOptions(document.getElementById("chicken-form-breed"), chicken ? chicken.breed : null);
+
+  pendingPhotoDataUri = undefined;
+  document.getElementById("chicken-form-photo-input").value = "";
+  const previewEl = document.getElementById("chicken-form-photo-preview");
+  const removePhotoBtn = document.getElementById("chicken-form-remove-photo-btn");
+  if (chicken && chicken.has_photo) {
+    previewEl.src = `api/chickens/${chicken.id}/photo`;
+    previewEl.hidden = false;
+    removePhotoBtn.hidden = false;
+  } else {
+    previewEl.hidden = true;
+    removePhotoBtn.hidden = true;
+  }
+
   formEl.hidden = false;
 }
 
@@ -1017,6 +1065,24 @@ function closeChickenForm() {
 
 document.getElementById("chicken-add-btn").addEventListener("click", () => openChickenForm(null));
 document.getElementById("chicken-form-cancel-btn").addEventListener("click", closeChickenForm);
+
+document.getElementById("chicken-form-photo-input").addEventListener("change", async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const dataUri = await resizeImageToDataUri(file);
+  pendingPhotoDataUri = dataUri;
+  const previewEl = document.getElementById("chicken-form-photo-preview");
+  previewEl.src = dataUri;
+  previewEl.hidden = false;
+  document.getElementById("chicken-form-remove-photo-btn").hidden = false;
+});
+
+document.getElementById("chicken-form-remove-photo-btn").addEventListener("click", () => {
+  pendingPhotoDataUri = null;
+  document.getElementById("chicken-form-photo-input").value = "";
+  document.getElementById("chicken-form-photo-preview").hidden = true;
+  document.getElementById("chicken-form-remove-photo-btn").hidden = true;
+});
 
 document.getElementById("chicken-form-save-btn").addEventListener("click", async () => {
   const id = document.getElementById("chicken-form-id").value;
@@ -1031,6 +1097,9 @@ document.getElementById("chicken-form-save-btn").addEventListener("click", async
     hatch_date: document.getElementById("chicken-form-hatch-date").value || null,
     status: document.getElementById("chicken-form-status").value,
   };
+  if (pendingPhotoDataUri !== undefined) {
+    payload.photo = pendingPhotoDataUri;
+  }
 
   try {
     const res = id
@@ -1117,5 +1186,32 @@ flockBackdrop.addEventListener("click", (e) => {
   if (e.target === flockBackdrop) flockBackdrop.classList.remove("open");
 });
 
+const haStatusDot = document.getElementById("ha-status-dot");
+
+async function loadHaStatus() {
+  try {
+    const res = await fetch("api/debug");
+    const data = await res.json();
+    const ok = !!data.ha_api_reachable;
+    haStatusDot.classList.toggle("status-ok", ok);
+    haStatusDot.classList.toggle("status-error", !ok);
+    haStatusDot.title = ok
+      ? "Home Assistant: connected"
+      : `Home Assistant: not reachable${data.ha_api_error ? " — " + data.ha_api_error : ""}`;
+  } catch (err) {
+    haStatusDot.classList.remove("status-ok");
+    haStatusDot.classList.add("status-error");
+    haStatusDot.title = "Home Assistant: could not check status";
+  }
+}
+
+haStatusDot.addEventListener("click", () => {
+  notifyOpenBtn.click(); // opens the Notifications panel...
+  debugList.hidden = false; // ...then expand its Debug info section, which has the detail behind this dot
+  debugToggle.textContent = "Debug info ▴";
+  loadDebugInfo();
+});
+
+loadHaStatus();
 loadSummary();
 loadHistory();

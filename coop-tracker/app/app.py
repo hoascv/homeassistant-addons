@@ -1,3 +1,5 @@
+import base64
+import binascii
 import json
 import os
 import platform
@@ -10,9 +12,9 @@ import urllib.request
 from datetime import datetime, time as dtime, timedelta
 
 import flask
-from flask import Flask, g, jsonify, render_template, request, send_file
+from flask import Flask, Response, g, jsonify, render_template, request, send_file
 
-APP_VERSION = "1.18.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.20.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("COOP_DB_PATH", "/data/coop.db")
 OPTIONS_PATH = os.environ.get("COOP_OPTIONS_PATH", "/data/options.json")
@@ -44,6 +46,11 @@ FORECAST_RATIO_BOUNDS = (0.2, 1.8)  # dampens noise from a single unusual week
 POINT_OF_LAY_DAYS = 140  # ~20 weeks: no eggs before this age
 PRIME_END_DAYS = 550  # ~18 months: full rate through this age
 REDUCED_RATE_MULTIPLIER = 0.8  # rate applied from PRIME_END_DAYS onward
+
+# A generous ceiling on a decoded chicken photo — the frontend already
+# resizes to ~400px JPEG before upload (typically tens of KB), this is
+# just a backend safety net against a client that doesn't.
+MAX_PHOTO_BYTES = 3 * 1024 * 1024
 
 # Seeded into the breeds table the first time it's created (empty table
 # only — see init_db()); editable afterwards via /api/breeds. Values are
@@ -191,6 +198,9 @@ def init_db():
         )
         """
     )
+    chicken_columns = {row[1] for row in conn.execute("PRAGMA table_info(chickens)")}
+    if "photo" not in chicken_columns:
+        conn.execute("ALTER TABLE chickens ADD COLUMN photo BLOB")
 
     conn.commit()
     conn.close()
@@ -584,7 +594,12 @@ def _flock_baseline_daily_rate(conn, now):
     kept for backward compatibility with installs from before individual
     tracking existed. Returns (basis, daily_rate) where basis is
     "individual" or "flat_counts", so callers can report which was used."""
-    chickens = conn.execute("SELECT * FROM chickens WHERE status = 'active'").fetchall()
+    # Only the columns _chicken_daily_rate actually needs — a backtest
+    # calls this once per historical month, so skipping the (potentially
+    # large) photo blob here avoids re-reading it unnecessarily each time.
+    chickens = conn.execute(
+        "SELECT breed, hatch_date FROM chickens WHERE status = 'active'"
+    ).fetchall()
     if chickens:
         return "individual", sum(_chicken_daily_rate(conn, c, now) for c in chickens)
 
@@ -840,6 +855,19 @@ def _parse_hatch_date(value):
         return None, "invalid hatch_date"
 
 
+def _decode_photo_data_uri(data_uri):
+    """Decodes a `data:image/...;base64,...` string (as produced by the
+    chicken form's client-side resize) into raw bytes for storage."""
+    try:
+        _, encoded = data_uri.split(",", 1)
+        photo_bytes = base64.b64decode(encoded)
+    except (ValueError, binascii.Error):
+        return None, "invalid photo data"
+    if len(photo_bytes) > MAX_PHOTO_BYTES:
+        return None, "photo is too large"
+    return photo_bytes, None
+
+
 @app.route("/api/chickens")
 def api_chickens():
     db = get_db()
@@ -847,7 +875,18 @@ def api_chickens():
     rows = [dict(row) for row in db.execute("SELECT * FROM chickens ORDER BY id ASC").fetchall()]
     for row in rows:
         row["daily_rate"] = round(_chicken_daily_rate(db, row, now), 2)
+        row["has_photo"] = row["photo"] is not None
+        del row["photo"]  # served separately by api_chicken_photo, keep this list light
     return jsonify(rows)
+
+
+@app.route("/api/chickens/<int:chicken_id>/photo")
+def api_chicken_photo(chicken_id):
+    db = get_db()
+    row = db.execute("SELECT photo FROM chickens WHERE id = ?", (chicken_id,)).fetchone()
+    if row is None or row["photo"] is None:
+        return "", 404
+    return Response(row["photo"], mimetype="image/jpeg")
 
 
 @app.route("/api/chickens", methods=["POST"])
@@ -865,10 +904,16 @@ def api_add_chicken():
     if status not in ("active", "lost"):
         return jsonify({"error": "invalid status"}), 400
 
+    photo_bytes = None
+    if data.get("photo"):
+        photo_bytes, err = _decode_photo_data_uri(data["photo"])
+        if err:
+            return jsonify({"error": err}), 400
+
     db = get_db()
     cur = db.execute(
-        "INSERT INTO chickens (name, breed, hatch_date, status) VALUES (?, ?, ?, ?)",
-        (name, breed, hatch_date, status),
+        "INSERT INTO chickens (name, breed, hatch_date, status, photo) VALUES (?, ?, ?, ?, ?)",
+        (name, breed, hatch_date, status, photo_bytes),
     )
     db.commit()
     return jsonify({"id": cur.lastrowid}), 201
@@ -895,9 +940,20 @@ def api_update_chicken(chicken_id):
     if status not in ("active", "lost"):
         return jsonify({"error": "invalid status"}), 400
 
+    if "photo" in data:
+        # explicitly present: either a new photo to decode, or a falsy
+        # value (null/"") meaning "clear the existing photo"
+        photo_bytes = None
+        if data["photo"]:
+            photo_bytes, err = _decode_photo_data_uri(data["photo"])
+            if err:
+                return jsonify({"error": err}), 400
+    else:
+        photo_bytes = row["photo"]  # not mentioned: leave unchanged
+
     db.execute(
-        "UPDATE chickens SET name = ?, breed = ?, hatch_date = ?, status = ? WHERE id = ?",
-        (name, breed, hatch_date, status, chicken_id),
+        "UPDATE chickens SET name = ?, breed = ?, hatch_date = ?, status = ?, photo = ? WHERE id = ?",
+        (name, breed, hatch_date, status, photo_bytes, chicken_id),
     )
     db.commit()
     return jsonify({"id": chicken_id}), 200

@@ -1,6 +1,13 @@
+import base64
 from datetime import datetime, timedelta
 
 import app as coopapp
+
+# A minimal valid 1x1 JPEG, used as a stand-in for a real photo upload.
+_TINY_JPEG_BYTES = base64.b64decode(
+    "/9j/4AAQSkZJRgABAQEAYABgAAD/2wBDAAMCAgICAgMCAgIDAwMDBAYEBAQEBAgGBgUGCQgKCgkICQkKDA8MCgsOCwkJDRENDg8QEBEQCgwSExIQEw8QEBD/2wBDAQMDAwQDBAgEBAgQCwkLEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBD/wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAj/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFQEBAQAAAAAAAAAAAAAAAAAAAAX/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIRAxEAPwCdABmX/9k="
+)
+_TINY_JPEG_DATA_URI = "data:image/jpeg;base64," + base64.b64encode(_TINY_JPEG_BYTES).decode()
 
 
 def _hatch(days_ago):
@@ -116,6 +123,82 @@ def test_delete_chicken(client):
     res = client.delete(f"/api/chickens/{created['id']}")
     assert res.status_code == 204
     assert client.get("/api/chickens").get_json() == []
+
+
+# --- Photos ---
+
+
+def test_chicken_without_photo_has_no_photo_flag_and_404s(client):
+    created = client.post("/api/chickens", json={"name": "Henrietta"}).get_json()
+    chickens = client.get("/api/chickens").get_json()
+    assert chickens[0]["has_photo"] is False
+
+    res = client.get(f"/api/chickens/{created['id']}/photo")
+    assert res.status_code == 404
+
+
+def test_add_chicken_with_photo(client):
+    res = client.post(
+        "/api/chickens", json={"name": "Henrietta", "photo": _TINY_JPEG_DATA_URI}
+    )
+    assert res.status_code == 201
+    chicken_id = res.get_json()["id"]
+
+    chickens = client.get("/api/chickens").get_json()
+    assert chickens[0]["has_photo"] is True
+    assert "photo" not in chickens[0]  # raw blob never included in the list
+
+    photo_res = client.get(f"/api/chickens/{chicken_id}/photo")
+    assert photo_res.status_code == 200
+    assert photo_res.content_type == "image/jpeg"
+    assert photo_res.data == _TINY_JPEG_BYTES
+
+
+def test_add_chicken_rejects_invalid_photo_data(client):
+    res = client.post("/api/chickens", json={"name": "Henrietta", "photo": "not-a-data-uri"})
+    assert res.status_code == 400
+
+
+def test_add_chicken_rejects_oversized_photo(client, monkeypatch):
+    monkeypatch.setattr(coopapp, "MAX_PHOTO_BYTES", 10)  # smaller than the tiny test JPEG
+    res = client.post(
+        "/api/chickens", json={"name": "Henrietta", "photo": _TINY_JPEG_DATA_URI}
+    )
+    assert res.status_code == 400
+    assert "too large" in res.get_json()["error"]
+
+
+def test_update_chicken_can_add_a_photo(client):
+    created = client.post("/api/chickens", json={"name": "Henrietta"}).get_json()
+    res = client.put(f"/api/chickens/{created['id']}", json={"photo": _TINY_JPEG_DATA_URI})
+    assert res.status_code == 200
+
+    chickens = client.get("/api/chickens").get_json()
+    assert chickens[0]["has_photo"] is True
+
+
+def test_update_chicken_without_photo_field_preserves_existing_photo(client):
+    created = client.post(
+        "/api/chickens", json={"name": "Henrietta", "photo": _TINY_JPEG_DATA_URI}
+    ).get_json()
+
+    client.put(f"/api/chickens/{created['id']}", json={"status": "lost"})
+
+    chickens = client.get("/api/chickens").get_json()
+    assert chickens[0]["has_photo"] is True
+    assert chickens[0]["status"] == "lost"
+
+
+def test_update_chicken_can_explicitly_clear_photo(client):
+    created = client.post(
+        "/api/chickens", json={"name": "Henrietta", "photo": _TINY_JPEG_DATA_URI}
+    ).get_json()
+
+    client.put(f"/api/chickens/{created['id']}", json={"photo": None})
+
+    chickens = client.get("/api/chickens").get_json()
+    assert chickens[0]["has_photo"] is False
+    assert client.get(f"/api/chickens/{created['id']}/photo").status_code == 404
 
 
 # --- Age-based laying curve ---

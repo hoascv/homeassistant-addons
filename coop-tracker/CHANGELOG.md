@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.20.0
+
+- Chicken records in **My Flock** can now have a photo — pick one from
+  your phone in the chicken form (auto-resized before saving, so it
+  won't bloat the database), shown as a thumbnail in the list. Removing
+  a chicken's photo is one tap away too.
+
+## 1.19.0
+
+- Added a small red/green connection status dot next to the top bar's
+  icons — green when Home Assistant is reachable, red when it isn't. Tap
+  it to jump straight to the full Debug info detail (already in the 🔔
+  Notifications panel) instead of having to dig for it.
+
 ## 1.18.0
 
 - Added **My Flock** (🐔 icon): track individual chickens — name, breed,

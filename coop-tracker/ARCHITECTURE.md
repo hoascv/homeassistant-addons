@@ -101,12 +101,16 @@ writes to, categorically different from an entry type:
 
 - `food_types` (id, name), added in v1.16.0 — see §10.
 - `breeds` (id, name, annual_eggs), added in v1.18.0 — see §9.
-- `chickens` (id, name, breed, hatch_date, status), added in v1.18.0 —
-  see §9. `breed` is a plain `TEXT` column matched against `breeds.name`
-  (not a foreign key), the same denormalized-by-string pattern as
-  `logs.food_type` against `food_types.name` — deleting a breed doesn't
-  cascade or corrupt a chicken's record, it just means that name no
-  longer resolves to a rate (§9 explains the consequence).
+- `chickens` (id, name, breed, hatch_date, status, photo), added in
+  v1.18.0 (`photo` in v1.20.0) — see §9. `breed` is a plain `TEXT` column
+  matched against `breeds.name` (not a foreign key), the same
+  denormalized-by-string pattern as `logs.food_type` against
+  `food_types.name` — deleting a breed doesn't cascade or corrupt a
+  chicken's record, it just means that name no longer resolves to a rate
+  (§9 explains the consequence). `photo` is a nullable `BLOB` — the raw
+  image bytes live in the same SQLite file as everything else, so a
+  chicken's photo is included in Backup & Restore (§11) for free, with no
+  separate file-storage path to back up or restore in step.
 
 ## 5. Home Assistant integration
 
@@ -284,6 +288,19 @@ very same `ensureFoodTypeOption`-style "preserve a value that's no longer
 a valid option" logic to survive a deleted breed without corrupting which
 breed a chicken is recorded as.
 
+**Why the HA connection status dot (v1.19.0) is a new tiny element**
+instead of extending something existing: `/api/debug` already computed
+`ha_api_reachable` for the Notifications panel's collapsed Debug info
+section (added v1.7.0) — that data just wasn't visible without opening a
+sheet and expanding a toggle first. Rather than duplicate that data
+fetch/display logic in a new component, the dot's own click handler
+calls `notifyOpenBtn.click()` and then forces the debug section open,
+reusing the exact same panel as the detail view instead of building a
+second one. It checks once on page load, not on a timer/poll — consistent with the
+rest of the app's "fetch when the relevant view is opened" approach
+(Home's stats, the Trends tab) rather than a background-refreshed health
+check that would need its own interval to manage.
+
 ## 8. Config & options
 
 Add-on configuration flows one direction: `config.yaml`'s `schema` defines
@@ -398,6 +415,39 @@ DOCS.md's forecast section, which states the limitation directly) rather
 than build a month-by-month seasonal adjustment curve — that's the
 natural next step if the flat forecast proves noticeably off across a
 season boundary.
+
+### Chicken photos (v1.20.0)
+
+A photo is an optional `BLOB` on `chickens`, served at its own route
+(`GET /api/chickens/<id>/photo`, returned as `image/jpeg`) rather than
+embedded in the `/api/chickens` list response — the list is fetched every
+time My Flock opens and is used internally (`_flock_baseline_daily_rate`)
+for the forecast, so it stays a `has_photo` boolean there; the actual
+bytes are only fetched per-chicken, by an `<img src=...>` tag, and only
+for the ones the browser is actually rendering. `_flock_baseline_daily_rate`'s
+own `chickens` query explicitly lists the columns it needs (`breed`,
+`hatch_date`) rather than `SELECT *`, for the same reason: a backtest
+calls it once per historical month, and there's no reason to re-read a
+possibly-large photo blob 24 times over just to compute a number that
+never uses it.
+
+**Why the image is resized client-side (a `<canvas>` draw to ~400px,
+re-encoded as JPEG) instead of a server-side library:** the alternative
+is a Python image-processing dependency (e.g. Pillow) added to the Docker
+image just for this one feature, in a project that has otherwise stayed
+dependency-free (`requirements.txt` is just `flask`, see §7's "no
+framework" reasoning) — resizing in the browser before upload achieves
+the same "don't let a multi-MB phone photo bloat the database" goal with
+no new dependency at all.
+
+**Why setting a chicken's `photo` field follows the same "explicit key
+present, falsy value clears it" convention as `container_empty`/other
+optional fields (§10):** `"photo" in data` distinguishes "the client
+didn't mention photos, leave it alone" from "the client explicitly sent
+`null`/empty, clear the existing one" — the same distinction the frontend
+needs anyway (`pendingPhotoDataUri` is `undefined` vs `null` vs a real
+data URI in `app.js`), so the API mirrors it instead of inventing a
+different convention for one field.
 
 ### Backtest: how the forecast performed in past months
 

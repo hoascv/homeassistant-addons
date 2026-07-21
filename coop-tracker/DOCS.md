@@ -7,6 +7,8 @@ your chickens, right from your phone via the Home Assistant sidebar.
 
 - Quick-add buttons for eggs, cleaning, feeding, sales, expenses, and
   eggs used/consumed
+- A small red/green dot in the top bar showing whether the add-on can
+  reach Home Assistant right now — tap it for the full connection detail
 - "Container was empty" checkbox on feeding entries, with a live estimate
   of how long a container/bag of that food typically lasts
 - Today / this-week egg counts, eggs on hand, last cleaning and feeding
@@ -18,9 +20,9 @@ your chickens, right from your phone via the Home Assistant sidebar.
   egg-collection forecast based on your flock — and how that forecast
   would have performed in past months, so you can see how well it's
   tracking
-- My Flock panel (🐔 icon): track individual chickens (name, breed, hatch
-  date) for an age-adjusted forecast, more accurate than flat per-breed
-  counts
+- My Flock panel (🐔 icon): track individual chickens (name, photo, breed,
+  hatch date) for an age-adjusted forecast, more accurate than flat
+  per-breed counts
 - Recent activity history with filtering and delete
 - Backup & Restore panel (download or restore the SQLite database)
 - Push notification reminder if eggs haven't been collected in a
@@ -147,13 +149,16 @@ expanded gives noticeably more width to read a long history at a glance.
 
 ### My Flock: individual chickens and breeds
 
-Tap the 🐔 icon to track chickens individually — name, breed, and hatch
-date — instead of just a flat count per breed. The moment you add at
-least one active chicken, the egg forecast switches from flat per-breed
-counts to summing each active chicken's own age-adjusted rate (a chicken
-marked **Lost** is excluded, but stays in the list). Hatch date is
-optional; without it a bird is assumed to be in its prime laying years,
-the most forgiving default.
+Tap the 🐔 icon to track chickens individually — name, photo, breed, and
+hatch date — instead of just a flat count per breed. The moment you add
+at least one active chicken, the egg forecast switches from flat
+per-breed counts to summing each active chicken's own age-adjusted rate
+(a chicken marked **Lost** is excluded, but stays in the list). Hatch
+date is optional; without it a bird is assumed to be in its prime laying
+years, the most forgiving default. A photo is optional too — tap
+**Choose File** in the chicken form to add one (resized automatically,
+so a normal phone photo won't bloat the database), and **Remove photo**
+to take it off again.
 
 Age adjustment is a simple three-stage curve, the same shape for every
 breed: no eggs before about 20 weeks old, full rate through about 18
@@ -166,6 +171,14 @@ Removing a breed doesn't touch any chicken already assigned to it — that
 chicken keeps its recorded breed name, it just won't contribute to the
 forecast until it's reassigned to a breed that still exists (or that
 breed is re-added).
+
+### Connection status dot
+
+The small dot next to the top bar's icons is green when the add-on can
+reach Home Assistant right now, red when it can't. It's checked once
+when the page loads — tap it any time for the full detail (the same
+Debug info shown in the 🔔 Notifications panel), including the specific
+error if it's red.
 
 ### Home Assistant sensors
 
