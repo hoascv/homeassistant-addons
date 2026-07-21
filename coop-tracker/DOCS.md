@@ -15,9 +15,12 @@ your chickens, right from your phone via the Home Assistant sidebar.
   all-time total
 - Trends tab: line chart (expandable to full screen) and table of eggs
   collected/sold/used over the last 3, 6, or 12 months, plus a 3-month
-  egg-collection forecast based on your flock's breed composition — and
-  how that forecast would have performed in past months, so you can see
-  how well it's tracking
+  egg-collection forecast based on your flock — and how that forecast
+  would have performed in past months, so you can see how well it's
+  tracking
+- My Flock panel (🐔 icon): track individual chickens (name, breed, hatch
+  date) for an age-adjusted forecast, more accurate than flat per-breed
+  counts
 - Recent activity history with filtering and delete
 - Backup & Restore panel (download or restore the SQLite database)
 - Push notification reminder if eggs haven't been collected in a
@@ -69,6 +72,13 @@ dropdown existed, or since removed via Manage list — editing that entry
 an extra option rather than silently swapping it for something else;
 nothing already logged gets lost or renamed.
 
+The Trends tab also has a **Feed refill cadence** table, listing every
+food type you've ever logged with its all-time average days between
+refills, how long ago it was last emptied, and how many times you've fed
+it — independent of the 3/6/12-month range used for the egg chart above
+it, since a meaningful refill average usually needs longer than that to
+build up.
+
 ## Configuration
 
 - **currency**: `DKK` (default), `USD`, `EUR`, `GBP`, `SEK`, `NOK`, `CHF`,
@@ -93,9 +103,10 @@ nothing already logged gets lost or renamed.
   stats into Home Assistant as real entities (see below), so you can put
   them on a dashboard or use them in automations.
 - **flock_isabrown_count** / **flock_sussex_count**: `3` / `2` by default.
-  How many hens of each breed you keep — used only to compute the egg
-  collection forecast on the Trends tab (see below). Set both to `0` to
-  turn the forecast off.
+  Fallback counts for the egg collection forecast (see below) — only used
+  if you haven't added any individual chickens in **🐔 My Flock**, where
+  tracking real birds gives a more accurate, age-adjusted forecast
+  instead. Set both to `0` to turn the fallback off.
 
 Set these from the add-on's **Configuration** tab, then restart the
 add-on for changes to take effect.
@@ -103,28 +114,58 @@ add-on for changes to take effect.
 ### Egg collection forecast
 
 The Trends tab projects the next 3 months of expected egg collection,
-shown as a dashed line continuing past your actual history. It starts
-from published average annual laying rates for your configured breeds
-(Isabrown ~300 eggs/year/hen, Sussex ~260 eggs/year/hen), then — once
-you've logged at least one egg — scales that baseline by how your actual
-collection over the last 30 days compares to it. There's no training
-step: it's recomputed from scratch every time you open the Trends tab, so
-it naturally tracks your flock's real performance (a hen going broody,
-molting, or a new hen coming into lay) without you doing anything. The
-forecast is intentionally a flat rate — it doesn't yet account for
-seasonal changes in day length, so a projection made in summer may run a
-little high once winter arrives, and vice versa.
+shown as a dashed line continuing past your actual history. There's no
+training step: it's recomputed from scratch every time you open the
+Trends tab, so it naturally tracks your flock's real performance (a hen
+going broody, molting, or a new hen coming into lay) without you doing
+anything. The forecast is intentionally a flat rate — it doesn't yet
+account for seasonal changes in day length, so a projection made in
+summer may run a little high once winter arrives, and vice versa.
+
+**Where the baseline comes from:** if you've added at least one chicken
+in **🐔 My Flock** (see below), the forecast uses each of your active
+chickens' actual ages. Otherwise it falls back to flat per-breed counts
+(**flock_isabrown_count** / **flock_sussex_count**, `3` and `2` by
+default) — the original method, kept for anyone who hasn't added
+individual chickens. Once you've logged at least one egg, whichever
+baseline is in play gets scaled by how your actual collection over the
+last 30 days compares to it. The Trends tab's caption tells you which
+one is active.
 
 The same dashed line also runs back through your history: for each past
 month it shows what the forecast *would have* predicted using only the
 data available at the time, next to what actually happened (also broken
 out in the table's "Forecast" column). Early months, with little or no
 prior data to work from, will tend to be less accurate; the forecast
-should track closer to actual as more collection history builds up.
+should track closer to actual as more collection history builds up. If
+you're tracking individual chickens, this also uses each bird's actual
+age *as of that past month*, not its current age.
 
 Tap the ⛶ icon on the chart to expand it to fill the screen (tap again,
 or press Esc, to go back) — turning your phone to landscape while
 expanded gives noticeably more width to read a long history at a glance.
+
+### My Flock: individual chickens and breeds
+
+Tap the 🐔 icon to track chickens individually — name, breed, and hatch
+date — instead of just a flat count per breed. The moment you add at
+least one active chicken, the egg forecast switches from flat per-breed
+counts to summing each active chicken's own age-adjusted rate (a chicken
+marked **Lost** is excluded, but stays in the list). Hatch date is
+optional; without it a bird is assumed to be in its prime laying years,
+the most forgiving default.
+
+Age adjustment is a simple three-stage curve, the same shape for every
+breed: no eggs before about 20 weeks old, full rate through about 18
+months old, and a reduced rate (80% of full) after that.
+
+The **Breeds** list underneath (Isabrown and Sussex by default, each with
+a published average eggs/year) is also yours to edit — add any breed you
+keep with its own annual-eggs estimate, or remove ones you don't need.
+Removing a breed doesn't touch any chicken already assigned to it — that
+chicken keeps its recorded breed name, it just won't contribute to the
+forecast until it's reassigned to a breed that still exists (or that
+breed is re-added).
 
 ### Home Assistant sensors
 

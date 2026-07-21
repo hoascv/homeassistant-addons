@@ -10,6 +10,7 @@
 <header class="topbar">
   <span class="topbar-icon">🥚</span>
   <h1>Coop Tracker</h1>
+  <button class="topbar-icon-btn" id="flock-open-btn" aria-label="My Flock">🐔</button>
   <button class="topbar-icon-btn" id="notify-open-btn" aria-label="Notifications">🔔</button>
   <button class="topbar-icon-btn" id="backup-open-btn" aria-label="Backup and restore">⚙️</button>
 </header>
@@ -162,6 +163,23 @@
       </thead>
       <tbody id="trends-table-body"></tbody>
     </table>
+
+    <div class="feeding-stats-summary">
+      <h2>Feed refill cadence</h2>
+      <p class="trends-forecast-caption">All-time, per food type — independent of the month range above.</p>
+      <table class="trends-table" id="feeding-stats-summary-table">
+        <thead>
+          <tr>
+            <th>Food type</th>
+            <th>Avg days</th>
+            <th>Last emptied</th>
+            <th>Fed</th>
+          </tr>
+        </thead>
+        <tbody id="feeding-stats-summary-body"></tbody>
+      </table>
+      <p class="empty-state" id="feeding-stats-summary-empty" hidden>No feeding logged yet</p>
+    </div>
   </section>
 </main>
 
@@ -258,6 +276,64 @@
 
     <div class="sheet-actions">
       <button type="button" class="btn-secondary" id="notify-close-btn">Close</button>
+    </div>
+  </div>
+</div>
+
+<div class="sheet-backdrop" id="flock-backdrop">
+  <div class="sheet">
+    <h2>My Flock</h2>
+    <p class="sheet-subtext">
+      Track individual chickens for a more accurate egg forecast — it's
+      used instead of the flat per-breed counts once you add at least one.
+    </p>
+
+    <div class="field-label-row">
+      <label>Chickens</label>
+      <button type="button" class="link-btn" id="chicken-add-btn">+ Add chicken</button>
+    </div>
+    <ul class="chicken-list" id="chicken-list"></ul>
+    <p class="empty-state" id="chicken-list-empty" hidden>No chickens added yet</p>
+
+    <div class="chicken-form" id="chicken-form" hidden>
+      <input type="hidden" id="chicken-form-id">
+      <div class="field">
+        <label>Name</label>
+        <input type="text" id="chicken-form-name" placeholder="e.g. Henrietta">
+      </div>
+      <div class="field">
+        <label>Breed</label>
+        <select id="chicken-form-breed"></select>
+      </div>
+      <div class="field">
+        <label>Hatch date (optional)</label>
+        <input type="date" id="chicken-form-hatch-date">
+      </div>
+      <div class="field">
+        <label>Status</label>
+        <select id="chicken-form-status">
+          <option value="active">Active</option>
+          <option value="lost">Lost</option>
+        </select>
+      </div>
+      <div class="sheet-actions">
+        <button type="button" class="btn-secondary" id="chicken-form-cancel-btn">Cancel</button>
+        <button type="button" class="btn-primary" id="chicken-form-save-btn">Save</button>
+      </div>
+    </div>
+
+    <div class="field-label-row flock-breeds-row">
+      <label>Breeds</label>
+    </div>
+    <ul class="breed-list" id="breed-list"></ul>
+    <div class="breed-add-row">
+      <input type="text" id="breed-new-name" placeholder="Breed name">
+      <input type="number" id="breed-new-annual-eggs" placeholder="Eggs/yr" min="1">
+      <button type="button" class="btn-secondary" id="breed-add-btn">Add</button>
+    </div>
+
+    <div class="sheet-actions">
+      <button type="button" class="btn-secondary" id="flock-close-btn">Close</button>
     </div>
   </div>
 </div>

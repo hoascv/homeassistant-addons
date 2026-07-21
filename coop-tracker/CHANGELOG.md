@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.18.0
+
+- Added **My Flock** (🐔 icon): track individual chickens — name, breed,
+  hatch date, active/lost status — instead of just a flat count per
+  breed. Breeds (Isabrown/Sussex by default, each with a published
+  eggs/year estimate) are also editable, so you can add any breed you
+  keep.
+- The egg collection forecast now uses each active chicken's actual age
+  once you've added at least one: no eggs before ~20 weeks old, full rate
+  through ~18 months, a reduced rate after — instead of a flat per-breed
+  count. Falls back to the previous flat-count method
+  (`flock_isabrown_count`/`flock_sussex_count`) if no chickens are added.
+  The forecast backtest (what it would have predicted for past months)
+  now also uses each bird's age as of that past month.
+
+## 1.17.0
+
+- Added a **Feed refill cadence** table to the Trends tab: every food
+  type you've logged, with its all-time average days between refills,
+  days since last emptied, and times fed — a one-screen comparison across
+  all your feeds, instead of checking them one at a time in the Log
+  Feeding sheet.
+
 ## 1.16.0
 
 - Food types are now stored in the database and editable from the app: a

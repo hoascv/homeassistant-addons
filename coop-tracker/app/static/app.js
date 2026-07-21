@@ -851,10 +851,47 @@ async function loadTrends() {
 
   trendsTableBody.innerHTML = historyRows + forecastRows;
 
+  const flockBasisNote =
+    data.forecast_flock_basis === "individual"
+      ? "your chickens' ages"
+      : "flat per-breed counts — add chickens in 🐔 My Flock for an age-adjusted forecast";
   trendsForecastCaption.textContent =
     data.forecast_basis === "breed_standard"
-      ? "The dashed line is based on breed averages for your flock — log a few weeks of collection to refine it. It also shows what it would have predicted for past months, so you can see how it's tracking."
-      : "The dashed line is based on breed averages for your flock, adjusted by your last 30 days of collection. Past months show what it would have predicted at the time, so you can see how it's tracking.";
+      ? `The dashed line is based on breed averages for ${flockBasisNote} — log a few weeks of collection to refine it. It also shows what it would have predicted for past months, so you can see how it's tracking.`
+      : `The dashed line is based on breed averages for ${flockBasisNote}, adjusted by your last 30 days of collection. Past months show what it would have predicted at the time, so you can see how it's tracking.`;
+
+  loadFeedingStatsSummary();
+}
+
+async function loadFeedingStatsSummary() {
+  const bodyEl = document.getElementById("feeding-stats-summary-body");
+  const emptyEl = document.getElementById("feeding-stats-summary-empty");
+  if (!bodyEl || !emptyEl) return;
+
+  let stats = [];
+  try {
+    const res = await fetch("api/feeding-stats-all");
+    stats = await res.json();
+  } catch (err) {
+    stats = [];
+  }
+
+  emptyEl.hidden = stats.length > 0;
+  bodyEl.innerHTML = stats
+    .map((row) => {
+      const avg = row.avg_days_between_empty != null ? `${row.avg_days_between_empty}` : "–";
+      const lastEmptied =
+        row.days_since_last_empty != null ? `${Math.round(row.days_since_last_empty)}d ago` : "Never";
+      return `
+        <tr>
+          <td>${escapeHtml(row.food_type)}</td>
+          <td>${avg}</td>
+          <td>${lastEmptied}</td>
+          <td>${row.total_feedings}</td>
+        </tr>
+      `;
+    })
+    .join("");
 }
 
 function switchTab(pageId) {
@@ -871,6 +908,214 @@ tabButtons.forEach((btn) => {
 });
 
 trendsRangeSelect.addEventListener("change", loadTrends);
+
+function formatChickenAge(hatchDate) {
+  if (!hatchDate) return "Unknown age";
+  const days = Math.floor((Date.now() - new Date(hatchDate).getTime()) / 86400000);
+  if (days < 30) return `${days} day${days === 1 ? "" : "s"} old`;
+  if (days < 365) {
+    const months = Math.floor(days / 30);
+    return `${months} month${months === 1 ? "" : "s"} old`;
+  }
+  const years = Math.floor(days / 365);
+  const months = Math.floor((days % 365) / 30);
+  return months > 0 ? `${years}y ${months}mo old` : `${years} year${years === 1 ? "" : "s"} old`;
+}
+
+async function loadBreedDropdownOptions(selectEl, currentValue = null) {
+  try {
+    const res = await fetch("api/breeds");
+    const breeds = await res.json();
+    selectEl.innerHTML =
+      '<option value="">No breed set</option>' +
+      breeds.map((b) => `<option value="${escapeHtml(b.name)}">${escapeHtml(b.name)}</option>`).join("");
+  } catch (err) {
+    selectEl.innerHTML = '<option value="">No breed set</option>';
+  }
+  if (currentValue) {
+    const hasOption = Array.from(selectEl.options).some((opt) => opt.value === currentValue);
+    if (!hasOption) {
+      // Preserves a breed that was removed from the list after this bird
+      // was assigned it, instead of silently reassigning it to "No breed
+      // set" — same reasoning as ensureFoodTypeOption() above.
+      const opt = document.createElement("option");
+      opt.value = currentValue;
+      opt.textContent = currentValue;
+      selectEl.appendChild(opt);
+    }
+    selectEl.value = currentValue;
+  }
+}
+
+async function loadBreedList() {
+  const listEl = document.getElementById("breed-list");
+  try {
+    const res = await fetch("api/breeds");
+    const breeds = await res.json();
+    listEl.innerHTML = breeds
+      .map(
+        (b) => `
+          <li>
+            <span>${escapeHtml(b.name)} <span class="breed-annual-eggs">(${b.annual_eggs}/yr)</span></span>
+            <button type="button" class="food-type-delete-btn breed-delete-btn" data-id="${b.id}" aria-label="Remove ${escapeHtml(b.name)}">✕</button>
+          </li>
+        `
+      )
+      .join("");
+  } catch (err) {
+    listEl.innerHTML = "<li>Could not load breeds.</li>";
+  }
+}
+
+let chickenCache = {};
+
+async function loadChickenList() {
+  const listEl = document.getElementById("chicken-list");
+  const emptyEl = document.getElementById("chicken-list-empty");
+  let chickens = [];
+  try {
+    const res = await fetch("api/chickens");
+    chickens = await res.json();
+  } catch (err) {
+    chickens = [];
+  }
+
+  chickenCache = {};
+  chickens.forEach((c) => {
+    chickenCache[c.id] = c;
+  });
+
+  emptyEl.hidden = chickens.length > 0;
+  listEl.innerHTML = chickens
+    .map(
+      (c) => `
+        <li class="chicken-item" data-id="${c.id}">
+          <div class="details">
+            <div class="title">${escapeHtml(c.name)}${c.status === "lost" ? " (lost)" : ""}</div>
+            <div class="meta">${escapeHtml(c.breed || "No breed set")} · ${formatChickenAge(c.hatch_date)}</div>
+          </div>
+          <button type="button" class="food-type-delete-btn chicken-delete-btn" data-id="${c.id}" aria-label="Remove ${escapeHtml(c.name)}">✕</button>
+        </li>
+      `
+    )
+    .join("");
+}
+
+function openChickenForm(chicken = null) {
+  const formEl = document.getElementById("chicken-form");
+  document.getElementById("chicken-form-id").value = chicken ? chicken.id : "";
+  document.getElementById("chicken-form-name").value = chicken ? chicken.name : "";
+  document.getElementById("chicken-form-hatch-date").value = chicken ? chicken.hatch_date || "" : "";
+  document.getElementById("chicken-form-status").value = chicken ? chicken.status : "active";
+  loadBreedDropdownOptions(document.getElementById("chicken-form-breed"), chicken ? chicken.breed : null);
+  formEl.hidden = false;
+}
+
+function closeChickenForm() {
+  document.getElementById("chicken-form").hidden = true;
+}
+
+document.getElementById("chicken-add-btn").addEventListener("click", () => openChickenForm(null));
+document.getElementById("chicken-form-cancel-btn").addEventListener("click", closeChickenForm);
+
+document.getElementById("chicken-form-save-btn").addEventListener("click", async () => {
+  const id = document.getElementById("chicken-form-id").value;
+  const name = document.getElementById("chicken-form-name").value.trim();
+  if (!name) {
+    alert("Name is required.");
+    return;
+  }
+  const payload = {
+    name,
+    breed: document.getElementById("chicken-form-breed").value || null,
+    hatch_date: document.getElementById("chicken-form-hatch-date").value || null,
+    status: document.getElementById("chicken-form-status").value,
+  };
+
+  try {
+    const res = id
+      ? await fetch(`api/chickens/${id}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        })
+      : await fetch("api/chickens", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      alert(data.error || "Couldn't save that chicken.");
+      return;
+    }
+    closeChickenForm();
+    loadChickenList();
+  } catch (err) {
+    alert("Couldn't save — check your connection and try again.");
+  }
+});
+
+document.getElementById("chicken-list").addEventListener("click", async (e) => {
+  const deleteBtn = e.target.closest(".chicken-delete-btn");
+  if (deleteBtn) {
+    e.stopPropagation();
+    if (confirm("Remove this chicken? This can't be undone.")) {
+      await fetch(`api/chickens/${deleteBtn.dataset.id}`, { method: "DELETE" });
+      loadChickenList();
+    }
+    return;
+  }
+
+  const item = e.target.closest(".chicken-item");
+  if (item) {
+    const chicken = chickenCache[item.dataset.id];
+    if (chicken) openChickenForm(chicken);
+  }
+});
+
+document.getElementById("breed-add-btn").addEventListener("click", async () => {
+  const name = document.getElementById("breed-new-name").value.trim();
+  const annualEggsInput = document.getElementById("breed-new-annual-eggs");
+  if (!name || !annualEggsInput.value) return;
+
+  const res = await fetch("api/breeds", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, annual_eggs: parseInt(annualEggsInput.value, 10) }),
+  });
+  if (res.ok) {
+    document.getElementById("breed-new-name").value = "";
+    annualEggsInput.value = "";
+    loadBreedList();
+  } else {
+    const data = await res.json().catch(() => ({}));
+    alert(data.error || "Couldn't add that breed.");
+  }
+});
+
+document.getElementById("breed-list").addEventListener("click", async (e) => {
+  const deleteBtn = e.target.closest(".breed-delete-btn");
+  if (!deleteBtn) return;
+  await fetch(`api/breeds/${deleteBtn.dataset.id}`, { method: "DELETE" });
+  loadBreedList();
+});
+
+const flockBackdrop = document.getElementById("flock-backdrop");
+const flockOpenBtn = document.getElementById("flock-open-btn");
+const flockCloseBtn = document.getElementById("flock-close-btn");
+
+flockOpenBtn.addEventListener("click", () => {
+  flockBackdrop.classList.add("open");
+  closeChickenForm();
+  loadChickenList();
+  loadBreedList();
+});
+flockCloseBtn.addEventListener("click", () => flockBackdrop.classList.remove("open"));
+flockBackdrop.addEventListener("click", (e) => {
+  if (e.target === flockBackdrop) flockBackdrop.classList.remove("open");
+});
 
 loadSummary();
 loadHistory();

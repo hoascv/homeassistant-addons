@@ -3,9 +3,12 @@ from datetime import datetime, timedelta
 import app as coopapp
 
 
+_DEFAULT_BREED_EGGS = dict(coopapp.DEFAULT_BREEDS)
+
+
 def _baseline_daily(isabrown=3, sussex=2):
-    return isabrown * (coopapp.BREED_ANNUAL_EGGS["isabrown"] / 365) + sussex * (
-        coopapp.BREED_ANNUAL_EGGS["sussex"] / 365
+    return isabrown * (_DEFAULT_BREED_EGGS["Isabrown"] / 365) + sussex * (
+        _DEFAULT_BREED_EGGS["Sussex"] / 365
     )
 
 

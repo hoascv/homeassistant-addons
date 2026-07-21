@@ -446,6 +446,106 @@ main {
   cursor: pointer;
 }
 
+.chicken-list {
+  list-style: none;
+  margin: 0 0 0.75rem;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.chicken-item {
+  background: var(--bg);
+  border-radius: 10px;
+  padding: 0.5rem 0.75rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+}
+
+.chicken-item .title {
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.chicken-item .meta {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.chicken-form {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.75rem 0.75rem 0.25rem;
+  margin-bottom: 0.9rem;
+}
+
+.flock-breeds-row {
+  margin-top: 1.25rem;
+}
+
+.breed-list {
+  list-style: none;
+  margin: 0 0 0.5rem;
+  padding: 0;
+  max-height: 8rem;
+  overflow-y: auto;
+}
+
+.breed-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.85rem;
+  padding: 0.3rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.breed-list li:last-child {
+  border-bottom: none;
+}
+
+.breed-annual-eggs {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+.breed-add-row {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.breed-add-row input {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 0.4rem 0.6rem;
+  font-size: 0.85rem;
+}
+
+.breed-add-row input:first-child {
+  flex: 1;
+}
+
+.breed-add-row input:nth-child(2) {
+  width: 5rem;
+}
+
+.breed-add-row button {
+  border: none;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #fff;
+  padding: 0.4rem 0.8rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
 .stepper {
   display: flex;
   align-items: center;
@@ -719,4 +819,9 @@ main {
 .trends-table td:first-child {
   text-align: left;
   color: var(--text-muted);
+}
+
+.feeding-stats-summary h2 {
+  font-size: 1rem;
+  margin: 0 0 0.25rem;
 }

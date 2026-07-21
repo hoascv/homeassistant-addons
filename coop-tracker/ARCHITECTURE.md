@@ -94,12 +94,19 @@ want to query "all activity" or "one type across time" without joins.
 Six tables would mean six near-identical CRUD paths for a data volume
 (a handful of rows a day) where normalization buys nothing.
 
-There is a second table, `food_types` (id, name — see §10), added in
-v1.16.0. It doesn't belong in `logs` and doesn't break the "one table"
-reasoning above: it isn't logged activity at all, it's a small reference
-list the Log Feeding dropdown reads from and writes to — categorically
-different from an entry type, with nothing to gain from being force-fit
-into the polymorphic table's shape.
+There are three further tables, none of which belong in `logs` and none
+of which break the "one table" reasoning above — none of them are logged
+activity, they're reference/roster data the relevant UI reads from and
+writes to, categorically different from an entry type:
+
+- `food_types` (id, name), added in v1.16.0 — see §10.
+- `breeds` (id, name, annual_eggs), added in v1.18.0 — see §9.
+- `chickens` (id, name, breed, hatch_date, status), added in v1.18.0 —
+  see §9. `breed` is a plain `TEXT` column matched against `breeds.name`
+  (not a foreign key), the same denormalized-by-string pattern as
+  `logs.food_type` against `food_types.name` — deleting a breed doesn't
+  cascade or corrupt a chicken's record, it just means that name no
+  longer resolves to a rate (§9 explains the consequence).
 
 ## 5. Home Assistant integration
 
@@ -264,6 +271,19 @@ that. Now a failed write shows an alert and, critically, leaves the sheet
 open with the user's input intact instead of discarding it, so retrying
 doesn't mean re-typing everything.
 
+**Why My Flock (v1.18.0) is a fourth topbar icon + sheet** rather than
+folded into an existing one: it's two related but distinct management
+lists (chickens, breeds) with enough fields (a chicken has four) that it
+warrants its own space, the same way Backup & Restore and Notifications
+already each get their own icon rather than being crammed into one
+"settings" sheet. Internally it reuses patterns already established
+elsewhere rather than inventing new ones: the breed list is
+add/delete-only, styled and wired exactly like the food-type manager
+(§10) it was modeled on, and the chicken form's breed `<select>` uses the
+very same `ensureFoodTypeOption`-style "preserve a value that's no longer
+a valid option" logic to survive a deleted breed without corrupting which
+breed a chicken is recorded as.
+
 ## 8. Config & options
 
 Add-on configuration flows one direction: `config.yaml`'s `schema` defines
@@ -286,9 +306,8 @@ The Trends tab projects 3 months of expected egg collection
 (`_forecast_daily_rate`, `_compute_forecast`), shown as a dashed line
 continuing past the actual history. It's a blend of two inputs:
 
-1. A **breed-standard baseline**: published average annual eggs/hen for
-   the configured flock (`BREED_ANNUAL_EGGS`, `flock_isabrown_count` /
-   `flock_sussex_count` options), converted to eggs/day.
+1. A **flock baseline** (`_flock_baseline_daily_rate`) — see below for
+   where this comes from.
 2. The **actual daily rate** over the trailing 30 days, once at least one
    egg has ever been logged.
 
@@ -296,6 +315,61 @@ continuing past the actual history. It's a blend of two inputs:
 clamped to `[0.2, 1.8]` so one unusually good or bad week can't swing the
 forecast wildly. Each future month's projection is just that rate × the
 number of days in that month.
+
+### Where the baseline comes from
+
+`_flock_baseline_daily_rate(conn, now)` returns `(basis, daily_rate)`:
+
+- **`"individual"`** — if at least one chicken with `status = 'active'`
+  exists in the `chickens` table (v1.18.0), the baseline is the sum of
+  each one's own age-adjusted rate (`_chicken_daily_rate`): its breed's
+  `annual_eggs` (looked up in `breeds` by name) ÷ 365, multiplied by a
+  simple age-based stage multiplier (below).
+- **`"flat_counts"`** — otherwise, the original v1.9.0-era calculation:
+  `flock_isabrown_count` / `flock_sussex_count` × that breed's
+  `annual_eggs` ÷ 365, looked up in `breeds` by name ("Isabrown" /
+  "Sussex") rather than a hardcoded dict, so editing a breed's
+  `annual_eggs` in My Flock affects this fallback path too, not just the
+  individual-chicken path.
+
+Both `_compute_forecast` and `_compute_backtest` (via `_forecast_daily_rate`)
+expose which basis is active as `forecast_flock_basis`, surfaced in the
+Trends tab caption so it's never a silent switch.
+
+**Why individual chickens *replace* the flat counts instead of both being
+combined:** the two are different levels of fidelity for the same
+question ("how many eggs should this flock produce today") — averaging a
+precise per-bird answer with a coarse flat-count answer would just make
+the precise one worse. Falling back to flat counts only when zero active
+chickens exist means existing installs (from before v1.18.0) keep working
+unchanged, and newly added chickens take over immediately, with no
+"which mode am I in" setting to manage.
+
+**The age curve (`_age_stage_multiplier`)** is deliberately one simple
+3-stage shape shared by every breed — not laying below
+`POINT_OF_LAY_DAYS` (~20 weeks), full rate through `PRIME_END_DAYS`
+(~18 months), `REDUCED_RATE_MULTIPLIER` (0.8×) after — applied to
+whichever breed's own `annual_eggs` a bird has. A more realistic model
+would vary this curve per breed (a production hybrid like Isabrown peaks
+sharper and declines faster than a heritage dual-purpose breed like
+Sussex) and decline further year over year rather than stopping at one
+reduced rate — deliberately not built: it's a lot more surface area to
+get right and explain for a personal add-on, and the per-breed
+`annual_eggs` figure already captures most of the difference between
+breeds that actually matters for a flat forecast. A chicken with no
+`hatch_date` is assumed to be in its prime (multiplier 1.0) — the most
+forgiving default, rather than 0 (which would silently zero out a real
+laying hen just because its exact hatch date isn't known) or a mid-range
+guess that's no more justified than "assume it's productive."
+
+**Why deleting a breed doesn't error or silently reassign affected
+chickens:** `_get_breed_annual_eggs` returns `None` for a name with no
+match in `breeds`, and `_chicken_daily_rate` treats that as a 0 rate —
+the chicken record itself, including its `breed` string, is untouched.
+This mirrors `logs.food_type` surviving a food type's removal (§10): the
+`breed` column was never a foreign key, so there's nothing to cascade,
+and the fix (reassign the bird, or re-add the breed) is always available
+without any data having been lost in the meantime.
 
 **Why a blend instead of pure breed-standard or pure historical trend:**
 pure breed-standard math is accurate on day one (no history needed) but
@@ -347,6 +421,24 @@ One consequence worth knowing: the current, still-in-progress month's
 backtest/forecast is a *full-month* projection, compared in the UI against
 that month's *partial* actual-so-far — they're expected to diverge until
 the month ends, that's not a forecast miss.
+
+**Individual chickens back this same way, for free (v1.18.0):**
+`_chicken_daily_rate(conn, chicken, now)` computes age as `(now -
+hatch_date).days`, so calling it with a past `now` (as the backtest does)
+naturally computes the bird's age *as of that past month*, not its
+current age — no separate historical-age logic needed, same reuse as the
+rest of this section. A consequence worth knowing here too: a chicken's
+`hatch_date` is treated as always having been true, even for a roster
+entry added to the app today — backtesting a year-old month with a bird
+entered only today still uses that bird's real age back then, which is
+the intended behavior for a retroactive tool, not a bug. Also: if no
+chickens existed yet at some point in your history but you've since added
+some, `_flock_baseline_daily_rate` still switches entirely to the
+individual-chicken basis for *every* backtested month, including ones
+that predate adding any chickens — there's no per-month record of "which
+basis was active back then" to preserve, and recomputing history with
+better (per-bird) data once you have it is treated as an improvement, not
+a bug to guard against.
 
 ## 10. Feed duration estimate
 
@@ -403,14 +495,13 @@ called with the food type that was already selected, not the new one, so
 the add flow only affects the dropdown's contents, never its
 current value.
 
-**Why the estimate is shown inline in the Log Feeding sheet** rather than
-as a Home-page stat or a Trends chart: that's where the question
+**Why the single-food-type estimate is shown inline in the Log Feeding
+sheet** rather than only as a dashboard number: that's where the question
 ("how's this container doing, is it about time to check on more feed?")
-actually comes up — right as you're about to log a feeding, not as an
-always-on dashboard number. `updateFeedingStatsHint()` fetches and
-re-renders it whenever the food-type dropdown changes, so it stays
-relevant if you're logging a different feed than usual in the same
-session.
+actually comes up — right as you're about to log a feeding.
+`updateFeedingStatsHint()` fetches and re-renders it whenever the
+food-type dropdown changes, so it stays relevant if you're logging a
+different feed than usual in the same session.
 
 **Why an average of historical intervals instead of, say, a countdown
 from projected days-remaining:** a countdown would need to know the bag
@@ -422,6 +513,41 @@ beyond the one checkbox. Needs at least two "empty" events for the
 average to appear at all; with only one there's a "last emptied N days
 ago" but no average yet — shown as such rather than a misleadingly
 precise number from a single data point.
+
+### Feed refill cadence table (Trends tab, v1.17.0)
+
+`_compute_all_feeding_stats(conn, now)` answers the same question as
+`_compute_feeding_stats`, for every food type at once — exposed at
+`/api/feeding-stats-all`, rendered as a table on the Trends tab. It's a
+thin wrapper: find every distinct `food_type` ever logged, then call the
+existing per-food-type function once per name. No new stats logic, just
+a fan-out over it.
+
+**Why it's driven by `DISTINCT food_type` from `logs`, not by the
+`food_types` management table:** the management list (§10 above) governs
+what's *offered* for new entries; this table is a retrospective summary
+of what's actually happened. Basing it on the management list would drop
+a food type's history the moment it's removed from that list — exactly
+the kind of silent data loss `ensureFoodTypeOption()` was built to avoid
+elsewhere. Querying `logs` directly means the summary always reflects
+everything you've ever logged, regardless of what's still offered going
+forward.
+
+**Why it ignores the chart's 3/6/12-month range selector** and is always
+all-time: a meaningful "average days between refills" typically needs
+more history than even a 3-month window provides — a food type refilled
+every 20 days only shows 1-2 refill events in a 3-month window, too few
+for the average to mean much. Scoping it to the selector would make the
+number flicker between "reasonable" and "not enough data" as someone
+casually changes the range for the unrelated egg chart above it.
+
+**Why `total_feedings` (every feeding logged, whether or not the
+container was empty) is shown alongside `empty_count`** (only the
+"container was empty" ones): a food type fed 40 times with 2 refills
+reads very differently from one fed 3 times with 2 refills, even though
+both would show the same 1-2 "empty" data points — the total gives cheap
+context for how much history backs the average, at the cost of one extra
+`COUNT(*)` query already grouped by the same normalized `food_type` match.
 
 ## 11. Backup & restore
 

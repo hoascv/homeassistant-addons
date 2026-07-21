@@ -145,3 +145,77 @@ def test_update_without_container_empty_field_preserves_existing_value(client):
     entries = client.get("/api/entries?type=feeding").get_json()
     assert entries[0]["container_empty"] == 1
     assert entries[0]["notes"] == "topped up"
+
+
+def test_feeding_stats_total_feedings_counts_regardless_of_container_empty(client):
+    client.post("/api/log", json={"type": "feeding", "food_type": "pellets", "container_empty": False})
+    client.post("/api/log", json={"type": "feeding", "food_type": "pellets", "container_empty": True})
+    client.post("/api/log", json={"type": "feeding", "food_type": "pellets", "container_empty": False})
+
+    body = client.get("/api/feeding-stats?food_type=pellets").get_json()
+    assert body["total_feedings"] == 3
+    assert body["empty_count"] == 1
+
+
+def test_feeding_stats_all_empty_when_no_feedings_logged(client):
+    body = client.get("/api/feeding-stats-all").get_json()
+    assert body == []
+
+
+def test_feeding_stats_all_covers_every_logged_food_type(client):
+    client.post(
+        "/api/log",
+        json={
+            "type": "feeding",
+            "food_type": "Pellets",
+            "container_empty": True,
+            "ts": "2026-06-01T10:00:00",
+        },
+    )
+    client.post(
+        "/api/log",
+        json={
+            "type": "feeding",
+            "food_type": "Pellets",
+            "container_empty": True,
+            "ts": "2026-06-19T10:00:00",
+        },
+    )
+    client.post(
+        "/api/log",
+        json={
+            "type": "feeding",
+            "food_type": "Scratch grains",
+            "container_empty": False,
+            "ts": "2026-07-01T10:00:00",
+        },
+    )
+
+    body = client.get("/api/feeding-stats-all").get_json()
+    by_type = {row["food_type"]: row for row in body}
+
+    assert set(by_type) == {"Pellets", "Scratch grains"}
+    assert by_type["Pellets"]["total_feedings"] == 2
+    assert by_type["Pellets"]["avg_days_between_empty"] == 18.0
+    assert by_type["Scratch grains"]["total_feedings"] == 1
+    assert by_type["Scratch grains"]["empty_count"] == 0
+    assert by_type["Scratch grains"]["avg_days_between_empty"] is None
+
+
+def test_feeding_stats_all_sorted_alphabetically_case_insensitive(client):
+    for food_type in ("scratch grains", "Layer feed", "pellets"):
+        client.post("/api/log", json={"type": "feeding", "food_type": food_type})
+
+    body = client.get("/api/feeding-stats-all").get_json()
+    names = [row["food_type"] for row in body]
+    assert names == ["Layer feed", "pellets", "scratch grains"]
+
+
+def test_feeding_stats_all_survives_food_type_removed_from_management_list(client):
+    created = client.post("/api/food-types", json={"name": "Temporary feed"}).get_json()
+    client.post("/api/log", json={"type": "feeding", "food_type": "Temporary feed"})
+    client.delete(f"/api/food-types/{created['id']}")
+
+    body = client.get("/api/feeding-stats-all").get_json()
+    names = [row["food_type"] for row in body]
+    assert "Temporary feed" in names

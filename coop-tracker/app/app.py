@@ -12,7 +12,7 @@ from datetime import datetime, time as dtime, timedelta
 import flask
 from flask import Flask, g, jsonify, render_template, request, send_file
 
-APP_VERSION = "1.16.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.18.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("COOP_DB_PATH", "/data/coop.db")
 OPTIONS_PATH = os.environ.get("COOP_OPTIONS_PATH", "/data/options.json")
@@ -34,15 +34,24 @@ CURRENCIES = {
 }
 DEFAULT_CURRENCY = "DKK"
 
-# Published average annual eggs/hen/year, used as the forecast baseline
-# before/alongside actual logged history — see _forecast_daily_rate().
-BREED_ANNUAL_EGGS = {
-    "isabrown": 300,
-    "sussex": 260,
-}
 FORECAST_MONTHS = 3
 FORECAST_TRAILING_DAYS = 30
 FORECAST_RATIO_BOUNDS = (0.2, 1.8)  # dampens noise from a single unusual week
+
+# Simple 3-stage age-based laying curve applied to a bird's breed's annual
+# rate — see _chicken_daily_rate(). Deliberately one universal curve
+# shape (not per-breed) — see ARCHITECTURE.md §9.
+POINT_OF_LAY_DAYS = 140  # ~20 weeks: no eggs before this age
+PRIME_END_DAYS = 550  # ~18 months: full rate through this age
+REDUCED_RATE_MULTIPLIER = 0.8  # rate applied from PRIME_END_DAYS onward
+
+# Seeded into the breeds table the first time it's created (empty table
+# only — see init_db()); editable afterwards via /api/breeds. Values are
+# published average annual eggs/hen/year.
+DEFAULT_BREEDS = [
+    ("Isabrown", 300),
+    ("Sussex", 260),
+]
 
 # Seeded into the food_types table the first time it's created (empty
 # table only — see init_db()); editable afterwards via /api/food-types.
@@ -154,6 +163,34 @@ def init_db():
             "INSERT INTO food_types (name) VALUES (?)",
             [(name,) for name in DEFAULT_FOOD_TYPES],
         )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS breeds (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            annual_eggs INTEGER NOT NULL
+        )
+        """
+    )
+    breed_count = conn.execute("SELECT COUNT(*) FROM breeds").fetchone()[0]
+    if breed_count == 0:
+        conn.executemany(
+            "INSERT INTO breeds (name, annual_eggs) VALUES (?, ?)",
+            DEFAULT_BREEDS,
+        )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS chickens (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            breed TEXT,
+            hatch_date TEXT,
+            status TEXT NOT NULL DEFAULT 'active'
+        )
+        """
+    )
 
     conn.commit()
     conn.close()
@@ -503,15 +540,67 @@ def _compute_trends(conn, now, months):
     }
 
 
+def _get_breed_annual_eggs(conn, breed_name):
+    if not breed_name:
+        return None
+    row = conn.execute(
+        "SELECT annual_eggs FROM breeds WHERE LOWER(TRIM(name)) = LOWER(TRIM(?))",
+        (breed_name,),
+    ).fetchone()
+    return row["annual_eggs"] if row else None
+
+
+def _age_stage_multiplier(age_days):
+    """Simple 3-stage laying curve: not yet laying, full rate through a
+    "prime" window, reduced rate after — one universal shape applied to
+    whatever the bird's breed's own annual rate is (see ARCHITECTURE.md
+    §9 for why this isn't a more detailed multi-year curve)."""
+    if age_days < POINT_OF_LAY_DAYS:
+        return 0.0
+    if age_days < PRIME_END_DAYS:
+        return 1.0
+    return REDUCED_RATE_MULTIPLIER
+
+
+def _chicken_daily_rate(conn, chicken, now):
+    annual_eggs = _get_breed_annual_eggs(conn, chicken["breed"])
+    if not annual_eggs:
+        return 0.0  # unknown/removed breed: no rate to go on
+
+    if not chicken["hatch_date"]:
+        stage_multiplier = 1.0  # unknown age: assume prime, the most forgiving default
+    else:
+        hatch = datetime.fromisoformat(chicken["hatch_date"])
+        stage_multiplier = _age_stage_multiplier((now - hatch).days)
+
+    return (annual_eggs / 365) * stage_multiplier
+
+
+def _flock_baseline_daily_rate(conn, now):
+    """The forecast's starting point before blending in actual history
+    (see _forecast_daily_rate below): the sum of each active chicken's
+    age-adjusted daily rate, or — if no chickens have been added yet — the
+    flat per-breed counts (flock_isabrown_count / flock_sussex_count),
+    kept for backward compatibility with installs from before individual
+    tracking existed. Returns (basis, daily_rate) where basis is
+    "individual" or "flat_counts", so callers can report which was used."""
+    chickens = conn.execute("SELECT * FROM chickens WHERE status = 'active'").fetchall()
+    if chickens:
+        return "individual", sum(_chicken_daily_rate(conn, c, now) for c in chickens)
+
+    counts = get_flock_counts()
+    isabrown_eggs = _get_breed_annual_eggs(conn, "Isabrown") or 0
+    sussex_eggs = _get_breed_annual_eggs(conn, "Sussex") or 0
+    baseline = counts["isabrown"] * (isabrown_eggs / 365) + counts["sussex"] * (sussex_eggs / 365)
+    return "flat_counts", baseline
+
+
 def _forecast_daily_rate(conn, now):
-    """Expected eggs/day, blending breed-standard rates with recent actual
+    """Expected eggs/day, blending a flock baseline with recent actual
     performance. Recomputed from scratch on every call — no stored model,
     no training step — so it "self-corrects" simply by always looking at
     the last FORECAST_TRAILING_DAYS as of `now`."""
-    counts = get_flock_counts()
-    baseline_daily = sum(
-        counts[breed] * (BREED_ANNUAL_EGGS[breed] / 365) for breed in BREED_ANNUAL_EGGS
-    )
+    _, baseline_daily = _flock_baseline_daily_rate(conn, now)
     if baseline_daily <= 0:
         return 0.0
 
@@ -535,6 +624,7 @@ def _forecast_daily_rate(conn, now):
 
 def _compute_forecast(conn, now, months=FORECAST_MONTHS):
     daily_rate = _forecast_daily_rate(conn, now)
+    flock_basis, _ = _flock_baseline_daily_rate(conn, now)
     ever_logged = conn.execute(
         "SELECT COUNT(*) AS n FROM logs WHERE type = 'egg'"
     ).fetchone()["n"]
@@ -558,6 +648,7 @@ def _compute_forecast(conn, now, months=FORECAST_MONTHS):
         "forecast_collected": values,
         "forecast_daily_rate": round(daily_rate, 2),
         "forecast_basis": "breed_standard" if ever_logged == 0 else "blended",
+        "forecast_flock_basis": flock_basis,
     }
 
 
@@ -596,11 +687,17 @@ def _compute_feeding_stats(conn, food_type, now):
     if not food_type:
         return {
             "food_type": food_type,
+            "total_feedings": 0,
             "empty_count": 0,
             "last_empty": None,
             "days_since_last_empty": None,
             "avg_days_between_empty": None,
         }
+
+    total_feedings = conn.execute(
+        "SELECT COUNT(*) AS n FROM logs WHERE type = 'feeding' AND LOWER(TRIM(food_type)) = LOWER(TRIM(?))",
+        (food_type,),
+    ).fetchone()["n"]
 
     rows = conn.execute(
         """
@@ -624,6 +721,7 @@ def _compute_feeding_stats(conn, food_type, now):
 
     return {
         "food_type": food_type,
+        "total_feedings": total_feedings,
         "empty_count": len(timestamps),
         "last_empty": last_empty.isoformat() if last_empty else None,
         "days_since_last_empty": (
@@ -633,10 +731,31 @@ def _compute_feeding_stats(conn, food_type, now):
     }
 
 
+def _compute_all_feeding_stats(conn, now):
+    """Feeding stats (see _compute_feeding_stats) for every food type that
+    has ever actually been logged — not just the ones currently in the
+    food_types management list, so removing one doesn't drop its history
+    from this retrospective summary."""
+    rows = conn.execute(
+        """
+        SELECT DISTINCT food_type FROM logs
+        WHERE type = 'feeding' AND food_type IS NOT NULL AND TRIM(food_type) != ''
+        ORDER BY food_type COLLATE NOCASE ASC
+        """
+    ).fetchall()
+    return [_compute_feeding_stats(conn, row["food_type"], now) for row in rows]
+
+
 @app.route("/api/feeding-stats")
 def api_feeding_stats():
     db = get_db()
     return jsonify(_compute_feeding_stats(db, request.args.get("food_type", ""), datetime.now()))
+
+
+@app.route("/api/feeding-stats-all")
+def api_feeding_stats_all():
+    db = get_db()
+    return jsonify(_compute_all_feeding_stats(db, datetime.now()))
 
 
 @app.route("/api/food-types")
@@ -669,6 +788,125 @@ def api_add_food_type():
 def api_delete_food_type(food_type_id):
     db = get_db()
     db.execute("DELETE FROM food_types WHERE id = ?", (food_type_id,))
+    db.commit()
+    return "", 204
+
+
+@app.route("/api/breeds")
+def api_breeds():
+    db = get_db()
+    rows = db.execute("SELECT id, name, annual_eggs FROM breeds ORDER BY id ASC").fetchall()
+    return jsonify([dict(row) for row in rows])
+
+
+@app.route("/api/breeds", methods=["POST"])
+def api_add_breed():
+    data = request.get_json(force=True, silent=True) or {}
+    name = (data.get("name") or "").strip()
+    if not name:
+        return jsonify({"error": "name is required"}), 400
+
+    try:
+        annual_eggs = int(data.get("annual_eggs"))
+    except (TypeError, ValueError):
+        return jsonify({"error": "annual_eggs must be a number"}), 400
+    if annual_eggs <= 0:
+        return jsonify({"error": "annual_eggs must be positive"}), 400
+
+    db = get_db()
+    existing = db.execute("SELECT id FROM breeds WHERE LOWER(name) = LOWER(?)", (name,)).fetchone()
+    if existing:
+        return jsonify({"error": "that breed is already in the list"}), 400
+
+    cur = db.execute("INSERT INTO breeds (name, annual_eggs) VALUES (?, ?)", (name, annual_eggs))
+    db.commit()
+    return jsonify({"id": cur.lastrowid, "name": name, "annual_eggs": annual_eggs}), 201
+
+
+@app.route("/api/breeds/<int:breed_id>", methods=["DELETE"])
+def api_delete_breed(breed_id):
+    db = get_db()
+    db.execute("DELETE FROM breeds WHERE id = ?", (breed_id,))
+    db.commit()
+    return "", 204
+
+
+def _parse_hatch_date(value):
+    if not value:
+        return None, None
+    try:
+        return datetime.fromisoformat(value).date().isoformat(), None
+    except ValueError:
+        return None, "invalid hatch_date"
+
+
+@app.route("/api/chickens")
+def api_chickens():
+    db = get_db()
+    now = datetime.now()
+    rows = [dict(row) for row in db.execute("SELECT * FROM chickens ORDER BY id ASC").fetchall()]
+    for row in rows:
+        row["daily_rate"] = round(_chicken_daily_rate(db, row, now), 2)
+    return jsonify(rows)
+
+
+@app.route("/api/chickens", methods=["POST"])
+def api_add_chicken():
+    data = request.get_json(force=True, silent=True) or {}
+    name = (data.get("name") or "").strip()
+    if not name:
+        return jsonify({"error": "name is required"}), 400
+
+    breed = (data.get("breed") or "").strip() or None
+    hatch_date, err = _parse_hatch_date(data.get("hatch_date"))
+    if err:
+        return jsonify({"error": err}), 400
+    status = data.get("status") or "active"
+    if status not in ("active", "lost"):
+        return jsonify({"error": "invalid status"}), 400
+
+    db = get_db()
+    cur = db.execute(
+        "INSERT INTO chickens (name, breed, hatch_date, status) VALUES (?, ?, ?, ?)",
+        (name, breed, hatch_date, status),
+    )
+    db.commit()
+    return jsonify({"id": cur.lastrowid}), 201
+
+
+@app.route("/api/chickens/<int:chicken_id>", methods=["PUT"])
+def api_update_chicken(chicken_id):
+    db = get_db()
+    row = db.execute("SELECT * FROM chickens WHERE id = ?", (chicken_id,)).fetchone()
+    if row is None:
+        return jsonify({"error": "not found"}), 404
+
+    data = request.get_json(force=True, silent=True) or {}
+
+    name = (data.get("name", row["name"]) or "").strip()
+    if not name:
+        return jsonify({"error": "name is required"}), 400
+
+    breed = data.get("breed", row["breed"])
+    hatch_date, err = _parse_hatch_date(data.get("hatch_date", row["hatch_date"]))
+    if err:
+        return jsonify({"error": err}), 400
+    status = data.get("status", row["status"])
+    if status not in ("active", "lost"):
+        return jsonify({"error": "invalid status"}), 400
+
+    db.execute(
+        "UPDATE chickens SET name = ?, breed = ?, hatch_date = ?, status = ? WHERE id = ?",
+        (name, breed, hatch_date, status, chicken_id),
+    )
+    db.commit()
+    return jsonify({"id": chicken_id}), 200
+
+
+@app.route("/api/chickens/<int:chicken_id>", methods=["DELETE"])
+def api_delete_chicken(chicken_id):
+    db = get_db()
+    db.execute("DELETE FROM chickens WHERE id = ?", (chicken_id,))
     db.commit()
     return "", 204
 
