@@ -685,14 +685,24 @@ locales whose Excel defaults to semicolons can use its import dialog
 
 ## 13. Serving model
 
-Flask's built-in dev server (`app.run(host="0.0.0.0", port=8099)`) *is*
-the production server here — there's no gunicorn/uWSGI in front of it.
+Served by **waitress** (v1.25.0; previously Flask's dev server), from the
+same `python app.py` entry point: `serve(app, host="0.0.0.0", port=port)`,
+where the port defaults to 8099 and can be overridden with `COOP_PORT`
+(same env-override pattern as `COOP_DB_PATH`/`COOP_OPTIONS_PATH`; used by
+the e2e test fixture to pick a free port). Ingress config is unchanged.
 
-**Why that's an accepted tradeoff, not an oversight:** the add-on is
-single-user, LAN-only, reached exclusively through the Supervisor's
-authenticated ingress proxy (never a directly exposed port — there's no
-`ports:` mapping in `config.yaml`). The concurrency and hardening a
-production WSGI server buys don't apply to that traffic profile.
+**Why waitress specifically, not gunicorn:** the load-bearing property is
+that waitress is a **single-process, threaded** server. A prefork server
+with N>1 workers would import the module N times — N copies of
+`_background_loop` (duplicate reminders, N× the HA sensor traffic) and N
+copies of the `_reminder_last_checked_date` fast-path global. Waitress
+preserves the one-process/one-background-thread invariant §6 depends on,
+while removing the dev server's "not for production" warning and its
+single-threaded request handling. It's also pure Python, so it installs
+without compilation on every base image in `build.yaml`. Requests are now
+genuinely concurrent across threads, which the DB access patterns already
+tolerate: connection-per-request via `flask.g` (§4), connection-per-thread
+everywhere else.
 
 ## 14. Packaging & init
 

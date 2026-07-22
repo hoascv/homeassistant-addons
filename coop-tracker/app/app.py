@@ -16,7 +16,7 @@ from datetime import date, datetime, time as dtime, timedelta
 import flask
 from flask import Flask, Response, g, jsonify, render_template, request, send_file
 
-APP_VERSION = "1.24.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.25.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("COOP_DB_PATH", "/data/coop.db")
 OPTIONS_PATH = os.environ.get("COOP_OPTIONS_PATH", "/data/options.json")
@@ -1305,7 +1305,11 @@ def _log_startup_debug_info():
 
 
 if __name__ == "__main__":
+    from waitress import serve
+
     init_db()
     _log_startup_debug_info()
     threading.Thread(target=_background_loop, daemon=True).start()
-    app.run(host="0.0.0.0", port=8099)
+    port = int(os.environ.get("COOP_PORT", "8099"))
+    print(f"[Coop Tracker] serving on 0.0.0.0:{port} (waitress)", flush=True)
+    serve(app, host="0.0.0.0", port=port)

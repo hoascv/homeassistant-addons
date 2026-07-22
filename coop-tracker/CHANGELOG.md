@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.25.0
+
+- The app is now served by a production WSGI server (waitress) instead of
+  Flask's development server — the "development server" warning disappears
+  from the add-on log, and requests are handled concurrently. No
+  configuration changes needed.
+
 ## 1.24.0
 
 - New **Export entries as CSV** button in the Backup & Restore sheet:
