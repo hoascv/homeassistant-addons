@@ -1,5 +1,7 @@
 import base64
 import binascii
+import csv
+import io
 import json
 import os
 import platform
@@ -14,7 +16,7 @@ from datetime import date, datetime, time as dtime, timedelta
 import flask
 from flask import Flask, Response, g, jsonify, render_template, request, send_file
 
-APP_VERSION = "1.23.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.24.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("COOP_DB_PATH", "/data/coop.db")
 OPTIONS_PATH = os.environ.get("COOP_OPTIONS_PATH", "/data/options.json")
@@ -1226,6 +1228,34 @@ def api_backup():
     db.commit()
     filename = f"coop-tracker-backup-{datetime.now().strftime('%Y%m%d-%H%M%S')}.db"
     return send_file(DB_PATH, as_attachment=True, download_name=filename)
+
+
+# Mirrors the logs table's columns exactly — the export is a faithful dump
+# for spreadsheets/analysis, not a curated report, and deliberately one-way
+# (only the .db backup can be restored, see api_restore).
+EXPORT_COLUMNS = (
+    "id", "type", "ts", "count", "food_type", "amount",
+    "notes", "price", "cost", "category", "container_empty", "given_away",
+)
+
+
+@app.route("/api/export.csv")
+def api_export_csv():
+    db = get_db()
+    rows = db.execute("SELECT * FROM logs ORDER BY ts ASC").fetchall()
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(EXPORT_COLUMNS)
+    for row in rows:
+        writer.writerow(
+            ["" if row[col] is None else row[col] for col in EXPORT_COLUMNS]
+        )
+
+    filename = f"coop-tracker-export-{datetime.now().strftime('%Y%m%d-%H%M%S')}.csv"
+    response = Response(buf.getvalue(), mimetype="text/csv")
+    response.headers["Content-Disposition"] = f"attachment; filename={filename}"
+    return response
 
 
 def _is_valid_backup(path):

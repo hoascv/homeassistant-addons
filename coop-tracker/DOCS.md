@@ -25,7 +25,10 @@ your chickens, right from your phone via the Home Assistant sidebar.
   hatch date) for an age-adjusted forecast, more accurate than flat
   per-breed counts
 - Recent activity history with filtering and delete
-- Backup & Restore panel (download or restore the SQLite database)
+- Backup & Restore panel (download or restore the SQLite database), plus
+  a one-way CSV export of all entries for spreadsheets — comma-delimited,
+  so if your spreadsheet app expects semicolons (e.g. Danish Excel), use
+  its import dialog rather than double-clicking the file
 - Push notification reminder if eggs haven't been collected in a
   configurable number of days, sent straight to your phone via the Home
   Assistant Companion App

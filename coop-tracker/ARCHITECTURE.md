@@ -673,6 +673,16 @@ maintain, no version-to-version export format compatibility to worry
 about. The cost (an opaque binary file instead of something a user could
 eyeball or edit) is acceptable for a single-user backup feature.
 
+**Why a CSV export coexists with that** (v1.24.0, `/api/export.csv`): the
+CSV is for *analysis* — opening the log in a spreadsheet — not backup, and
+it's deliberately one-way: there is no CSV import, so none of the
+format-compatibility burden that ruled CSV out as the backup format
+applies. It mirrors the `logs` table's columns verbatim (`EXPORT_COLUMNS`),
+no curation, `NULL` as empty string. Standard comma delimiter, no
+Excel-specific `sep=,` hint line — that hint breaks every other CSV parser;
+locales whose Excel defaults to semicolons can use its import dialog
+(noted in DOCS.md).
+
 ## 13. Serving model
 
 Flask's built-in dev server (`app.run(host="0.0.0.0", port=8099)`) *is*

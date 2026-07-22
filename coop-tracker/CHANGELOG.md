@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.24.0
+
+- New **Export entries as CSV** button in the Backup & Restore sheet:
+  downloads every logged entry as a spreadsheet-friendly CSV file. The
+  export is one-way (for analysis only) — restoring still uses the `.db`
+  backup file.
+
 ## 1.23.0
 
 - The overdue-eggs reminder's "already notified today" guard is now stored
