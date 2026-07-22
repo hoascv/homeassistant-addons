@@ -82,6 +82,9 @@ async function loadSummary() {
   netTotalEl.classList.toggle("stat-positive", data.net_total >= 0);
   netTotalEl.classList.toggle("stat-negative", data.net_total < 0);
 
+  document.getElementById("stat-savings-month").textContent = fmtMoney(data.savings_month);
+  document.getElementById("stat-savings-total").textContent = fmtMoney(data.savings_total);
+
   document.getElementById("finance-month-label").textContent =
     `${MONTH_NAMES[financeMonth - 1]} ${financeYear}`;
 

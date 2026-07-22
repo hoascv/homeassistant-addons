@@ -14,7 +14,7 @@ from datetime import datetime, time as dtime, timedelta
 import flask
 from flask import Flask, Response, g, jsonify, render_template, request, send_file
 
-APP_VERSION = "1.20.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.21.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("COOP_DB_PATH", "/data/coop.db")
 OPTIONS_PATH = os.environ.get("COOP_OPTIONS_PATH", "/data/options.json")
@@ -112,6 +112,10 @@ def get_flock_counts():
         "isabrown": int(opts.get("flock_isabrown_count", 3)),
         "sussex": int(opts.get("flock_sussex_count", 2)),
     }
+
+
+def get_supermarket_egg_price_per_dozen():
+    return float(_read_options().get("supermarket_egg_price_per_dozen", 30))
 
 
 def get_db():
@@ -459,6 +463,11 @@ def _compute_summary(conn, now, year=None, month=None):
         "SELECT COALESCE(SUM(count), 0) AS total FROM logs WHERE type = 'used'"
     ).fetchone()["total"]
 
+    eggs_used_month = conn.execute(
+        "SELECT COALESCE(SUM(count), 0) AS total FROM logs WHERE type = 'used' AND ts >= ? AND ts < ?",
+        (month_start.isoformat(), month_end.isoformat()),
+    ).fetchone()["total"]
+
     revenue_month = conn.execute(
         "SELECT COALESCE(SUM(price), 0) AS total FROM logs WHERE type = 'sale' AND ts >= ? AND ts < ?",
         (month_start.isoformat(), month_end.isoformat()),
@@ -477,6 +486,8 @@ def _compute_summary(conn, now, year=None, month=None):
         "SELECT COALESCE(SUM(cost), 0) AS total FROM logs WHERE type = 'expense'"
     ).fetchone()["total"]
 
+    egg_price_each = get_supermarket_egg_price_per_dozen() / 12
+
     return {
         "eggs_today": eggs_today,
         "eggs_week": eggs_week,
@@ -490,6 +501,8 @@ def _compute_summary(conn, now, year=None, month=None):
         "revenue_total": revenue_total,
         "cost_total": cost_total,
         "net_total": revenue_total - cost_total,
+        "savings_month": eggs_used_month * egg_price_each,
+        "savings_total": eggs_used_total * egg_price_each,
     }
 
 

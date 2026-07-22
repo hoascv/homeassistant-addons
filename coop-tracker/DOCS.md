@@ -14,7 +14,8 @@ your chickens, right from your phone via the Home Assistant sidebar.
 - Today / this-week egg counts, eggs on hand, last cleaning and feeding
   times
 - Finances section: browse any month's revenue, costs, and net, plus an
-  all-time total
+  all-time total, plus an estimate of what you've saved by not buying
+  your used eggs at the supermarket
 - Trends tab: line chart (expandable to full screen) and table of eggs
   collected/sold/used over the last 3, 6, or 12 months, plus a 3-month
   egg-collection forecast based on your flock — and how that forecast
@@ -109,6 +110,10 @@ build up.
   if you haven't added any individual chickens in **🐔 My Flock**, where
   tracking real birds gives a more accurate, age-adjusted forecast
   instead. Set both to `0` to turn the fallback off.
+- **supermarket_egg_price_per_dozen**: `30` by default, in whichever
+  **currency** you've set. Used only for the Finances section's "Est.
+  savings" figures (see below) — adjust it to match your local egg price
+  for a meaningful number.
 
 Set these from the add-on's **Configuration** tab, then restart the
 add-on for changes to take effect.
@@ -146,6 +151,16 @@ age *as of that past month*, not its current age.
 Tap the ⛶ icon on the chart to expand it to fill the screen (tap again,
 or press Esc, to go back) — turning your phone to landscape while
 expanded gives noticeably more width to read a long history at a glance.
+
+### Estimated savings
+
+The Finances section's **Est. savings** figures answer "what would this
+have cost me at the supermarket?" — computed as eggs you've logged as
+**used** (not sold, not just sitting uncollected) × your configured
+**supermarket_egg_price_per_dozen** ÷ 12. Sold eggs aren't counted here,
+since those already show up as revenue; this is specifically the value
+of eggs that replaced a store purchase. It's shown for the current month
+and all-time, right alongside Revenue/Costs/Net.
 
 ### My Flock: individual chickens and breeds
 

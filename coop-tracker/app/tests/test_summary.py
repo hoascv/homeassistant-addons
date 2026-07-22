@@ -76,3 +76,43 @@ def test_summary_all_time_totals_span_every_month(client):
     assert body["cost_total"] == 4
     assert body["net_total"] == 8
     assert body["revenue_month"] == 7  # scoped to June 2026 only
+
+
+def test_summary_savings_zero_with_no_used_eggs(client):
+    body = client.get("/api/summary").get_json()
+    assert body["savings_month"] == 0
+    assert body["savings_total"] == 0
+
+
+def test_summary_savings_uses_default_price_per_dozen(client):
+    now = datetime.now()
+    client.post("/api/log", json={"type": "used", "count": 6, "ts": now.isoformat()})
+    body = client.get("/api/summary").get_json()
+    assert body["savings_month"] == 6 * (30 / 12)  # default price is 30/dozen
+    assert body["savings_total"] == 6 * (30 / 12)
+
+
+def test_summary_savings_respects_configured_price(client, set_options):
+    set_options(supermarket_egg_price_per_dozen=42)
+    client.post("/api/log", json={"type": "used", "count": 6})
+    body = client.get("/api/summary").get_json()
+    assert body["savings_month"] == 6 * (42 / 12)
+
+
+def test_summary_savings_only_counts_used_eggs_not_sold(client):
+    client.post("/api/log", json={"type": "used", "count": 6})
+    client.post("/api/log", json={"type": "sale", "count": 10, "price": 20})
+    client.post("/api/log", json={"type": "egg", "count": 20})  # collected, not used or sold
+    body = client.get("/api/summary").get_json()
+    assert body["savings_month"] == 6 * (30 / 12)
+
+
+def test_summary_savings_month_scoped_separately_from_total(client):
+    now = datetime.now()
+    last_month = (now.replace(day=1) - timedelta(days=1))
+    client.post("/api/log", json={"type": "used", "count": 6, "ts": now.isoformat()})
+    client.post("/api/log", json={"type": "used", "count": 3, "ts": last_month.isoformat()})
+
+    body = client.get("/api/summary").get_json()
+    assert body["savings_month"] == 6 * (30 / 12)
+    assert body["savings_total"] == 9 * (30 / 12)

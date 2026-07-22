@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.21.0
+
+- Added **Est. savings** to the Finances section: what your used eggs
+  would have cost at supermarket prices, for the current month and
+  all-time — new **supermarket_egg_price_per_dozen** option (default
+  `30`) to match your local price. Only counts eggs logged as used, not
+  sold, so it doesn't double up with the revenue you already track.
+
 ## 1.20.0
 
 - Chicken records in **My Flock** can now have a photo — pick one from

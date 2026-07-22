@@ -56,7 +56,7 @@ Supervisor's ingress proxy.
 | Config | HA add-on options, schema-validated by Supervisor | `config.yaml` (schema) → `/data/options.json` (values) |
 | Background work | One daemon thread, 60s poll loop | `_background_loop()` in `app.py` |
 | Packaging | Multi-arch Docker image, Alpine + Python base | `Dockerfile`, `build.yaml`, `run.sh` |
-| Tests | pytest against a real Flask test client + temp SQLite | `app/tests/`, `pytest.ini` (see §13) |
+| Tests | pytest against a real Flask test client + temp SQLite | `app/tests/`, `pytest.ini` (see §16) |
 
 There is deliberately no service layer, no ORM, no separate frontend
 build — `app.py` is the whole backend, read top to bottom.
@@ -109,7 +109,7 @@ writes to, categorically different from an entry type:
   chicken's record, it just means that name no longer resolves to a rate
   (§9 explains the consequence). `photo` is a nullable `BLOB` — the raw
   image bytes live in the same SQLite file as everything else, so a
-  chicken's photo is included in Backup & Restore (§11) for free, with no
+  chicken's photo is included in Backup & Restore (§12) for free, with no
   separate file-storage path to back up or restore in step.
 
 ## 5. Home Assistant integration
@@ -221,7 +221,7 @@ add-on, see the Supervisor confirm success, and still be looking at the
 previous version's UI until they happen to hard-refresh (reported and
 fixed in v1.16.0). `index()` passes the already-existing `APP_VERSION`
 through to the template (`app.py:index`), so every version bump — which
-already happens on every release, see §14 — automatically forces a fresh
+already happens on every release, see §15 — automatically forces a fresh
 fetch of both files, with no separate cache-busting mechanism to
 maintain.
 
@@ -599,7 +599,42 @@ both would show the same 1-2 "empty" data points — the total gives cheap
 context for how much history backs the average, at the cost of one extra
 `COUNT(*)` query already grouped by the same normalized `food_type` match.
 
-## 11. Backup & restore
+## 11. Estimated savings
+
+`_compute_summary` (§4/§9's "unified monthly aggregates" — the same
+function behind Revenue/Costs/Net) also returns `savings_month` /
+`savings_total`: eggs logged as `used` × (`supermarket_egg_price_per_dozen`
+÷ 12), for the current month and all-time, shown as a fourth tile next to
+Revenue/Costs/Net in the Finances section.
+
+**Why only `used` eggs count, not `sold` or total collected:** a sold egg
+is already counted once, as revenue — counting it again here as "savings"
+would inflate the picture of what the flock is worth without a
+corresponding real transaction backing it. An egg logged as `used` never
+generates revenue anywhere else in the app, so this is the one place its
+value is captured at all; that's a deliberate choice over the simpler
+"count every egg collected," which was considered and rejected
+specifically for double-counting with sales.
+
+**Why a configurable price per dozen instead of per egg:** egg prices are
+almost always known/quoted per dozen (a supermarket receipt, a memory of
+"eggs are about $X a dozen") — asking for a per-egg price would mean the
+user doing that division themselves before they can even enter a number.
+The option itself (`supermarket_egg_price_per_dozen`, default `30`) is
+a plain add-on option like `currency` or the flock counts, not a new
+managed table — there's exactly one value to hold, nothing to add/edit
+as a list.
+
+**Why the result isn't rounded in the backend:** `revenue_month` /
+`cost_month` / etc. are also returned as raw floats — rounding for
+display already happens once, in the frontend's `fmtMoney()`, which knows
+the configured currency's actual decimal convention (e.g. `0` for JPY).
+Rounding a second time in the backend, to some arbitrary precision that
+may not match, would be redundant at best and silently lossy at worst;
+`savings_month`/`savings_total` follow the same convention the adjacent
+fields already established rather than inventing a different one.
+
+## 12. Backup & restore
 
 `/api/backup` streams the raw SQLite file back to the browser as a
 download; `/api/restore` accepts an uploaded file, validates it has the
@@ -613,7 +648,7 @@ maintain, no version-to-version export format compatibility to worry
 about. The cost (an opaque binary file instead of something a user could
 eyeball or edit) is acceptable for a single-user backup feature.
 
-## 12. Serving model
+## 13. Serving model
 
 Flask's built-in dev server (`app.run(host="0.0.0.0", port=8099)`) *is*
 the production server here — there's no gunicorn/uWSGI in front of it.
@@ -624,7 +659,7 @@ authenticated ingress proxy (never a directly exposed port — there's no
 `ports:` mapping in `config.yaml`). The concurrency and hardening a
 production WSGI server buys don't apply to that traffic profile.
 
-## 13. Packaging & init
+## 14. Packaging & init
 
 Multi-arch build (`aarch64`, `amd64`, `armhf`, `armv7`, `i386`) against
 Home Assistant's own per-arch Python/Alpine base images (`build.yaml`), so
@@ -639,7 +674,7 @@ Supervisor-injected env vars actually visible to `python3 app.py` (v1.6.1
 fix; s6-overlay v3 doesn't pass its environment to a plain script
 otherwise).
 
-## 14. Versioning
+## 15. Versioning
 
 There's no release automation. Each user-visible change bumps three
 things together, by hand:
@@ -657,7 +692,7 @@ things together, by hand:
 and a build step just to avoid typing the version twice; the comment next
 to `APP_VERSION` exists specifically to flag this manual-sync requirement.
 
-## 15. Testing
+## 16. Testing
 
 Backend tests live in `app/tests/`, run with `pytest` from `coop-tracker/`:
 
@@ -695,7 +730,7 @@ Chrome pass during development), not by CI. This is the most likely gap
 to revisit if the frontend grows past what a manual pass can reliably
 cover.
 
-## 16. Known limitations (accepted, not oversights)
+## 17. Known limitations (accepted, not oversights)
 
 - **Reminder's "already notified today" guard is in-memory only**
   (`_reminder_last_checked_date` is a module-level global, not persisted).
