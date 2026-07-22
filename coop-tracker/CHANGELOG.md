@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.27.1
+
+- Fixed sheets (My Flock in particular) overflowing the screen with no
+  way to scroll when their content is taller than the window — sheets now
+  cap at 90% of the screen height and scroll internally.
+
 ## 1.27.0
 
 - New per-chicken **Health history** in 🐔 My Flock: open a chicken and
