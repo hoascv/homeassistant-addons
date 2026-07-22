@@ -122,7 +122,7 @@ async function loadHistory() {
       title = `${entry.count ?? 1} egg${entry.count === 1 ? "" : "s"} sold${entry.price != null ? " · " + fmtMoney(entry.price) : ""}`;
     else if (entry.type === "expense")
       title = `${entry.category || "Expense"}${entry.cost != null ? " · " + fmtMoney(entry.cost) : ""}`;
-    else title = `${entry.count ?? 1} egg${entry.count === 1 ? "" : "s"} used`;
+    else title = `${entry.count ?? 1} egg${entry.count === 1 ? "" : "s"} used${entry.given_away ? " · given away" : ""}`;
 
     li.innerHTML = `
       <span class="icon">${ICONS[entry.type]}</span>
@@ -430,6 +430,10 @@ function openSheet(type, entry = null) {
           <button type="button" id="inc">+</button>
         </div>
       </div>
+      <label class="field-checkbox">
+        <input type="checkbox" name="given_away" id="used-given-away" ${entry && entry.given_away ? "checked" : ""}>
+        Given away
+      </label>
       ${dateFieldHtml(tsValue)}
       <div class="field">
         <label>Notes (optional)</label>
@@ -491,6 +495,7 @@ sheetForm.addEventListener("submit", async (e) => {
   } else if (currentType === "used") {
     payload.count = parseInt(document.getElementById("count-value").textContent, 10);
     payload.notes = sheetForm.notes.value || null;
+    payload.given_away = document.getElementById("used-given-away").checked;
   }
 
   const saveBtn = sheetForm.querySelector('button[type="submit"]');

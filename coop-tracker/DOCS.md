@@ -110,10 +110,10 @@ build up.
   if you haven't added any individual chickens in **🐔 My Flock**, where
   tracking real birds gives a more accurate, age-adjusted forecast
   instead. Set both to `0` to turn the fallback off.
-- **supermarket_egg_price_per_dozen**: `30` by default, in whichever
-  **currency** you've set. Used only for the Finances section's "Est.
-  savings" figures (see below) — adjust it to match your local egg price
-  for a meaningful number.
+- **supermarket_egg_price**: `2.5` by default (price for a single egg, in
+  whichever **currency** you've set). Used only for the Finances
+  section's "Est. savings" figures (see below) — adjust it to match what
+  a single egg costs at your local supermarket for a meaningful number.
 
 Set these from the add-on's **Configuration** tab, then restart the
 add-on for changes to take effect.
@@ -157,10 +157,15 @@ expanded gives noticeably more width to read a long history at a glance.
 The Finances section's **Est. savings** figures answer "what would this
 have cost me at the supermarket?" — computed as eggs you've logged as
 **used** (not sold, not just sitting uncollected) × your configured
-**supermarket_egg_price_per_dozen** ÷ 12. Sold eggs aren't counted here,
-since those already show up as revenue; this is specifically the value
-of eggs that replaced a store purchase. It's shown for the current month
-and all-time, right alongside Revenue/Costs/Net.
+**supermarket_egg_price**. Sold eggs aren't counted here, since those
+already show up as revenue; this is specifically the value of eggs that
+replaced a store purchase. It's shown for the current month and
+all-time, right alongside Revenue/Costs/Net.
+
+If you check **Given away** on a Log Used entry (for eggs you hand off
+rather than eat yourself), that egg still counts against "eggs on hand"
+as usual, but is left out of Est. savings — giving an egg away doesn't
+reduce your own grocery bill, so it shouldn't count as money saved.
 
 ### My Flock: individual chickens and breeds
 

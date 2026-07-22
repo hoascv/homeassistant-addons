@@ -84,19 +84,19 @@ def test_summary_savings_zero_with_no_used_eggs(client):
     assert body["savings_total"] == 0
 
 
-def test_summary_savings_uses_default_price_per_dozen(client):
+def test_summary_savings_uses_default_price_per_egg(client):
     now = datetime.now()
     client.post("/api/log", json={"type": "used", "count": 6, "ts": now.isoformat()})
     body = client.get("/api/summary").get_json()
-    assert body["savings_month"] == 6 * (30 / 12)  # default price is 30/dozen
-    assert body["savings_total"] == 6 * (30 / 12)
+    assert body["savings_month"] == 6 * 2.5  # default price is 2.5/egg
+    assert body["savings_total"] == 6 * 2.5
 
 
 def test_summary_savings_respects_configured_price(client, set_options):
-    set_options(supermarket_egg_price_per_dozen=42)
+    set_options(supermarket_egg_price=3.5)
     client.post("/api/log", json={"type": "used", "count": 6})
     body = client.get("/api/summary").get_json()
-    assert body["savings_month"] == 6 * (42 / 12)
+    assert body["savings_month"] == 6 * 3.5
 
 
 def test_summary_savings_only_counts_used_eggs_not_sold(client):
@@ -104,7 +104,7 @@ def test_summary_savings_only_counts_used_eggs_not_sold(client):
     client.post("/api/log", json={"type": "sale", "count": 10, "price": 20})
     client.post("/api/log", json={"type": "egg", "count": 20})  # collected, not used or sold
     body = client.get("/api/summary").get_json()
-    assert body["savings_month"] == 6 * (30 / 12)
+    assert body["savings_month"] == 6 * 2.5
 
 
 def test_summary_savings_month_scoped_separately_from_total(client):
@@ -114,5 +114,27 @@ def test_summary_savings_month_scoped_separately_from_total(client):
     client.post("/api/log", json={"type": "used", "count": 3, "ts": last_month.isoformat()})
 
     body = client.get("/api/summary").get_json()
-    assert body["savings_month"] == 6 * (30 / 12)
-    assert body["savings_total"] == 9 * (30 / 12)
+    assert body["savings_month"] == 6 * 2.5
+    assert body["savings_total"] == 9 * 2.5
+
+
+def test_summary_savings_excludes_given_away_eggs(client):
+    client.post("/api/log", json={"type": "used", "count": 6})
+    client.post("/api/log", json={"type": "used", "count": 4, "given_away": True})
+    body = client.get("/api/summary").get_json()
+    assert body["savings_month"] == 6 * 2.5
+    assert body["savings_total"] == 6 * 2.5
+
+
+def test_summary_given_away_eggs_still_reduce_eggs_available(client):
+    client.post("/api/log", json={"type": "egg", "count": 20})
+    client.post("/api/log", json={"type": "used", "count": 4, "given_away": True})
+    body = client.get("/api/summary").get_json()
+    assert body["eggs_available"] == 16
+    assert body["savings_total"] == 0
+
+
+def test_summary_savings_given_away_false_counts_normally(client):
+    client.post("/api/log", json={"type": "used", "count": 6, "given_away": False})
+    body = client.get("/api/summary").get_json()
+    assert body["savings_total"] == 6 * 2.5

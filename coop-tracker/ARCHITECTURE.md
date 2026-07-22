@@ -78,7 +78,8 @@ CREATE TABLE logs (
     price REAL,             -- sale
     cost REAL,              -- expense
     category TEXT,          -- expense
-    container_empty INTEGER -- feeding: 0/1/NULL, see §10
+    container_empty INTEGER,-- feeding: 0/1/NULL, see §10
+    given_away INTEGER      -- used: 0/1/NULL, see §11
 )
 ```
 
@@ -603,9 +604,9 @@ context for how much history backs the average, at the cost of one extra
 
 `_compute_summary` (§4/§9's "unified monthly aggregates" — the same
 function behind Revenue/Costs/Net) also returns `savings_month` /
-`savings_total`: eggs logged as `used` × (`supermarket_egg_price_per_dozen`
-÷ 12), for the current month and all-time, shown as a fourth tile next to
-Revenue/Costs/Net in the Finances section.
+`savings_total`: eggs logged as `used` × `supermarket_egg_price` (a
+price per single egg), for the current month and all-time, shown as a
+fourth tile next to Revenue/Costs/Net in the Finances section.
 
 **Why only `used` eggs count, not `sold` or total collected:** a sold egg
 is already counted once, as revenue — counting it again here as "savings"
@@ -616,14 +617,27 @@ value is captured at all; that's a deliberate choice over the simpler
 "count every egg collected," which was considered and rejected
 specifically for double-counting with sales.
 
-**Why a configurable price per dozen instead of per egg:** egg prices are
-almost always known/quoted per dozen (a supermarket receipt, a memory of
-"eggs are about $X a dozen") — asking for a per-egg price would mean the
-user doing that division themselves before they can even enter a number.
-The option itself (`supermarket_egg_price_per_dozen`, default `30`) is
-a plain add-on option like `currency` or the flock counts, not a new
-managed table — there's exactly one value to hold, nothing to add/edit
-as a list.
+**Why `given_away` eggs are excluded too (v1.22.0):** a `used` entry can
+now carry a `given_away` flag (same nullable-INTEGER pattern as feeding's
+`container_empty` — `_normalize_bool_flag` handles both). Eggs given away
+still leave the coop (they count against `eggs_available` like any other
+`used` egg), but they don't reduce anyone's own grocery bill, so they're
+filtered out of `savings_month`/`savings_total` specifically
+(`AND (given_away IS NULL OR given_away = 0)`) while `eggs_used_total`
+feeding `eggs_available` stays unfiltered — the two figures deliberately
+diverge once given-away eggs exist.
+
+**Why the price option is per egg, not per dozen (v1.21.1):** v1.21.0
+shipped with `supermarket_egg_price_per_dozen` on the reasoning that egg
+prices are usually known/quoted per dozen — asked directly, the user
+preferred entering a per-egg price and having the app skip that division
+step entirely, which is what `supermarket_egg_price` (default `2.5`) now
+does. The option was renamed rather than reinterpreting the same key with
+new units: silently treating an already-configured dozen-price (e.g. `30`)
+as a per-egg price would have been a 12x error with no error message to
+catch it — a straight rename means the old key is just quietly unused
+instead. Still a plain add-on option like `currency` or the flock counts,
+not a new managed table — there's exactly one value to hold.
 
 **Why the result isn't rounded in the backend:** `revenue_month` /
 `cost_month` / etc. are also returned as raw floats — rounding for

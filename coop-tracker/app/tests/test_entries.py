@@ -95,3 +95,46 @@ def test_delete_entry(client):
     res = client.delete(f"/api/entries/{created['id']}")
     assert res.status_code == 204
     assert client.get("/api/entries").get_json() == []
+
+
+def test_log_used_egg_given_away(client):
+    client.post("/api/log", json={"type": "used", "count": 2, "given_away": True})
+    entries = client.get("/api/entries?type=used").get_json()
+    assert entries[0]["given_away"] == 1
+
+
+def test_log_used_egg_without_given_away_is_null(client):
+    client.post("/api/log", json={"type": "used", "count": 2})
+    entries = client.get("/api/entries?type=used").get_json()
+    assert entries[0]["given_away"] is None
+
+
+def test_given_away_is_null_for_non_used_entries(client):
+    client.post("/api/log", json={"type": "egg", "count": 1})
+    entries = client.get("/api/entries?type=egg").get_json()
+    assert entries[0]["given_away"] is None
+
+
+def test_given_away_round_trips_through_update(client):
+    created = client.post(
+        "/api/log", json={"type": "used", "count": 1, "given_away": False}
+    ).get_json()
+
+    entries = client.get("/api/entries?type=used").get_json()
+    assert entries[0]["given_away"] == 0
+
+    client.put(f"/api/entries/{created['id']}", json={"given_away": True})
+    entries = client.get("/api/entries?type=used").get_json()
+    assert entries[0]["given_away"] == 1
+
+
+def test_update_without_given_away_field_preserves_existing_value(client):
+    created = client.post(
+        "/api/log", json={"type": "used", "count": 1, "given_away": True}
+    ).get_json()
+
+    client.put(f"/api/entries/{created['id']}", json={"notes": "for a neighbor"})
+
+    entries = client.get("/api/entries?type=used").get_json()
+    assert entries[0]["given_away"] == 1
+    assert entries[0]["notes"] == "for a neighbor"

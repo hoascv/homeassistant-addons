@@ -14,7 +14,7 @@ from datetime import datetime, time as dtime, timedelta
 import flask
 from flask import Flask, Response, g, jsonify, render_template, request, send_file
 
-APP_VERSION = "1.21.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.22.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("COOP_DB_PATH", "/data/coop.db")
 OPTIONS_PATH = os.environ.get("COOP_OPTIONS_PATH", "/data/options.json")
@@ -114,8 +114,8 @@ def get_flock_counts():
     }
 
 
-def get_supermarket_egg_price_per_dozen():
-    return float(_read_options().get("supermarket_egg_price_per_dozen", 30))
+def get_supermarket_egg_price():
+    return float(_read_options().get("supermarket_egg_price", 2.5))
 
 
 def get_db():
@@ -156,6 +156,7 @@ def init_db():
         ("cost", "REAL"),
         ("category", "TEXT"),
         ("container_empty", "INTEGER"),
+        ("given_away", "INTEGER"),
     ):
         if column not in existing_columns:
             conn.execute(f"ALTER TABLE logs ADD COLUMN {column} {coltype}")
@@ -468,6 +469,17 @@ def _compute_summary(conn, now, year=None, month=None):
         (month_start.isoformat(), month_end.isoformat()),
     ).fetchone()["total"]
 
+    eggs_used_total_for_savings = conn.execute(
+        "SELECT COALESCE(SUM(count), 0) AS total FROM logs "
+        "WHERE type = 'used' AND (given_away IS NULL OR given_away = 0)"
+    ).fetchone()["total"]
+
+    eggs_used_month_for_savings = conn.execute(
+        "SELECT COALESCE(SUM(count), 0) AS total FROM logs "
+        "WHERE type = 'used' AND (given_away IS NULL OR given_away = 0) AND ts >= ? AND ts < ?",
+        (month_start.isoformat(), month_end.isoformat()),
+    ).fetchone()["total"]
+
     revenue_month = conn.execute(
         "SELECT COALESCE(SUM(price), 0) AS total FROM logs WHERE type = 'sale' AND ts >= ? AND ts < ?",
         (month_start.isoformat(), month_end.isoformat()),
@@ -486,7 +498,7 @@ def _compute_summary(conn, now, year=None, month=None):
         "SELECT COALESCE(SUM(cost), 0) AS total FROM logs WHERE type = 'expense'"
     ).fetchone()["total"]
 
-    egg_price_each = get_supermarket_egg_price_per_dozen() / 12
+    egg_price_each = get_supermarket_egg_price()
 
     return {
         "eggs_today": eggs_today,
@@ -501,8 +513,8 @@ def _compute_summary(conn, now, year=None, month=None):
         "revenue_total": revenue_total,
         "cost_total": cost_total,
         "net_total": revenue_total - cost_total,
-        "savings_month": eggs_used_month * egg_price_each,
-        "savings_total": eggs_used_total * egg_price_each,
+        "savings_month": eggs_used_month_for_savings * egg_price_each,
+        "savings_total": eggs_used_total_for_savings * egg_price_each,
     }
 
 
@@ -999,7 +1011,10 @@ def api_entries():
     return jsonify([dict(row) for row in rows])
 
 
-def _normalize_container_empty(value):
+def _normalize_bool_flag(value):
+    """Normalizes a JSON boolean (or an already-stored 0/1/None) into what
+    a nullable INTEGER "flag" column should hold — used for both
+    container_empty (feeding) and given_away (used eggs)."""
     return None if value is None else (1 if value else 0)
 
 
@@ -1018,7 +1033,8 @@ def api_log():
     price = data.get("price")
     cost = data.get("cost")
     category = data.get("category")
-    container_empty = _normalize_container_empty(data.get("container_empty"))
+    container_empty = _normalize_bool_flag(data.get("container_empty"))
+    given_away = _normalize_bool_flag(data.get("given_away"))
 
     ts_input = data.get("ts")
     if ts_input:
@@ -1032,10 +1048,10 @@ def api_log():
     db = get_db()
     cur = db.execute(
         """
-        INSERT INTO logs (type, ts, count, food_type, amount, notes, price, cost, category, container_empty)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO logs (type, ts, count, food_type, amount, notes, price, cost, category, container_empty, given_away)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (entry_type, ts, count, food_type, amount, notes, price, cost, category, container_empty),
+        (entry_type, ts, count, food_type, amount, notes, price, cost, category, container_empty, given_away),
     )
     db.commit()
     threading.Thread(target=_push_ha_sensors_async, daemon=True).start()
@@ -1068,18 +1084,29 @@ def api_update_entry(entry_id):
     price = data.get("price", row["price"])
     cost = data.get("cost", row["cost"])
     category = data.get("category", row["category"])
-    container_empty = _normalize_container_empty(
-        data.get("container_empty", row["container_empty"])
-    )
+    container_empty = _normalize_bool_flag(data.get("container_empty", row["container_empty"]))
+    given_away = _normalize_bool_flag(data.get("given_away", row["given_away"]))
 
     db.execute(
         """
         UPDATE logs
         SET ts = ?, count = ?, food_type = ?, amount = ?, notes = ?, price = ?, cost = ?,
-            category = ?, container_empty = ?
+            category = ?, container_empty = ?, given_away = ?
         WHERE id = ?
         """,
-        (ts, count, food_type, amount, notes, price, cost, category, container_empty, entry_id),
+        (
+            ts,
+            count,
+            food_type,
+            amount,
+            notes,
+            price,
+            cost,
+            category,
+            container_empty,
+            given_away,
+            entry_id,
+        ),
     )
     db.commit()
     threading.Thread(target=_push_ha_sensors_async, daemon=True).start()

@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.22.0
+
+- Added a **Given away** checkbox to the Log Used sheet, for eggs you hand
+  off rather than eat yourself. Given-away eggs still count against "eggs
+  on hand" like any other used egg, but are excluded from the Finances
+  section's "Est. savings" figures, since giving eggs away doesn't reduce
+  your own grocery spending.
+
+## 1.21.1
+
+- The "Est. savings" price option is now **supermarket_egg_price** — a
+  price per single egg (default `2.5`) instead of per dozen. If you'd
+  already set **supermarket_egg_price_per_dozen** in 1.21.0, that option
+  is no longer read; set the new one to what a single egg costs you
+  instead (e.g. a dozen at 30 becomes `2.5`).
+
 ## 1.21.0
 
 - Added **Est. savings** to the Finances section: what your used eggs

@@ -1,5 +1,5 @@
 name: "Coop Tracker"
-version: "1.21.0"
+version: "1.22.0"
 slug: "coop-tracker"
 description: "Log egg collection, coop cleaning, and feeding for your chickens"
 url: "https://github.com/hoascv/homeassistant-addons/tree/main/coop-tracker"
@@ -26,7 +26,7 @@ options:
   ha_sensors_enabled: false
   flock_isabrown_count: 3
   flock_sussex_count: 2
-  supermarket_egg_price_per_dozen: 30
+  supermarket_egg_price: 2.5
 schema:
   currency: "list(USD|EUR|GBP|DKK|SEK|NOK|CHF|CAD|AUD|JPY)"
   reminder_enabled: "bool"
@@ -36,4 +36,4 @@ schema:
   ha_sensors_enabled: "bool"
   flock_isabrown_count: "int(0,100)"
   flock_sussex_count: "int(0,100)"
-  supermarket_egg_price_per_dozen: "float(0,1000)"
+  supermarket_egg_price: "float(0,100)"
