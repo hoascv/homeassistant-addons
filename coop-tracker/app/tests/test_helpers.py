@@ -1,4 +1,5 @@
 import sqlite3
+import urllib.error
 from datetime import datetime
 
 import app as coopapp
@@ -49,3 +50,39 @@ def test_is_valid_backup_rejects_non_sqlite_file(tmp_path):
     path = tmp_path / "not-a-db.txt"
     path.write_text("hello")
     assert coopapp._is_valid_backup(str(path)) is False
+
+
+def test_ha_api_request_reports_http_error(monkeypatch):
+    monkeypatch.setattr(coopapp, "SUPERVISOR_TOKEN", "fake-token")
+
+    def _raise(*a, **k):
+        raise urllib.error.HTTPError("url", 401, "Unauthorized", {}, None)
+
+    monkeypatch.setattr(coopapp.urllib.request, "urlopen", _raise)
+    data, err = coopapp._ha_api_request("GET", "/config")
+    assert data is None
+    assert err.startswith("HTTP 401")
+
+
+def test_ha_api_request_reports_url_error(monkeypatch):
+    monkeypatch.setattr(coopapp, "SUPERVISOR_TOKEN", "fake-token")
+
+    def _raise(*a, **k):
+        raise urllib.error.URLError("connection refused")
+
+    monkeypatch.setattr(coopapp.urllib.request, "urlopen", _raise)
+    data, err = coopapp._ha_api_request("GET", "/config")
+    assert data is None
+    assert "connection refused" in err
+
+
+def test_ha_api_request_reports_unexpected_exception(monkeypatch):
+    monkeypatch.setattr(coopapp, "SUPERVISOR_TOKEN", "fake-token")
+
+    def _raise(*a, **k):
+        raise ValueError("boom")
+
+    monkeypatch.setattr(coopapp.urllib.request, "urlopen", _raise)
+    data, err = coopapp._ha_api_request("GET", "/config")
+    assert data is None
+    assert err == "boom"

@@ -90,6 +90,13 @@ def test_update_missing_entry_returns_404(client):
     assert res.status_code == 404
 
 
+def test_update_entry_rejects_invalid_timestamp(client):
+    created = client.post("/api/log", json={"type": "egg", "count": 1}).get_json()
+    res = client.put(f"/api/entries/{created['id']}", json={"ts": "not-a-date"})
+    assert res.status_code == 400
+    assert res.get_json()["error"] == "invalid ts"
+
+
 def test_delete_entry(client):
     created = client.post("/api/log", json={"type": "egg", "count": 1}).get_json()
     res = client.delete(f"/api/entries/{created['id']}")

@@ -99,6 +99,14 @@ def test_forecast_basis_switches_to_blended_after_any_egg_logged(client):
     assert body["forecast_basis"] == "blended"
 
 
+def test_forecast_months_wrap_into_next_year(conn):
+    # FORECAST_MONTHS looks 3 months ahead; from November that spans the
+    # turn of the year, exercising the y/m rollover that a mid-year test
+    # run would never hit via `now = datetime.now()`.
+    result = coopapp._compute_forecast(conn, datetime(2026, 11, 15))
+    assert result["forecast_months"] == ["2026-12", "2027-01", "2027-02"]
+
+
 def test_backtest_matches_length_of_history_months(client):
     body = client.get("/api/trends?months=6").get_json()
     assert len(body["forecast_backtest"]) == len(body["months"]) == 6

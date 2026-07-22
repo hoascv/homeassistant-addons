@@ -1,3 +1,29 @@
+import app as coopapp
+
+
+def test_get_notify_services_extracts_notify_domain(monkeypatch):
+    services_payload = [
+        {"domain": "light", "services": {"turn_on": {}}},
+        {"domain": "notify", "services": {"mobile_app_phone": {}, "persistent_notification": {}}},
+    ]
+    monkeypatch.setattr(
+        coopapp, "_ha_api_request", lambda *a, **k: (services_payload, None)
+    )
+    names, err = coopapp.get_notify_services()
+    assert err is None
+    assert names == ["mobile_app_phone", "persistent_notification"]
+
+
+def test_get_notify_services_empty_when_no_notify_domain(monkeypatch):
+    services_payload = [{"domain": "light", "services": {"turn_on": {}}}]
+    monkeypatch.setattr(
+        coopapp, "_ha_api_request", lambda *a, **k: (services_payload, None)
+    )
+    names, err = coopapp.get_notify_services()
+    assert names == []
+    assert err is None
+
+
 def test_notifications_endpoint_reports_reminder_config(client, set_options):
     set_options(reminder_enabled=True, notify_service="mobile_app_phone", reminder_threshold_days=3)
     body = client.get("/api/notifications").get_json()

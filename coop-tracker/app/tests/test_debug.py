@@ -1,6 +1,12 @@
 import app as coopapp
 
 
+def test_index_page_renders(client):
+    res = client.get("/")
+    assert res.status_code == 200
+    assert coopapp.APP_VERSION.encode() in res.data
+
+
 def test_debug_reports_app_version(client):
     body = client.get("/api/debug").get_json()
     assert body["app_version"] == coopapp.APP_VERSION

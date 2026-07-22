@@ -118,6 +118,24 @@ def test_update_missing_chicken_returns_404(client):
     assert res.status_code == 404
 
 
+def test_update_chicken_rejects_empty_name(client):
+    created = client.post("/api/chickens", json={"name": "Henrietta"}).get_json()
+    res = client.put(f"/api/chickens/{created['id']}", json={"name": "   "})
+    assert res.status_code == 400
+
+
+def test_update_chicken_rejects_invalid_hatch_date(client):
+    created = client.post("/api/chickens", json={"name": "Henrietta"}).get_json()
+    res = client.put(f"/api/chickens/{created['id']}", json={"hatch_date": "not-a-date"})
+    assert res.status_code == 400
+
+
+def test_update_chicken_rejects_invalid_status(client):
+    created = client.post("/api/chickens", json={"name": "Henrietta"}).get_json()
+    res = client.put(f"/api/chickens/{created['id']}", json={"status": "flying-south"})
+    assert res.status_code == 400
+
+
 def test_delete_chicken(client):
     created = client.post("/api/chickens", json={"name": "Henrietta"}).get_json()
     res = client.delete(f"/api/chickens/{created['id']}")
@@ -187,6 +205,12 @@ def test_update_chicken_without_photo_field_preserves_existing_photo(client):
     chickens = client.get("/api/chickens").get_json()
     assert chickens[0]["has_photo"] is True
     assert chickens[0]["status"] == "lost"
+
+
+def test_update_chicken_rejects_invalid_photo_data(client):
+    created = client.post("/api/chickens", json={"name": "Henrietta"}).get_json()
+    res = client.put(f"/api/chickens/{created['id']}", json={"photo": "not-a-data-uri"})
+    assert res.status_code == 400
 
 
 def test_update_chicken_can_explicitly_clear_photo(client):
