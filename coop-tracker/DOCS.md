@@ -227,10 +227,8 @@ once both Home Assistant and the add-on are back up.
 
 - The check runs once a day, in-process — no Home Assistant Automation
   needed.
-- The "already notified today" guard is in-memory only (not persisted).
-  If the add-on restarts shortly after sending today's reminder, it may
-  send one extra duplicate that day; this is a deliberate simplicity
-  tradeoff, not a bug.
+- The "already notified today" guard is stored in the add-on's database,
+  so a restart won't re-send a reminder that already went out that day.
 - Requires the add-on's `homeassistant_api` permission (already granted
   in `config.yaml`), which lets it call Home Assistant's `notify` service
   directly — no long-lived access token setup needed on your end.

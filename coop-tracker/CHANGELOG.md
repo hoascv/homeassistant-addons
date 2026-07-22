@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.23.0
+
+- The overdue-eggs reminder's "already notified today" guard is now stored
+  in the database instead of only in memory, so restarting the add-on
+  shortly after a reminder went out no longer sends a duplicate that day.
+  This closes a previously documented known limitation.
+
 ## 1.22.1
 
 - Fixed chicken photos not updating after a re-upload: the photo URL

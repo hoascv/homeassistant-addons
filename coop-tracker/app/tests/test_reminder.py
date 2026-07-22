@@ -64,3 +64,39 @@ def test_reminder_skips_notification_when_eggs_not_overdue(client, conn, set_opt
     coopapp._reminder_tick(datetime.now(), conn)
     notify_calls = [c for c in fake_ha_server if c["path"].startswith("/services/notify/")]
     assert notify_calls == []
+
+
+def test_reminder_guard_survives_restart(conn, set_options, fake_ha_server, monkeypatch):
+    set_options(
+        reminder_enabled=True,
+        notify_service="mobile_app_phone",
+        reminder_check_time="00:00",
+        reminder_threshold_days=1,
+    )
+    now = datetime.now().replace(hour=12, minute=0)
+
+    coopapp._reminder_tick(now, conn)
+    notify_calls = [c for c in fake_ha_server if c["path"].startswith("/services/notify/")]
+    assert len(notify_calls) == 1
+
+    # simulate an add-on restart: the in-memory guard is gone, but the
+    # persisted app_state row must still suppress a same-day duplicate
+    monkeypatch.setattr(coopapp, "_reminder_last_checked_date", None)
+    coopapp._reminder_tick(now, conn)
+    notify_calls = [c for c in fake_ha_server if c["path"].startswith("/services/notify/")]
+    assert len(notify_calls) == 1
+
+
+def test_reminder_fires_again_next_day_after_restart(conn, set_options, fake_ha_server):
+    set_options(
+        reminder_enabled=True,
+        notify_service="mobile_app_phone",
+        reminder_check_time="00:00",
+        reminder_threshold_days=1,
+    )
+    yesterday = (datetime.now() - timedelta(days=1)).date()
+    coopapp._set_app_state(conn, "reminder_last_checked_date", yesterday.isoformat())
+
+    coopapp._reminder_tick(datetime.now().replace(hour=12, minute=0), conn)
+    notify_calls = [c for c in fake_ha_server if c["path"].startswith("/services/notify/")]
+    assert len(notify_calls) == 1

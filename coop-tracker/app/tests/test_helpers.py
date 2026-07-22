@@ -52,6 +52,14 @@ def test_is_valid_backup_rejects_non_sqlite_file(tmp_path):
     assert coopapp._is_valid_backup(str(path)) is False
 
 
+def test_app_state_round_trip_and_overwrite(conn):
+    assert coopapp._get_app_state(conn, "some_key") is None
+    coopapp._set_app_state(conn, "some_key", "first")
+    assert coopapp._get_app_state(conn, "some_key") == "first"
+    coopapp._set_app_state(conn, "some_key", "second")
+    assert coopapp._get_app_state(conn, "some_key") == "second"
+
+
 def test_ha_api_request_reports_http_error(monkeypatch):
     monkeypatch.setattr(coopapp, "SUPERVISOR_TOKEN", "fake-token")
 

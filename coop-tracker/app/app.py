@@ -9,12 +9,12 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from datetime import datetime, time as dtime, timedelta
+from datetime import date, datetime, time as dtime, timedelta
 
 import flask
 from flask import Flask, Response, g, jsonify, render_template, request, send_file
 
-APP_VERSION = "1.22.1"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.23.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("COOP_DB_PATH", "/data/coop.db")
 OPTIONS_PATH = os.environ.get("COOP_OPTIONS_PATH", "/data/options.json")
@@ -207,6 +207,15 @@ def init_db():
     if "photo" not in chicken_columns:
         conn.execute("ALTER TABLE chickens ADD COLUMN photo BLOB")
 
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS app_state (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        )
+        """
+    )
+
     conn.commit()
     conn.close()
 
@@ -216,6 +225,20 @@ def _db_connect_standalone():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def _get_app_state(conn, key):
+    row = conn.execute("SELECT value FROM app_state WHERE key = ?", (key,)).fetchone()
+    return row["value"] if row else None
+
+
+def _set_app_state(conn, key, value):
+    conn.execute(
+        "INSERT INTO app_state (key, value) VALUES (?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (key, value),
+    )
+    conn.commit()
 
 
 def _last_egg_collection(conn):
@@ -288,10 +311,17 @@ def _reminder_tick(now, conn):
     target = _parse_hhmm(cfg["check_time"])
     if target is None or now.time() < target:
         return
+    if _reminder_last_checked_date is None:
+        # first tick since startup: recover the guard from the DB so a
+        # restart shortly after today's reminder can't send a duplicate
+        stored = _get_app_state(conn, "reminder_last_checked_date")
+        if stored:
+            _reminder_last_checked_date = date.fromisoformat(stored)
     if _reminder_last_checked_date == now.date():
         return  # already evaluated today
 
     _reminder_last_checked_date = now.date()
+    _set_app_state(conn, "reminder_last_checked_date", now.date().isoformat())
 
     if _eggs_overdue(now, conn, cfg["threshold_days"]):
         send_notification(
@@ -1179,7 +1209,9 @@ def api_debug():
             "db_ok": db_ok,
             "db_error": db_error,
             "reminder_last_checked_date": (
-                _reminder_last_checked_date.isoformat() if _reminder_last_checked_date else None
+                _reminder_last_checked_date.isoformat()
+                if _reminder_last_checked_date
+                else _get_app_state(db, "reminder_last_checked_date")
             ),
             "python_version": sys.version.split()[0],
             "flask_version": flask.__version__,

@@ -175,6 +175,17 @@ the loop.
 a 60-second cadence with two cheap checks, a dependency for scheduling
 would be pure overhead. The whole loop is ~15 lines.
 
+**The reminder's "already notified today" guard is persisted** (v1.23.0)
+in a tiny `app_state` key-value table (`_get_app_state`/`_set_app_state`),
+lazily loaded into the module-level `_reminder_last_checked_date` global on
+the first tick after startup. The global remains the fast path — the DB is
+only read once per process and only written when the guard date advances —
+so a restart shortly after today's reminder fired no longer sends a
+duplicate. Why a KV table rather than options.json: the app treats
+options.json as read-only Supervisor-owned input (§8) and never writes it;
+runtime state belongs in the same SQLite file as everything else, where
+Backup & Restore (§12) covers it for free.
+
 **Why sensors are also pushed from request handlers** (`api_log`,
 `api_update_entry`, `api_delete_entry`) **in addition to the background
 loop:** so the Home Assistant dashboard reflects a newly logged entry in
@@ -746,10 +757,6 @@ cover.
 
 ## 17. Known limitations (accepted, not oversights)
 
-- **Reminder's "already notified today" guard is in-memory only**
-  (`_reminder_last_checked_date` is a module-level global, not persisted).
-  An add-on restart shortly after today's reminder fired could send one
-  duplicate. Documented in DOCS.md as a deliberate simplicity tradeoff.
 - **HA sensor entities don't survive a Home Assistant core restart** on
   their own (see §5b) — self-heals within a minute, not instant.
 - **Single flock/coop, single currency, single user.** There's no
