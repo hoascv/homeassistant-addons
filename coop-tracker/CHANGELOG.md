@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.22.1
+
+- Fixed chicken photos not updating after a re-upload: the photo URL
+  doesn't change when you replace a chicken's picture, so the browser
+  could keep serving the previously cached image instead of the new one
+  until a hard refresh. The photo endpoint now tells the browser not to
+  cache it.
+
 ## 1.22.0
 
 - Added a **Given away** checkbox to the Log Used sheet, for eggs you hand

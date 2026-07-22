@@ -170,6 +170,10 @@ def test_add_chicken_with_photo(client):
     assert photo_res.status_code == 200
     assert photo_res.content_type == "image/jpeg"
     assert photo_res.data == _TINY_JPEG_BYTES
+    # The photo URL never changes when a chicken's photo is replaced, so the
+    # browser must not cache this response — otherwise a re-upload keeps
+    # showing the old photo until a hard refresh.
+    assert photo_res.headers["Cache-Control"] == "no-store"
 
 
 def test_add_chicken_rejects_invalid_photo_data(client):

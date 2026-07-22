@@ -14,7 +14,7 @@ from datetime import datetime, time as dtime, timedelta
 import flask
 from flask import Flask, Response, g, jsonify, render_template, request, send_file
 
-APP_VERSION = "1.22.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.22.1"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("COOP_DB_PATH", "/data/coop.db")
 OPTIONS_PATH = os.environ.get("COOP_OPTIONS_PATH", "/data/options.json")
@@ -911,7 +911,12 @@ def api_chicken_photo(chicken_id):
     row = db.execute("SELECT photo FROM chickens WHERE id = ?", (chicken_id,)).fetchone()
     if row is None or row["photo"] is None:
         return "", 404
-    return Response(row["photo"], mimetype="image/jpeg")
+    # The URL is the same before and after a chicken's photo is replaced, so
+    # without this the browser can keep serving the old cached bytes for it
+    # (the previous photo "always present" after a re-upload).
+    response = Response(row["photo"], mimetype="image/jpeg")
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 @app.route("/api/chickens", methods=["POST"])
