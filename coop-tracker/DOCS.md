@@ -128,9 +128,10 @@ shown as a dashed line continuing past your actual history. There's no
 training step: it's recomputed from scratch every time you open the
 Trends tab, so it naturally tracks your flock's real performance (a hen
 going broody, molting, or a new hen coming into lay) without you doing
-anything. The forecast is intentionally a flat rate — it doesn't yet
-account for seasonal changes in day length, so a projection made in
-summer may run a little high once winter arrives, and vice versa.
+anything. The forecast also follows the seasons: longer days boost laying
+in summer and shorter days lower it in winter, so a projection made in
+autumn correctly shows the coming winter dip (and the spring recovery)
+instead of running the current rate flat.
 
 **Where the baseline comes from:** if you've added at least one chicken
 in **🐔 My Flock** (see below), the forecast uses each of your active

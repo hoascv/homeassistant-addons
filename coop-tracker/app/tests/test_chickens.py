@@ -294,7 +294,8 @@ def test_forecast_switches_to_individual_once_a_chicken_exists(client):
     )
     body = client.get("/api/trends?months=1").get_json()
     assert body["forecast_flock_basis"] == "individual"
-    assert body["forecast_daily_rate"] == round(300 / 365, 2)
+    expected = (300 / 365) * coopapp._seasonal_multiplier(datetime.now())
+    assert body["forecast_daily_rate"] == round(expected, 2)
 
 
 def test_forecast_sums_multiple_active_chickens(client):
@@ -307,7 +308,8 @@ def test_forecast_sums_multiple_active_chickens(client):
         json={"name": "Old Betty", "breed": "Sussex", "hatch_date": _hatch(700)},
     )
     body = client.get("/api/trends?months=1").get_json()
-    expected = (300 / 365) + (260 / 365) * coopapp.REDUCED_RATE_MULTIPLIER
+    flat = (300 / 365) + (260 / 365) * coopapp.REDUCED_RATE_MULTIPLIER
+    expected = flat * coopapp._seasonal_multiplier(datetime.now())
     assert body["forecast_daily_rate"] == round(expected, 2)
 
 

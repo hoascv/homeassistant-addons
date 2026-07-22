@@ -865,8 +865,8 @@ async function loadTrends() {
       : "flat per-breed counts — add chickens in 🐔 My Flock for an age-adjusted forecast";
   trendsForecastCaption.textContent =
     data.forecast_basis === "breed_standard"
-      ? `The dashed line is based on breed averages for ${flockBasisNote} — log a few weeks of collection to refine it. It also shows what it would have predicted for past months, so you can see how it's tracking.`
-      : `The dashed line is based on breed averages for ${flockBasisNote}, adjusted by your last 30 days of collection. Past months show what it would have predicted at the time, so you can see how it's tracking.`;
+      ? `The dashed line is based on breed averages for ${flockBasisNote} and the season (longer days boost laying in summer, shorter days lower it in winter) — log a few weeks of collection to refine it. It also shows what it would have predicted for past months, so you can see how it's tracking.`
+      : `The dashed line is based on breed averages for ${flockBasisNote}, adjusted by your last 30 days of collection and the season (longer days boost laying in summer, shorter days lower it in winter). Past months show what it would have predicted at the time, so you can see how it's tracking.`;
 
   loadFeedingStatsSummary();
 }

@@ -3,6 +3,7 @@ import binascii
 import csv
 import io
 import json
+import math
 import os
 import platform
 import sqlite3
@@ -16,7 +17,7 @@ from datetime import date, datetime, time as dtime, timedelta
 import flask
 from flask import Flask, Response, g, jsonify, render_template, request, send_file
 
-APP_VERSION = "1.25.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.26.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("COOP_DB_PATH", "/data/coop.db")
 OPTIONS_PATH = os.environ.get("COOP_OPTIONS_PATH", "/data/options.json")
@@ -41,6 +42,23 @@ DEFAULT_CURRENCY = "DKK"
 FORECAST_MONTHS = 3
 FORECAST_TRAILING_DAYS = 30
 FORECAST_RATIO_BOUNDS = (0.2, 1.8)  # dampens noise from a single unusual week
+
+# Seasonal laying curve: one universal sinusoid over the calendar year,
+# peaking at the summer solstice (daylight-driven laying). Constants, not
+# config — see ARCHITECTURE.md §9. Assumes the northern hemisphere.
+SEASONAL_AMPLITUDE = 0.25  # ±25% swing; the tuning knob if the backtest runs off
+SEASONAL_PEAK_DAY = 172  # ~June 21
+
+
+def _seasonal_multiplier(when):
+    """Multiplier on the flock's flat annual-mean daily rate for the given
+    date: ~1.25 in June, ~0.75 in December, ~1.0 at the equinoxes. Annual
+    mean ≈ 1.0, so breed annual_eggs totals are redistributed across the
+    year, not inflated."""
+    day = when.timetuple().tm_yday
+    return 1.0 + SEASONAL_AMPLITUDE * math.cos(
+        2 * math.pi * (day - SEASONAL_PEAK_DAY) / 365.25
+    )
 
 # Simple 3-stage age-based laying curve applied to a bird's breed's annual
 # rate — see _chicken_daily_rate(). Deliberately one universal curve
@@ -667,20 +685,24 @@ def _flock_baseline_daily_rate(conn, now):
     return "flat_counts", baseline
 
 
-def _forecast_daily_rate(conn, now):
-    """Expected eggs/day, blending a flock baseline with recent actual
-    performance. Recomputed from scratch on every call — no stored model,
-    no training step — so it "self-corrects" simply by always looking at
-    the last FORECAST_TRAILING_DAYS as of `now`."""
-    _, baseline_daily = _flock_baseline_daily_rate(conn, now)
-    if baseline_daily <= 0:
-        return 0.0
+def _forecast_components(conn, now):
+    """The season-independent pieces of the forecast, computed once per
+    forecast: (flock_basis, baseline_daily, ratio, ever_logged).
 
+    `baseline_daily` is the flat annual-mean rate from
+    _flock_baseline_daily_rate; `ratio` compares the trailing actual rate
+    against the *seasonally expected* rate as of `now` (baseline ×
+    seasonal multiplier), clamped by FORECAST_RATIO_BOUNDS. Dividing by
+    the seasonally expected rate — not the flat baseline — makes the ratio
+    a season-independent flock-health signal: a seasonally normal winter
+    low reads as ratio ≈ 1.0, not as a badly performing flock projected
+    flatly into spring."""
+    flock_basis, baseline_daily = _flock_baseline_daily_rate(conn, now)
     ever_logged = conn.execute(
         "SELECT COUNT(*) AS n FROM logs WHERE type = 'egg'"
     ).fetchone()["n"]
-    if ever_logged == 0:
-        return baseline_daily  # no history yet: pure breed-standard estimate
+    if baseline_daily <= 0 or ever_logged == 0:
+        return flock_basis, baseline_daily, 1.0, ever_logged
 
     window_start = now - timedelta(days=FORECAST_TRAILING_DAYS)
     actual_eggs = conn.execute(
@@ -689,17 +711,26 @@ def _forecast_daily_rate(conn, now):
     ).fetchone()["total"]
     actual_daily = actual_eggs / FORECAST_TRAILING_DAYS
 
-    ratio = actual_daily / baseline_daily
+    ratio = actual_daily / (baseline_daily * _seasonal_multiplier(now))
     ratio = max(FORECAST_RATIO_BOUNDS[0], min(FORECAST_RATIO_BOUNDS[1], ratio))
-    return baseline_daily * ratio
+    return flock_basis, baseline_daily, ratio, ever_logged
+
+
+def _forecast_daily_rate(conn, now, when=None):
+    """Expected eggs/day at `when` (default: `now`), blending a flock
+    baseline with recent actual performance and the seasonal curve.
+    Recomputed from scratch on every call — no stored model, no training
+    step — so it "self-corrects" simply by always looking at the last
+    FORECAST_TRAILING_DAYS as of `now`. Evaluated at `when == now` the
+    seasonal terms cancel, so the blended "current" rate still equals the
+    observed trailing rate; seasonality only reshapes projections at other
+    dates."""
+    _, baseline_daily, ratio, _ = _forecast_components(conn, now)
+    return baseline_daily * _seasonal_multiplier(when or now) * ratio
 
 
 def _compute_forecast(conn, now, months=FORECAST_MONTHS):
-    daily_rate = _forecast_daily_rate(conn, now)
-    flock_basis, _ = _flock_baseline_daily_rate(conn, now)
-    ever_logged = conn.execute(
-        "SELECT COUNT(*) AS n FROM logs WHERE type = 'egg'"
-    ).fetchone()["n"]
+    flock_basis, baseline_daily, ratio, ever_logged = _forecast_components(conn, now)
 
     labels = []
     values = []
@@ -712,13 +743,17 @@ def _compute_forecast(conn, now, months=FORECAST_MONTHS):
             y += 1
         start, end = _month_bounds(y, m)
         days_in_month = (end - start).days
+        midpoint = start + (end - start) / 2
+        rate = baseline_daily * _seasonal_multiplier(midpoint) * ratio
         labels.append(f"{y:04d}-{m:02d}")
-        values.append(round(daily_rate * days_in_month))
+        values.append(round(rate * days_in_month))
 
     return {
         "forecast_months": labels,
         "forecast_collected": values,
-        "forecast_daily_rate": round(daily_rate, 2),
+        "forecast_daily_rate": round(
+            baseline_daily * _seasonal_multiplier(now) * ratio, 2
+        ),
         "forecast_basis": "breed_standard" if ever_logged == 0 else "blended",
         "forecast_flock_basis": flock_basis,
     }
@@ -728,14 +763,17 @@ def _compute_backtest(conn, now, months):
     """For each of the same historical months _compute_trends just
     returned, what would the forecast have predicted for that month, using
     only data available as of that month's start? Reuses
-    _forecast_daily_rate as-is — a backtest is just calling it with a past
-    `now` instead of the real one."""
+    _forecast_daily_rate as-is — data cutoff at the month's start, seasonal
+    factor at its midpoint, exactly the treatment the forward projection
+    gives a future month, so the backtest stays a fair test of the shipped
+    formula."""
     month_starts = _recent_month_starts(now, months)
     values = []
     for y, m in month_starts:
         month_start, month_end = _month_bounds(y, m)
         days_in_month = (month_end - month_start).days
-        daily_rate = _forecast_daily_rate(conn, month_start)
+        midpoint = month_start + (month_end - month_start) / 2
+        daily_rate = _forecast_daily_rate(conn, month_start, when=midpoint)
         values.append(round(daily_rate * days_in_month))
     return {"forecast_backtest": values}
 

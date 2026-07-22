@@ -417,16 +417,49 @@ If the flock's actual laying rate changes, the very next computation
 already reflects it. This is the same "read fresh, no cache" philosophy
 as options.json (§8) applied to a derived value instead of raw config.
 
-**Why flat (no seasonal curve) for now:** the actual-rate half of the
-blend already reflects current real-world conditions for the *near*
-future — a currently-depressed winter rate is already priced in. The gap
-is only projecting *across* a season boundary (e.g. forecasting from
-November into February), which a flat rate will over/under-shoot. This
-was a deliberate choice to ship something simple and honest first (see
-DOCS.md's forecast section, which states the limitation directly) rather
-than build a month-by-month seasonal adjustment curve — that's the
-natural next step if the flat forecast proves noticeably off across a
-season boundary.
+### Seasonal adjustment (v1.26.0)
+
+The forecast originally used a flat daily rate; the accepted limitation
+was projecting *across* a season boundary (e.g. November into February),
+which a flat rate over/under-shoots. v1.26.0 adds the "natural next step"
+that earlier text promised: one universal sinusoid over the calendar year
+(`_seasonal_multiplier`), peaking at the summer solstice —
+
+```
+s(t) = 1 + SEASONAL_AMPLITUDE × cos(2π × (day_of_year(t) − SEASONAL_PEAK_DAY) / 365.25)
+```
+
+with `SEASONAL_AMPLITUDE = 0.25` and `SEASONAL_PEAK_DAY = 172` (~Jun 21).
+Its annual mean is ≈ 1.0, so a breed's `annual_eggs` total is
+*redistributed* across the year, not inflated. Same philosophy as the age
+curve: one universal shape, no per-breed seasonal curves.
+
+**Where the factor applies — and why the ratio's denominator gets it
+too:** the trailing-30-day actual rate already embeds the current season,
+so comparing it against the *flat* baseline would misread a seasonally
+normal winter low as a badly performing flock and project that
+depression flatly into spring. Instead (`_forecast_components`):
+
+- `ratio = clamp(actual_30d / (baseline_flat × s(now)))` — a
+  season-independent flock-health signal ("how are we doing vs. what's
+  seasonally expected"), which is what the clamp bounds were always
+  meant to dampen.
+- projected `rate(month) = baseline_flat × s(month midpoint) × ratio`.
+
+A useful consequence, asserted by a test: evaluated *at* `now` the
+seasonal terms cancel (`baseline × s(now) × actual/(baseline × s(now)) =
+actual`), so the blended "current" rate still equals the observed
+trailing rate exactly as before — seasonality only reshapes the
+projection across months. The backtest applies the same treatment
+retroactively (data cutoff at a month's start, seasonal factor at its
+midpoint), so it remains a fair test of the shipped formula.
+
+**Why amplitude and peak day are constants, not config:** fewest-knobs
+philosophy — this add-on has a single known user at ~56°N with an unlit
+coop, for which ±25% is a defensible round number. If the backtest shows
+it running consistently off, `SEASONAL_AMPLITUDE` is the one knob to
+tune. The northern-hemisphere assumption is the new (much smaller)
+accepted limitation — see §17.
 
 ### Chicken photos (v1.20.0)
 
@@ -799,7 +832,9 @@ stays fast.
   multi-tenant or multi-coop model; adding one would mean threading a
   coop/flock ID through the schema, every query, and the UI, which isn't
   justified by the current use case.
-- **The egg collection forecast (§9) doesn't model seasonality.** A flat
-  daily rate projected across a season boundary (e.g. summer → winter)
-  will run high or low. Deferred deliberately in favor of shipping a
-  simple, honest forecast first — see §9 for the reasoning.
+- **The forecast's seasonal curve (§9) assumes the northern hemisphere**
+  (`SEASONAL_PEAK_DAY` ≈ the June solstice) and one fixed ±25% amplitude.
+  A southern-hemisphere install would get the seasons inverted; a lit
+  coop would see less seasonal swing than modeled. Both are acceptable
+  for a single-known-user add-on; the constants are the tuning point if
+  that changes.

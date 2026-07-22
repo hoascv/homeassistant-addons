@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.26.0
+
+- The egg collection forecast now models **seasonality**: longer days
+  boost laying in summer, shorter days lower it in winter (a ±25% curve
+  peaking at the June solstice). Projections across a season boundary —
+  e.g. made in autumn, looking into winter — now show the dip and the
+  spring recovery instead of running the current rate flat. Your current
+  observed rate is unchanged; only how it's projected forward differs.
+  The forecast backtest applies the same curve retroactively, so it stays
+  a fair measure of accuracy. This closes a previously documented known
+  limitation.
+
 ## 1.25.0
 
 - The app is now served by a production WSGI server (waitress) instead of
