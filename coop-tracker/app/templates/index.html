@@ -343,6 +343,45 @@
           <option value="lost">Lost</option>
         </select>
       </div>
+
+      <div id="chicken-health-section" hidden>
+        <div class="field-label-row">
+          <label>Health history</label>
+          <button type="button" class="link-btn" id="health-add-btn">+ Add</button>
+        </div>
+        <ul class="food-type-manager-list" id="health-event-list"></ul>
+        <p class="empty-state" id="health-event-empty" hidden>No health events yet</p>
+        <div id="health-add-form" hidden>
+          <div class="field">
+            <label>Event</label>
+            <select id="health-form-type">
+              <option value="vet_visit">Vet visit</option>
+              <option value="vaccination">Vaccination</option>
+              <option value="molt_start">Molt started</option>
+              <option value="molt_end">Molt ended</option>
+              <option value="weight">Weight check</option>
+              <option value="observation">Observation</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Date</label>
+            <input type="date" id="health-form-date">
+          </div>
+          <div class="field" id="health-form-weight-field" hidden>
+            <label>Weight (grams)</label>
+            <input type="number" id="health-form-weight" min="1" placeholder="e.g. 1900">
+          </div>
+          <div class="field">
+            <label>Notes (optional)</label>
+            <input type="text" id="health-form-notes" placeholder="e.g. annual checkup">
+          </div>
+          <div class="sheet-actions">
+            <button type="button" class="btn-secondary" id="health-form-cancel-btn">Cancel</button>
+            <button type="button" class="btn-primary" id="health-form-save-btn">Save event</button>
+          </div>
+        </div>
+      </div>
+
       <div class="sheet-actions">
         <button type="button" class="btn-secondary" id="chicken-form-cancel-btn">Cancel</button>
         <button type="button" class="btn-primary" id="chicken-form-save-btn">Save</button>

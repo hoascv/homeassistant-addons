@@ -838,3 +838,41 @@ stays fast.
   coop would see less seasonal swing than modeled. Both are acceptable
   for a single-known-user add-on; the constants are the tuning point if
   that changes.
+
+## 18. Per-chicken health records (v1.27.0)
+
+A `health_events` table (`chicken_id`, `event_type`, `event_date`,
+`weight_grams`, `notes`, `created_at`) surfaced as a "Health history"
+section inside the My Flock chicken edit form. Routes: `GET`/`POST`
+`/api/chickens/<id>/health`, `DELETE /api/health-events/<id>`.
+
+**Why a separate table, not more rows in `logs`:** a health event belongs
+to a *chicken*, not to the flock's activity feed. Stuffing it into the
+polymorphic `logs` table would poison every aggregate that scans it
+(`_compute_summary`, `_compute_trends`, feeding stats) with rows they'd
+all have to know to exclude, and would leave `chicken_id` as yet another
+nullable column that only one type uses.
+
+**Why `chicken_id` is a real id reference** — unlike `logs.food_type` and
+`chickens.breed`, which are deliberately string-matched (§4): those are
+historical records that must survive their referent being renamed or
+deleted. A health event without its chicken is meaningless — there's
+nothing worth preserving once the bird itself is gone — so this is the
+schema's first true parent-child relationship, and chicken deletion
+removes its events.
+
+**Why the cascade is manual** (a `DELETE FROM health_events` in
+`api_delete_chicken`) even though the column declares `ON DELETE
+CASCADE`: SQLite only enforces foreign keys under `PRAGMA foreign_keys =
+ON`, which this app has never set on any connection. Turning it on
+globally for one feature would be a behavior change on every connection
+path (requests, background loop, restore) for zero additional benefit
+over one explicit delete; the `REFERENCES` clause stays as schema
+documentation.
+
+**Why a fixed `event_type` set** (`HEALTH_EVENT_TYPES`: vet_visit,
+vaccination, molt_start, molt_end, weight, observation): the same
+free-text-fragments lesson as food types (§10) — and `observation` is the
+pressure valve for anything the fixed set doesn't cover, with details in
+`notes`. `weight_grams` is required for `weight` events, optional
+elsewhere.

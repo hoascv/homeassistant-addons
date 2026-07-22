@@ -1064,12 +1064,116 @@ function openChickenForm(chicken = null) {
     removePhotoBtn.hidden = true;
   }
 
+  // Health history only exists for an already-saved chicken — a new one
+  // has no id to attach events to yet.
+  healthChickenId = chicken ? chicken.id : null;
+  document.getElementById("chicken-health-section").hidden = !chicken;
+  document.getElementById("health-add-form").hidden = true;
+  if (chicken) loadHealthEvents(chicken.id);
+
   formEl.hidden = false;
 }
 
 function closeChickenForm() {
   document.getElementById("chicken-form").hidden = true;
 }
+
+// --- Health history (inside the chicken edit form) ---
+
+let healthChickenId = null;
+
+const HEALTH_EVENT_LABELS = {
+  vet_visit: "Vet visit",
+  vaccination: "Vaccination",
+  molt_start: "Molt started",
+  molt_end: "Molt ended",
+  weight: "Weight check",
+  observation: "Observation",
+};
+
+async function loadHealthEvents(chickenId) {
+  const listEl = document.getElementById("health-event-list");
+  const emptyEl = document.getElementById("health-event-empty");
+  let events = [];
+  try {
+    const res = await fetch(`api/chickens/${chickenId}/health`);
+    events = await res.json();
+  } catch (err) {
+    events = [];
+  }
+
+  emptyEl.hidden = events.length > 0;
+  listEl.innerHTML = events
+    .map((e) => {
+      const weight = e.weight_grams != null ? ` · ${e.weight_grams} g` : "";
+      const notes = e.notes ? ` · ${escapeHtml(e.notes)}` : "";
+      return `
+        <li>
+          <span>${HEALTH_EVENT_LABELS[e.event_type] || e.event_type} · ${e.event_date}${weight}${notes}</span>
+          <button type="button" class="food-type-delete-btn health-event-delete-btn" data-id="${e.id}" aria-label="Delete event">✕</button>
+        </li>
+      `;
+    })
+    .join("");
+}
+
+document.getElementById("health-add-btn").addEventListener("click", () => {
+  const formEl = document.getElementById("health-add-form");
+  formEl.hidden = !formEl.hidden;
+  if (!formEl.hidden) {
+    document.getElementById("health-form-date").value = new Date().toISOString().slice(0, 10);
+    document.getElementById("health-form-notes").value = "";
+    document.getElementById("health-form-weight").value = "";
+  }
+});
+
+document.getElementById("health-form-type").addEventListener("change", (e) => {
+  document.getElementById("health-form-weight-field").hidden = e.target.value !== "weight";
+});
+
+document.getElementById("health-form-cancel-btn").addEventListener("click", () => {
+  document.getElementById("health-add-form").hidden = true;
+});
+
+document.getElementById("health-form-save-btn").addEventListener("click", async () => {
+  if (!healthChickenId) return;
+  const eventType = document.getElementById("health-form-type").value;
+  const payload = {
+    event_type: eventType,
+    event_date: document.getElementById("health-form-date").value,
+    notes: document.getElementById("health-form-notes").value.trim() || null,
+  };
+  const weight = document.getElementById("health-form-weight").value;
+  if (weight) payload.weight_grams = Number(weight);
+  if (eventType === "weight" && !weight) {
+    alert("Weight is required for a weight check.");
+    return;
+  }
+
+  try {
+    const res = await fetch(`api/chickens/${healthChickenId}/health`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      alert(data.error || "Couldn't save that event.");
+      return;
+    }
+    document.getElementById("health-add-form").hidden = true;
+    loadHealthEvents(healthChickenId);
+  } catch (err) {
+    alert("Couldn't save — check your connection and try again.");
+  }
+});
+
+document.getElementById("health-event-list").addEventListener("click", async (e) => {
+  const deleteBtn = e.target.closest(".health-event-delete-btn");
+  if (!deleteBtn || !healthChickenId) return;
+  await fetch(`api/health-events/${deleteBtn.dataset.id}`, { method: "DELETE" });
+  loadHealthEvents(healthChickenId);
+});
 
 document.getElementById("chicken-add-btn").addEventListener("click", () => openChickenForm(null));
 document.getElementById("chicken-form-cancel-btn").addEventListener("click", closeChickenForm);

@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.27.0
+
+- New per-chicken **Health history** in 🐔 My Flock: open a chicken and
+  log vet visits, vaccinations, molt start/end, weight checks (grams),
+  or general observations, each with a date and optional notes. Events
+  list newest-first with one-tap delete; removing a chicken removes its
+  history too. Included in backups automatically.
+
 ## 1.26.0
 
 - The egg collection forecast now models **seasonality**: longer days

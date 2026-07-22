@@ -17,7 +17,7 @@ from datetime import date, datetime, time as dtime, timedelta
 import flask
 from flask import Flask, Response, g, jsonify, render_template, request, send_file
 
-APP_VERSION = "1.26.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.27.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("COOP_DB_PATH", "/data/coop.db")
 OPTIONS_PATH = os.environ.get("COOP_OPTIONS_PATH", "/data/options.json")
@@ -79,6 +79,17 @@ DEFAULT_BREEDS = [
     ("Isabrown", 300),
     ("Sussex", 260),
 ]
+
+# Fixed set, like entry types in api_log — a free-text field would fragment
+# into unmatchable variants the same way food_type once did (see §10).
+HEALTH_EVENT_TYPES = (
+    "vet_visit",
+    "vaccination",
+    "molt_start",
+    "molt_end",
+    "weight",
+    "observation",
+)
 
 # Seeded into the food_types table the first time it's created (empty
 # table only — see init_db()); editable afterwards via /api/food-types.
@@ -232,6 +243,24 @@ def init_db():
         CREATE TABLE IF NOT EXISTS app_state (
             key TEXT PRIMARY KEY,
             value TEXT
+        )
+        """
+    )
+
+    # The REFERENCES clause is schema documentation: SQLite only enforces
+    # it under PRAGMA foreign_keys, which this app never enables — the
+    # cascade is done manually in api_delete_chicken instead. See
+    # ARCHITECTURE.md §18.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS health_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            chicken_id INTEGER NOT NULL REFERENCES chickens(id) ON DELETE CASCADE,
+            event_type TEXT NOT NULL,
+            event_date TEXT NOT NULL,
+            weight_grams INTEGER,
+            notes TEXT,
+            created_at TEXT NOT NULL
         )
         """
     )
@@ -941,13 +970,17 @@ def api_delete_breed(breed_id):
     return "", 204
 
 
-def _parse_hatch_date(value):
+def _parse_date_field(value, label):
     if not value:
         return None, None
     try:
         return datetime.fromisoformat(value).date().isoformat(), None
     except ValueError:
-        return None, "invalid hatch_date"
+        return None, f"invalid {label}"
+
+
+def _parse_hatch_date(value):
+    return _parse_date_field(value, "hatch_date")
 
 
 def _decode_photo_data_uri(data_uri):
@@ -1062,7 +1095,72 @@ def api_update_chicken(chicken_id):
 @app.route("/api/chickens/<int:chicken_id>", methods=["DELETE"])
 def api_delete_chicken(chicken_id):
     db = get_db()
+    # manual cascade — SQLite doesn't enforce the FK without a pragma this
+    # app never sets; a health event without its chicken is meaningless
+    db.execute("DELETE FROM health_events WHERE chicken_id = ?", (chicken_id,))
     db.execute("DELETE FROM chickens WHERE id = ?", (chicken_id,))
+    db.commit()
+    return "", 204
+
+
+@app.route("/api/chickens/<int:chicken_id>/health")
+def api_chicken_health_events(chicken_id):
+    db = get_db()
+    if db.execute("SELECT id FROM chickens WHERE id = ?", (chicken_id,)).fetchone() is None:
+        return jsonify({"error": "not found"}), 404
+    rows = db.execute(
+        "SELECT * FROM health_events WHERE chicken_id = ? ORDER BY event_date DESC, id DESC",
+        (chicken_id,),
+    ).fetchall()
+    return jsonify([dict(row) for row in rows])
+
+
+@app.route("/api/chickens/<int:chicken_id>/health", methods=["POST"])
+def api_add_health_event(chicken_id):
+    db = get_db()
+    if db.execute("SELECT id FROM chickens WHERE id = ?", (chicken_id,)).fetchone() is None:
+        return jsonify({"error": "not found"}), 404
+
+    data = request.get_json(force=True, silent=True) or {}
+
+    event_type = data.get("event_type")
+    if event_type not in HEALTH_EVENT_TYPES:
+        return jsonify({"error": "invalid event_type"}), 400
+
+    event_date, err = _parse_date_field(data.get("event_date"), "event_date")
+    if err:
+        return jsonify({"error": err}), 400
+    if event_date is None:
+        return jsonify({"error": "event_date is required"}), 400
+
+    weight_grams = data.get("weight_grams")
+    if weight_grams is not None:
+        try:
+            weight_grams = int(weight_grams)
+        except (ValueError, TypeError):
+            return jsonify({"error": "invalid weight_grams"}), 400
+        if weight_grams <= 0:
+            return jsonify({"error": "invalid weight_grams"}), 400
+    if event_type == "weight" and weight_grams is None:
+        return jsonify({"error": "weight_grams is required for weight events"}), 400
+
+    notes = (data.get("notes") or "").strip() or None
+    created_at = datetime.now().isoformat()
+
+    cur = db.execute(
+        "INSERT INTO health_events (chicken_id, event_type, event_date, weight_grams, notes, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (chicken_id, event_type, event_date, weight_grams, notes, created_at),
+    )
+    db.commit()
+    row = db.execute("SELECT * FROM health_events WHERE id = ?", (cur.lastrowid,)).fetchone()
+    return jsonify(dict(row)), 201
+
+
+@app.route("/api/health-events/<int:event_id>", methods=["DELETE"])
+def api_delete_health_event(event_id):
+    db = get_db()
+    db.execute("DELETE FROM health_events WHERE id = ?", (event_id,))
     db.commit()
     return "", 204
 

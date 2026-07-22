@@ -23,7 +23,8 @@ your chickens, right from your phone via the Home Assistant sidebar.
   tracking
 - My Flock panel (🐔 icon): track individual chickens (name, photo, breed,
   hatch date) for an age-adjusted forecast, more accurate than flat
-  per-breed counts
+  per-breed counts — plus a per-chicken health history (vet visits,
+  vaccinations, molting, weight checks, observations)
 - Recent activity history with filtering and delete
 - Backup & Restore panel (download or restore the SQLite database), plus
   a one-way CSV export of all entries for spreadsheets — comma-delimited,
@@ -183,6 +184,14 @@ years, the most forgiving default. A photo is optional too — tap
 **Choose File** in the chicken form to add one (resized automatically,
 so a normal phone photo won't bloat the database), and **Remove photo**
 to take it off again.
+
+Each chicken also has a **Health history**: open the chicken from the
+list and use **+ Add** under Health history to log a vet visit,
+vaccination, molt start/end, weight check (in grams), or a general
+observation, each with a date and optional notes. Events are shown
+newest first and can be deleted with ✕. The section appears when editing
+an existing chicken (a brand-new chicken has to be saved first).
+Removing a chicken removes its health history with it.
 
 Age adjustment is a simple three-stage curve, the same shape for every
 breed: no eggs before about 20 weeks old, full rate through about 18
