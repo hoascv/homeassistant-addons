@@ -26,3 +26,26 @@ jobs:
 
       - name: Run tests
         run: pytest
+
+  e2e:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: coop-tracker
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: coop-tracker/app/requirements-e2e.txt
+
+      - name: Install dependencies
+        run: pip install -r app/requirements-e2e.txt
+
+      - name: Install Playwright browser
+        run: playwright install --with-deps chromium
+
+      - name: Run e2e smoke tests
+        run: pytest app/tests_e2e

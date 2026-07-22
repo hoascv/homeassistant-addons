@@ -767,13 +767,29 @@ not a mocking library — it asserts on the actual HTTP paths and JSON
 bodies `_ha_api_request` sends, which is what would actually reach Home
 Assistant.
 
-**Not covered:** the frontend (`app.js`/`style.css`/`index.html`) has no
-automated tests. Adding one (e.g. via Playwright) would mean a Node
-toolchain purely for testing, in a project that deliberately has none for
-the app itself (§7) — UI changes are still verified by hand (a headless-
-Chrome pass during development), not by CI. This is the most likely gap
-to revisit if the frontend grows past what a manual pass can reliably
-cover.
+**Frontend smoke tests** live in `app/tests_e2e/`, run explicitly:
+
+```
+pip install -r app/requirements-e2e.txt
+playwright install chromium
+pytest app/tests_e2e
+```
+
+They use **Playwright for Python** (`pytest-playwright`) — pip-installed,
+no Node toolchain, consistent with §7's no-build-step stance (the earlier
+objection to frontend testing was the Node dependency, which the Python
+bindings remove). A session fixture launches the real entry point
+(`python app.py` → waitress, on a free `COOP_PORT`, throwaway DB, no
+`SUPERVISOR_TOKEN` so the background loop exits immediately) and drives it
+in headless Chromium.
+
+**Deliberately smoke-only** (~5 tests: page loads, log an egg end-to-end,
+history renders, Trends chart draws, My Flock opens): behavioral logic is
+already covered at the backend layer where it's cheap and fast; the e2e
+layer only proves the UI-to-API wiring works in a real browser. Because
+`pytest.ini` sets `testpaths = app/tests`, a bare `pytest` stays
+backend-only — CI runs the e2e suite as a separate job so the fast suite
+stays fast.
 
 ## 17. Known limitations (accepted, not oversights)
 
