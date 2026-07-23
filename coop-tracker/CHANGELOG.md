@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.32.0
+
+- **Eggs are now found by color, not brightness** — the flagship
+  real-world case (a brown egg on pale straw bedding) went completely
+  undetected before, because detection compared brightness only and a
+  brown egg is barely darker than straw. Detection now looks for
+  regions whose *color* differs from the bedding, which also works for
+  white eggs and any future egg color (green, blue) as long as it
+  contrasts with the bedding — an egg colored almost exactly like its
+  bedding remains the one hard case.
+- **Angled photos now size eggs correctly.** The two wall lines on the
+  review screen can be tilted (drag either end) to follow the box's
+  walls as they converge in a photo taken into a deep box; each egg is
+  measured against the local wall-to-wall distance at its own position,
+  so eggs near the back no longer read smaller than they are.
+- **Much stronger automatic box recognition.** Photos are matched using
+  a small bundled image network (SqueezeNet, ~5MB, runs entirely
+  on-device) instead of a coarse color signature that couldn't tell two
+  wooden boxes apart. Also fixed box recognition never training at all
+  until 25 total photos were stored — two boxes with a few setup photos
+  each now train immediately. Existing training photos are reused: tap
+  **Train now** once after upgrading (or just take the next wizard
+  photo) and recognition retrains automatically.
+
 ## 1.31.1
 
 - Fixed the nesting-box setup wizard letting **Finish** be tapped after

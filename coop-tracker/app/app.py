@@ -63,7 +63,7 @@ except ImportError as e:
     SKLEARN_AVAILABLE = False
     SKLEARN_ERROR = str(e)
 
-APP_VERSION = "1.31.1"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.32.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("COOP_DB_PATH", "/data/coop.db")
 OPTIONS_PATH = os.environ.get("COOP_OPTIONS_PATH", "/data/options.json")
@@ -134,34 +134,61 @@ MAX_EGG_VISION_PHOTO_BYTES = 8 * 1024 * 1024  # analysis photo, not the 3MB chic
 # ARCHITECTURE.md §20 addendum): a box's interior should dominate a
 # properly-framed photo, the same "obvious, hard-to-miss geometric
 # primitive" reasoning that made Hough circles the right fit for a coin
-# in the original design. Calibration is width-only: the two facing
-# side walls are detected, the pixel distance between them plus the
-# box's known real-world width give a single linear scale factor — same
-# shape of math a coin's diameter gave, just derived from box walls.
-# No perspective/tilt correction, by deliberate choice (simpler, and a
-# handheld photo close to square-on is the common case).
+# in the original design. The two facing side walls are the reference:
+# each is a (possibly slanted) line, and the local wall-to-wall pixel
+# distance at an egg's own row, plus the box's known real-world width,
+# give that egg's px-per-mm. Slanting captures the dominant handheld
+# effect — walls converging with depth when the camera looks into the
+# box — without needing the box's depth measured or its (usually
+# bedding-buried) floor corners located, which is why this was chosen
+# over a full 4-corner perspective transform.
 BOX_MIN_AREA_FRACTION = 0.15
 
+# Egg detection color pass (see ARCHITECTURE.md §20 addendum): eggs are
+# found as regions whose Lab color differs from the bedding's estimated
+# (median) color — hue-agnostic, so brown, white, or any future egg
+# color works as long as it contrasts with the bedding. Chroma (a/b)
+# gets extra weight vs lightness so shadows and dents in the bedding
+# don't read as eggs; the distance floor keeps a near-uniform, eggless
+# scene from having its sensor noise Otsu-split into phantom regions.
+EGG_BEDDING_L_WEIGHT = 1.0
+EGG_BEDDING_CHROMA_WEIGHT = 2.0
+EGG_MIN_COLOR_DISTANCE = 12
+
 # Trainable egg-vision model (opt-in, see ARCHITECTURE.md §20 addendum):
-# minimum stored samples/examples before "Train now" (or the wizard's
-# auto-retrain) produces a usable model, and before each sub-model is
-# considered trained. Deliberately conservative — a model fit on a
-# handful of examples is worse than the fixed heuristics it replaces.
+# minimum stored examples before each sub-model is considered trained.
+# Deliberately conservative — a model fit on a handful of examples is
+# worse than the fixed heuristics it replaces. Note these gate each
+# sub-model independently inside _train_egg_vision_models; the train
+# endpoint itself only refuses when there are zero samples at all.
 EGG_VISION_MIN_TRAINING_SAMPLES = 25
 EGG_VISION_MIN_CLASSIFIER_POS = 15
 EGG_VISION_MIN_CLASSIFIER_NEG = 15
 EGG_VISION_MIN_SIZE_SAMPLES = 25
 
 # Box identification (which registered nesting box is in this photo —
-# see ARCHITECTURE.md §20 addendum): a simple global color-appearance
-# classifier, not a full CNN — feasible because boxes are visually
-# distinct (different color/material/wear), not because the model is
-# small. With exactly one registered box there's nothing to
-# disambiguate, so no classifier is needed at all; from two boxes on,
-# the classifier's confidence gates whether an ambiguous/new box
-# surfaces as "please confirm" rather than a silent wrong guess.
-EGG_VISION_BOX_ID_CONFIDENCE_THRESHOLD = 0.65
+# see ARCHITECTURE.md §20 addendum): a small pretrained CNN (SqueezeNet
+# 1.1, bundled in the image at app/models/) is used as a frozen feature
+# extractor via cv2.dnn — feature extraction only, nothing leaves the
+# device — with a nearest-centroid cosine head trained on this
+# install's own sample photos. With exactly one registered box there's
+# nothing to disambiguate, so no classifier is needed at all; from two
+# boxes on, a prediction is only trusted when it clears BOTH an
+# absolute similarity floor (rejects "looks like neither box": a new,
+# unregistered box or a terrible photo) AND a margin over the runner-up
+# (rejects "could be either"); anything else surfaces as "please
+# confirm" rather than a silent wrong guess.
+EGG_VISION_BOX_EMBED_MODEL_PATH = os.environ.get(
+    "COOP_BOX_EMBED_MODEL",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", "squeezenet1.1-7.onnx"),
+)
+EGG_VISION_BOX_EMBED_INPUT_SIZE = 224
+EGG_VISION_BOX_EMBED_MEAN = (0.485, 0.456, 0.406)  # ImageNet, RGB order
+EGG_VISION_BOX_EMBED_STD = (0.229, 0.224, 0.225)
+EGG_VISION_BOX_ID_MIN_SIMILARITY = 0.55
+EGG_VISION_BOX_ID_MIN_MARGIN = 0.15
 EGG_VISION_BOX_ID_MIN_SAMPLES_PER_BOX = 3
+EGG_VISION_BOX_MODEL_FORMAT = 2  # bump whenever embedding features change incompatibly
 
 # The nesting-box wizard's stopping rule (see ARCHITECTURE.md §20
 # addendum): keep collecting corrected photos for a box until the
@@ -1348,29 +1375,48 @@ def _egg_size_code_ml(width_mm, aspect_ratio, extent, size_model):
     return size_model.predict(x)[0]
 
 
+def _order_corners_clockwise(pts):
+    """Orders 4 (x,y) points as top-left, top-right, bottom-right,
+    bottom-left — the coordinate sum is smallest at top-left/largest at
+    bottom-right, and the y−x difference is smallest at top-right/largest
+    at bottom-left, regardless of the polygon's original winding order
+    from approxPolyDP."""
+    pts = np.asarray(pts, dtype=np.float64)
+    s = pts.sum(axis=1)
+    diff = np.diff(pts, axis=1).flatten()
+    return [
+        pts[np.argmin(s)].tolist(),
+        pts[np.argmin(diff)].tolist(),
+        pts[np.argmax(s)].tolist(),
+        pts[np.argmax(diff)].tolist(),
+    ]
+
+
 def _detect_box_walls(gray, blurred):
-    """Finds a nesting box's interior extent: the largest sufficiently-
-    large, non-degenerate contour's bounding rectangle. A box interior is
-    a large, high-contrast region against its walls/bedding — the same
-    "obvious, hard-to-miss geometric primitive" reasoning that made Hough
-    circles the right fit for a coin in the original design, just using a
-    bounding extent instead of a circle fit, since only the width
-    (left-to-right) axis is used for calibration — see ARCHITECTURE.md
-    §20 addendum.
+    """Finds a nesting box's interior as two (possibly slanted) side-wall
+    lines. A box interior is a large, high-contrast region against its
+    walls/bedding — the same "obvious, hard-to-miss geometric primitive"
+    reasoning that made Hough circles the right fit for a coin in the
+    original design. When the winning contour simplifies to a convex
+    4-gon, its left and right edges become the wall lines — capturing
+    the walls converging with depth when a handheld camera looks into
+    the box; otherwise the bounding rectangle's vertical edges are used
+    (a zero-slant trapezoid). See ARCHITECTURE.md §20 addendum.
 
     Unlike the coin/egg case, the box is typically the MAJORITY of the
-    frame, not a small minority blob — so unlike _extract_egg_candidates,
-    this can't assume "the smaller class is the foreground". Instead it
-    tries both polarities of the Otsu split and keeps whichever produces
-    a large-but-not-degenerate contour (a contour close to the full
-    photo's bounds is almost always the image border itself, e.g. when
-    the background — not the box — ends up as the "foreground" class,
-    since background typically touches all 4 edges of a photo).
+    frame, not a small minority blob — so this can't assume "the smaller
+    class is the foreground". Instead it tries both polarities of the
+    Otsu split and keeps whichever produces a large-but-not-degenerate
+    contour (a contour close to the full photo's bounds is almost always
+    the image border itself, e.g. when the background — not the box —
+    ends up as the "foreground" class, since background typically
+    touches all 4 edges of a photo).
 
-    Returns {left, top, right, bottom} in pixels, or None if nothing
-    qualifies (box out of frame / heavily occluded / no plain background
-    to contrast against) — the caller always falls back to a default so
-    the user has draggable handles to correct, never a dead end."""
+    Returns {top_y, bottom_y, left_top_x, left_bottom_x, right_top_x,
+    right_bottom_x} in pixels, or None if nothing qualifies (box out of
+    frame / heavily occluded / no plain background to contrast against)
+    — the caller always falls back to a default so the user has
+    draggable handles to correct, never a dead end."""
     _, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     photo_area = gray.shape[0] * gray.shape[1]
     kernel = np.ones((15, 15), np.uint8)
@@ -1388,61 +1434,151 @@ def _detect_box_walls(gray, blurred):
             best = largest  # prefer the tighter of the two valid candidates
     if best is None:
         return None
+
+    approx = cv2.approxPolyDP(best, 0.02 * cv2.arcLength(best, True), True)
+    if len(approx) == 4 and cv2.isContourConvex(approx):
+        tl, tr, br, bl = _order_corners_clockwise(approx.reshape(4, 2))
+        top_y = (tl[1] + tr[1]) / 2
+        bottom_y = (bl[1] + br[1]) / 2
+        if bottom_y > top_y:
+            return {
+                "top_y": float(top_y),
+                "bottom_y": float(bottom_y),
+                "left_top_x": float(tl[0]),
+                "left_bottom_x": float(bl[0]),
+                "right_top_x": float(tr[0]),
+                "right_bottom_x": float(br[0]),
+            }
+
     x, y, w, h = cv2.boundingRect(best)
-    return {"left": float(x), "top": float(y), "right": float(x + w), "bottom": float(y + h)}
+    return {
+        "top_y": float(y),
+        "bottom_y": float(y + h),
+        "left_top_x": float(x),
+        "left_bottom_x": float(x),
+        "right_top_x": float(x + w),
+        "right_bottom_x": float(x + w),
+    }
 
 
 def _default_box_walls(w, h):
     """Centered inset guess when auto-detection fails — mirrors the
     original coin's default center/radius guess in app.js so the user
     always has something draggable."""
-    return {"left": w * 0.1, "top": h * 0.1, "right": w * 0.9, "bottom": h * 0.9}
+    return {
+        "top_y": h * 0.1,
+        "bottom_y": h * 0.9,
+        "left_top_x": w * 0.1,
+        "left_bottom_x": w * 0.1,
+        "right_top_x": w * 0.9,
+        "right_bottom_x": w * 0.9,
+    }
+
+
+def _normalize_box_walls(walls):
+    """Accepts either the current trapezoid shape or the pre-1.32 flat
+    {left, top, right, bottom} rectangle (still present in samples stored
+    by 1.31.x, which keep training the size model) and returns the
+    trapezoid shape, or None if the input is unusable."""
+    if not isinstance(walls, dict):
+        return None
+    if "top_y" in walls:
+        required = ("top_y", "bottom_y", "left_top_x", "left_bottom_x", "right_top_x", "right_bottom_x")
+        if not all(k in walls for k in required):
+            return None
+        return walls
+    if all(k in walls for k in ("left", "top", "right", "bottom")):
+        return {
+            "top_y": walls["top"],
+            "bottom_y": walls["bottom"],
+            "left_top_x": walls["left"],
+            "left_bottom_x": walls["left"],
+            "right_top_x": walls["right"],
+            "right_bottom_x": walls["right"],
+        }
+    return None
+
+
+def _wall_px_per_mm_at(walls, y, width_mm):
+    """Local pixels-per-mm at image row y: each wall's x is linearly
+    interpolated between its top and bottom endpoints (y clamped to the
+    wall segment), and the local wall-to-wall span is scaled by the
+    box's known real-world width. This is what makes an egg near the
+    (farther, narrower-looking) back of an angled photo measure the same
+    real size as one near the front. Returns None when the geometry is
+    degenerate (zero-height walls, crossed walls, no width)."""
+    if not width_mm:
+        return None
+    span_y = walls["bottom_y"] - walls["top_y"]
+    if span_y <= 0:
+        return None
+    t = min(max((y - walls["top_y"]) / span_y, 0.0), 1.0)
+    x_left = walls["left_top_x"] + t * (walls["left_bottom_x"] - walls["left_top_x"])
+    x_right = walls["right_top_x"] + t * (walls["right_bottom_x"] - walls["right_top_x"])
+    span = x_right - x_left
+    if span <= 0:
+        return None
+    return span / width_mm
 
 
 def _crop_to_box(img, box_walls):
-    """Crops to the detected/default box interior before running egg
-    detection. Without this, the box's own bounding rectangle — which
-    typically dominates the frame — gets lumped together with eggs
-    against a much smaller background class under a single Otsu split,
-    breaking the "smaller class is the object of interest" assumption
-    _extract_egg_candidates relies on (the same assumption that worked
-    fine for the original coin, which really was always the minority).
-    Cropping restores a clean two-class (box floor vs egg) scene, and is
+    """Crops to the detected/default box interior (the trapezoid's
+    bounding box) before running egg detection. Restores a clean
+    two-class (bedding vs egg) scene for the color-distance pass, and is
     the semantically correct thing to do anyway — there's no reason to
     go looking for eggs outside the box. Returns (cropped_img, offset_x,
     offset_y); callers add the offset back onto every candidate's cx/cy
     so downstream consumers keep working in full-photo pixel
     coordinates. See ARCHITECTURE.md §20 addendum."""
     h, w = img.shape[:2]
-    left = max(0, int(box_walls["left"]))
-    top = max(0, int(box_walls["top"]))
-    right = min(w, int(box_walls["right"]))
-    bottom = min(h, int(box_walls["bottom"]))
+    left = max(0, int(min(box_walls["left_top_x"], box_walls["left_bottom_x"])))
+    top = max(0, int(box_walls["top_y"]))
+    right = min(w, int(max(box_walls["right_top_x"], box_walls["right_bottom_x"])))
+    bottom = min(h, int(box_walls["bottom_y"]))
     if right <= left or bottom <= top:
         return img, 0, 0
     return img[top:bottom, left:right], left, top
 
 
 def _extract_egg_candidates(img):
-    """Otsu threshold + contour pass shared by live inference
+    """Color-distance + contour pass shared by live inference
     (_analyze_egg_photo) and training-time re-extraction
     (_train_egg_vision_models), so a model is always trained on exactly
-    the features it's later applied against. Returns every contour above
-    the tiny-noise floor (EGG_MIN_AREA_FRACTION) with a full feature
-    dict — deliberately applies NO upper-area or aspect-ratio filtering
-    here; that "is this plausibly one egg" decision belongs to the caller
-    (hardcoded defaults, or a trained classifier — see ARCHITECTURE.md
-    §20 addendum). Assumes a plain, contrasting background — see DOCS.md
-    for photographing tips."""
+    the features it's later applied against.
+
+    Eggs are found as regions whose Lab color differs from the bedding's
+    estimated color — the bedding estimate is the per-channel median of
+    the (box-cropped) photo, robust because bedding dominates the crop's
+    area while eggs are the minority. Distance is chroma-weighted
+    (EGG_BEDDING_CHROMA_WEIGHT) so a brown egg on pale straw — nearly
+    identical in brightness, clearly different in color — separates,
+    while bedding shadows (brightness-only differences) mostly don't.
+    Hue-agnostic by design: any egg color that contrasts with the
+    bedding works, including future green/blue eggs; an egg colored
+    almost exactly like its bedding remains the documented hard case.
+    The threshold is Otsu on the distance map with an absolute floor
+    (EGG_MIN_COLOR_DISTANCE) so an eggless, near-uniform scene doesn't
+    get its sensor noise split into phantom regions.
+
+    Returns every contour above the tiny-noise floor
+    (EGG_MIN_AREA_FRACTION) with a full feature dict — deliberately
+    applies NO upper-area or aspect-ratio filtering here; that "is this
+    plausibly one egg" decision belongs to the caller (hardcoded
+    defaults, or a trained classifier — see ARCHITECTURE.md §20
+    addendum)."""
     h, w = img.shape[:2]
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    blurred = cv2.GaussianBlur(gray, (9, 9), 2)
-    _, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    # Otsu's polarity isn't knowable in advance; assume the minority-area
-    # class is the foreground (eggs normally occupy less area than the
-    # surface they're laid on).
-    if cv2.countNonZero(thresh) > (thresh.size - cv2.countNonZero(thresh)):
-        thresh = cv2.bitwise_not(thresh)
+    lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB).astype(np.float32)
+    bedding = np.median(lab.reshape(-1, 3), axis=0)
+    diff = lab - bedding
+    dist = np.sqrt(
+        (diff[:, :, 0] * EGG_BEDDING_L_WEIGHT) ** 2
+        + (diff[:, :, 1] * EGG_BEDDING_CHROMA_WEIGHT) ** 2
+        + (diff[:, :, 2] * EGG_BEDDING_CHROMA_WEIGHT) ** 2
+    )
+    dist_u8 = np.clip(dist, 0, 255).astype(np.uint8)
+    dist_u8 = cv2.GaussianBlur(dist_u8, (9, 9), 2)
+    otsu_t, _ = cv2.threshold(dist_u8, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    _, thresh = cv2.threshold(dist_u8, max(otsu_t, EGG_MIN_COLOR_DISTANCE), 255, cv2.THRESH_BINARY)
     kernel = np.ones((5, 5), np.uint8)
     thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
     thresh = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
@@ -1477,36 +1613,104 @@ def _extract_egg_candidates(img):
     return candidates
 
 
-def _box_id_features(img):
-    """A coarse HSV color histogram — boxes are identified by visible
-    material/color/wear, not fine detail, so a global color signature is
-    enough signal without needing a full CNN. Fixed-length (48 numbers)
-    regardless of photo size/orientation. See ARCHITECTURE.md §20
-    addendum."""
-    small = cv2.resize(img, (64, 64))
-    hsv = cv2.cvtColor(small, cv2.COLOR_BGR2HSV)
-    features = []
-    for ch in range(3):
-        hist = cv2.calcHist([hsv], [ch], None, [16], [0, 256])
-        total = hist.sum()
-        features.extend((hist.flatten() / total if total > 0 else hist.flatten()).tolist())
-    return features
+# Box-ID embedder: a frozen, pretrained SqueezeNet 1.1 loaded once per
+# process via cv2.dnn and shared across requests. waitress serves from
+# multiple threads and cv2.dnn's Net.forward() isn't documented
+# thread-safe, so both lazy initialization and every forward pass hold
+# _box_embedder_lock — box-ID runs at most once per photo analysis and
+# once per training sample, so the serialization cost is irrelevant.
+_box_embedder_lock = threading.Lock()
+_box_embedder = None  # {"net": cv2.dnn_Net|None, "dim": int|None, "error": str|None}
+
+
+def _get_box_embedder():
+    global _box_embedder
+    with _box_embedder_lock:
+        if _box_embedder is not None:
+            return _box_embedder
+        try:
+            if not os.path.exists(EGG_VISION_BOX_EMBED_MODEL_PATH):
+                raise FileNotFoundError(f"model file missing: {EGG_VISION_BOX_EMBED_MODEL_PATH}")
+            net = cv2.dnn.readNetFromONNX(EGG_VISION_BOX_EMBED_MODEL_PATH)
+            probe = np.zeros((1, 3, EGG_VISION_BOX_EMBED_INPUT_SIZE, EGG_VISION_BOX_EMBED_INPUT_SIZE), np.float32)
+            net.setInput(probe)
+            out = net.forward()
+            dim = int(out.size)
+            if dim < 256 or not np.isfinite(out).all():
+                raise RuntimeError(f"unexpected embedder output (size {dim})")
+            _box_embedder = {"net": net, "dim": dim, "error": None}
+        except Exception as e:  # noqa: BLE001 - embedder failure degrades to confirm_box, never crashes
+            _box_embedder = {"net": None, "dim": None, "error": str(e)}
+        return _box_embedder
+
+
+def _box_embedder_status():
+    emb = _get_box_embedder()
+    return {
+        "available": emb["net"] is not None,
+        "error": emb["error"],
+        "model_path": EGG_VISION_BOX_EMBED_MODEL_PATH,
+        "dim": emb["dim"],
+    }
+
+
+def _embed_box_photo(img):
+    """L2-normalized embedding of the full photo through the bundled
+    SqueezeNet — this ONNX export's default output IS the flattened
+    global-pooled conv10 features (no softmax layer in the graph,
+    verified empirically), so no intermediate-layer tap is needed.
+    Preprocessing is explicit numpy (not blobFromImage) because
+    per-channel std division isn't expressible as blobFromImage's scalar
+    scale. Plain 224x224 resize, aspect distortion accepted — it's
+    identical at train and inference time, and keeping the full frame
+    preserves context (mounting position, surroundings) that is itself
+    discriminative signal. Returns None if the embedder is unavailable."""
+    emb = _get_box_embedder()
+    if emb["net"] is None:
+        return None
+    small = cv2.resize(img, (EGG_VISION_BOX_EMBED_INPUT_SIZE, EGG_VISION_BOX_EMBED_INPUT_SIZE))
+    rgb = cv2.cvtColor(small, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
+    rgb = (rgb - np.array(EGG_VISION_BOX_EMBED_MEAN, np.float32)) / np.array(EGG_VISION_BOX_EMBED_STD, np.float32)
+    blob = rgb.transpose(2, 0, 1)[np.newaxis, ...]
+    with _box_embedder_lock:
+        emb["net"].setInput(blob)
+        out = emb["net"].forward()
+    vec = out.flatten().astype(np.float32)
+    norm = float(np.linalg.norm(vec))
+    return vec / norm if norm > 0 else vec
 
 
 def _predict_box_id(img, box_classifier, box_classifier_labels):
-    """Returns (box_id, confidence) for the best-matching registered box
-    given a trained box-ID classifier, or (None, 0.0) if no classifier
-    exists yet. The caller applies EGG_VISION_BOX_ID_CONFIDENCE_THRESHOLD
-    to decide whether to trust this or ask the user — with only one
-    registered box, or with fewer than two boxes having enough samples,
-    no classifier is ever trained (see _train_egg_vision_models), so this
-    naturally always returns (None, 0.0) in that case."""
-    if box_classifier is None:
-        return None, 0.0
-    x = [_box_id_features(img)]
-    proba = box_classifier.predict_proba(x)[0]
-    best_i = int(np.argmax(proba))
-    return box_classifier_labels[best_i], float(proba[best_i])
+    """Returns (box_id, similarity, margin) for the best-matching
+    registered box, or (None, 0.0, 0.0) whenever no trustworthy
+    prediction can be made: no trained head, a stale pre-1.32 head (a
+    pickled sklearn object instead of the current dict format), an
+    embedding-dimension mismatch after an OpenCV/model change, or the
+    embedder being unavailable. The caller requires BOTH
+    similarity >= EGG_VISION_BOX_ID_MIN_SIMILARITY and
+    margin >= EGG_VISION_BOX_ID_MIN_MARGIN before trusting the answer —
+    anything else falls back to asking the user (confirm_box), never a
+    silent wrong guess or a 500."""
+    try:
+        if not isinstance(box_classifier, dict) or box_classifier.get("format") != EGG_VISION_BOX_MODEL_FORMAT:
+            return None, 0.0, 0.0
+        vec = _embed_box_photo(img)
+        if vec is None or vec.shape[0] != box_classifier["dim"]:
+            return None, 0.0, 0.0
+        centered = vec - np.asarray(box_classifier["mean"], np.float32)
+        norm = float(np.linalg.norm(centered))
+        if norm <= 0:
+            return None, 0.0, 0.0
+        centered /= norm
+        sims = sorted(
+            ((float(np.dot(centered, np.asarray(c, np.float32))), int(bid)) for bid, c in box_classifier["centroids"].items()),
+            reverse=True,
+        )
+        best_sim, best_id = sims[0]
+        margin = best_sim - sims[1][0] if len(sims) > 1 else 1.0
+        return best_id, best_sim, margin
+    except Exception:  # noqa: BLE001 - any malformed head degrades to confirm_box
+        return None, 0.0, 0.0
 
 
 def _analyze_egg_photo(photo_bytes, box, classifier=None):
@@ -1546,8 +1750,6 @@ def _analyze_egg_photo(photo_bytes, box, classifier=None):
     detected = _detect_box_walls(gray, blurred)
     walls_found = detected is not None
     box_walls = detected or _default_box_walls(w, h)
-    wall_span = box_walls["right"] - box_walls["left"]
-    px_per_mm = (wall_span / box["width_mm"]) if box.get("width_mm") and wall_span > 0 else None
 
     cropped, offset_x, offset_y = _crop_to_box(img, box_walls)
     candidates = _extract_egg_candidates(cropped)
@@ -1562,6 +1764,8 @@ def _analyze_egg_photo(photo_bytes, box, classifier=None):
         keep = _ml_is_egg(c, classifier) if classifier is not None else (c["aspect_ratio"] <= EGG_MAX_ASPECT)
         if not keep:
             continue
+        # Local (per-row) scale, not one global factor — see _wall_px_per_mm_at.
+        px_per_mm = _wall_px_per_mm_at(box_walls, c["cy"], box.get("width_mm"))
         width_mm = (c["width_px"] / px_per_mm) if px_per_mm else None
         eggs.append(
             {
@@ -1621,10 +1825,23 @@ def _load_egg_vision_model(db):
     row = db.execute("SELECT * FROM egg_vision_models").fetchone()
     if row is None:
         return None
+
+    def _safe_unpickle(blob):
+        # A corrupt or format-incompatible blob (e.g. a pre-1.32 pickle
+        # whose class layout no longer matches) must degrade to "no
+        # model", never 500 the analyze endpoint — retraining rebuilds
+        # everything from the retained sample photos.
+        if not blob:
+            return None
+        try:
+            return pickle.loads(blob)
+        except Exception:  # noqa: BLE001
+            return None
+
     return {
-        "classifier": pickle.loads(row["classifier_blob"]) if row["classifier_blob"] else None,
-        "size_model": pickle.loads(row["size_model_blob"]) if row["size_model_blob"] else None,
-        "box_classifier": pickle.loads(row["box_classifier_blob"]) if row["box_classifier_blob"] else None,
+        "classifier": _safe_unpickle(row["classifier_blob"]),
+        "size_model": _safe_unpickle(row["size_model_blob"]),
+        "box_classifier": _safe_unpickle(row["box_classifier_blob"]),
         "box_classifier_labels": json.loads(row["box_classifier_labels"]) if row["box_classifier_labels"] else None,
     }
 
@@ -1664,15 +1881,24 @@ def api_vision_eggs():
     if box_status == "confirm_box":
         arr = np.frombuffer(photo_bytes, dtype=np.uint8)
         img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-        predicted_id, confidence = (None, 0.0)
+        predicted_id, similarity, margin = (None, 0.0, 0.0)
         if img is not None and model and model["box_classifier"] is not None:
-            predicted_id, confidence = _predict_box_id(img, model["box_classifier"], model["box_classifier_labels"])
-        if predicted_id is not None and confidence >= EGG_VISION_BOX_ID_CONFIDENCE_THRESHOLD:
+            predicted_id, similarity, margin = _predict_box_id(
+                img, model["box_classifier"], model["box_classifier_labels"]
+            )
+        if (
+            predicted_id is not None
+            and similarity >= EGG_VISION_BOX_ID_MIN_SIMILARITY
+            and margin >= EGG_VISION_BOX_ID_MIN_MARGIN
+        ):
             row = db.execute("SELECT * FROM nesting_boxes WHERE id = ?", (predicted_id,)).fetchone()
             if row is not None:
                 box_status, box = "ok", {"id": row["id"], "name": row["name"], "width_mm": row["width_mm"]}
         if box_status != "ok":
             candidates = [dict(row) for row in db.execute("SELECT id, name FROM nesting_boxes ORDER BY id ASC")]
+            # confidence + margin are tuning telemetry (readable from
+            # devtools against real photos) — app.js only consumes
+            # box_candidates.
             return jsonify(
                 {
                     "status": "confirm_box",
@@ -1680,7 +1906,8 @@ def api_vision_eggs():
                     **empty,
                     "box_candidates": candidates,
                     "predicted_box_id": predicted_id,
-                    "confidence": confidence,
+                    "confidence": similarity,
+                    "margin": margin,
                 }
             )
 
@@ -1697,27 +1924,27 @@ def api_vision_eggs():
 
 @app.route("/api/vision/eggs/recompute", methods=["POST"])
 def api_vision_eggs_recompute():
-    """Re-runs width scaling + sizing against corrected box walls and the
-    eggs' already-known pixel geometry — no image decode needed. Fired on
-    pointerup while dragging a wall handle. The width-only scale factor
-    is cheap enough that this could be done client-side, but sizing
+    """Re-runs local width scaling + sizing against corrected box walls
+    and the eggs' already-known pixel geometry — no image decode needed.
+    Fired on pointerup while dragging a wall endpoint handle. The scale
+    math is cheap enough that this could be done client-side, but sizing
     (once a trained scikit-learn size model exists) can't be — routing
     both through one endpoint avoids two implementations of the same
     math drifting apart."""
     data = request.get_json(force=True, silent=True) or {}
-    box_id, walls = data.get("box_id"), data.get("box_walls")
-    if box_id is None or not walls:
+    box_id = data.get("box_id")
+    walls = _normalize_box_walls(data.get("box_walls"))
+    if box_id is None or walls is None:
         return jsonify({"error": "box_id and box_walls are required"}), 400
     box = get_db().execute("SELECT * FROM nesting_boxes WHERE id = ?", (box_id,)).fetchone()
     if box is None:
         return jsonify({"error": "no such nesting box"}), 400
 
-    wall_span = walls["right"] - walls["left"]
-    px_per_mm = (wall_span / box["width_mm"]) if box["width_mm"] and wall_span > 0 else None
     model = _load_egg_vision_model(get_db())
     size_model = model["size_model"] if model else None
     out = []
     for e in data.get("eggs", []):
+        px_per_mm = _wall_px_per_mm_at(walls, e["cy"], box["width_mm"])
         width_mm = (e["width_px"] / px_per_mm) if px_per_mm else None
         size = None
         if width_mm is not None:
@@ -1795,13 +2022,15 @@ def _train_egg_vision_models(samples):
     same _extract_egg_candidates pass live inference uses, so a model is
     always trained on exactly the features it's later applied against)
     and matches them against the user's corrected result to build labeled
-    training examples for three independent scikit-learn models: the
-    egg/not-egg classifier, the size classifier, and (once >=2 boxes have
-    enough samples) the box-ID classifier. Deterministic where it can be:
-    Otsu/contours have no randomness, so a candidate the old fixed
-    heuristic would have excluded, and a candidate the user explicitly
-    removed with the chip's X, both surface here as classifier negatives
-    the same way. See ARCHITECTURE.md §20 addendum."""
+    training examples for three independent models: the egg/not-egg
+    classifier and the size classifier (scikit-learn), and — once >=2
+    boxes have enough samples — the box-ID head (nearest-centroid over
+    SqueezeNet embeddings, a plain dict, no sklearn). Deterministic where
+    it can be: the color-distance/contour pass has no randomness, so a
+    candidate the old fixed heuristic would have excluded, and a
+    candidate the user explicitly removed with the chip's X, both
+    surface here as classifier negatives the same way. See
+    ARCHITECTURE.md §20 addendum."""
     classifier_X, classifier_y = [], []
     size_X, size_y = [], []
     box_X, box_y = [], []
@@ -1813,7 +2042,7 @@ def _train_egg_vision_models(samples):
         except (TypeError, ValueError):
             continue
         corrected_eggs = corrected.get("eggs") or []
-        box_walls = corrected.get("box_walls")
+        box_walls = _normalize_box_walls(corrected.get("box_walls"))
         box_width_mm = corrected.get("box_width_mm")
         box_id = row["box_id"]
 
@@ -1823,16 +2052,14 @@ def _train_egg_vision_models(samples):
             continue
 
         if box_id is not None:
-            box_X.append(_box_id_features(img))
-            box_y.append(box_id)
-            box_sample_counts[box_id] = box_sample_counts.get(box_id, 0) + 1
+            emb = _embed_box_photo(img)
+            if emb is not None:
+                box_X.append(emb)
+                box_y.append(box_id)
+                box_sample_counts[box_id] = box_sample_counts.get(box_id, 0) + 1
 
-        if not box_walls or not box_width_mm:
+        if box_walls is None or not box_width_mm:
             continue
-        wall_span = box_walls["right"] - box_walls["left"]
-        if wall_span <= 0:
-            continue
-        px_per_mm = wall_span / box_width_mm
 
         cropped, offset_x, offset_y = _crop_to_box(img, box_walls)
         candidates = _extract_egg_candidates(cropped)
@@ -1849,9 +2076,9 @@ def _train_egg_vision_models(samples):
             used.add(match_i)
             classifier_y.append(1)
             matched_egg = corrected_eggs[match_i]
-            width_mm = c["width_px"] / px_per_mm
-            if matched_egg.get("size") in EGG_SIZE_CODES:
-                size_X.append([width_mm, c["aspect_ratio"], c["extent"]])
+            px_per_mm = _wall_px_per_mm_at(box_walls, c["cy"], box_width_mm)
+            if px_per_mm and matched_egg.get("size") in EGG_SIZE_CODES:
+                size_X.append([c["width_px"] / px_per_mm, c["aspect_ratio"], c["extent"]])
                 size_y.append(matched_egg["size"])
 
         # Eggs the user manually placed (no matching contour — a genuinely
@@ -1863,6 +2090,9 @@ def _train_egg_vision_models(samples):
             if i in used or not egg.get("added"):
                 continue
             if egg.get("size") not in EGG_SIZE_CODES or not egg.get("width_px"):
+                continue
+            px_per_mm = _wall_px_per_mm_at(box_walls, egg.get("cy", 0), box_width_mm)
+            if not px_per_mm:
                 continue
             width_mm = egg["width_px"] / px_per_mm
             aspect_ratio = (egg["height_px"] / egg["width_px"]) if egg.get("height_px") else 1.0
@@ -1879,16 +2109,45 @@ def _train_egg_vision_models(samples):
     if len(size_y) >= EGG_VISION_MIN_SIZE_SAMPLES and len(set(size_y)) >= 2:
         size_model = LogisticRegression(max_iter=1000).fit(size_X, size_y)
 
+    # Box-ID head: nearest-centroid with cosine similarity over centered,
+    # L2-normalized embeddings. Centering against the training-set mean
+    # matters: ImageNet feature vectors share a large common component
+    # (any two natural photos land at cosine ~0.5-0.8 raw), and removing
+    # it spreads same-box vs cross-box similarities far apart, which is
+    # what makes the fixed floor/margin thresholds meaningful. Chosen
+    # over LogisticRegression on 1000-d with n=6-20 (p>>n needs
+    # regularization tuning and yields the overconfident probabilities
+    # this replaces) and over 1-NN (a single-outlier trap at 3
+    # samples/box). Stored as a plain dict — inspectable, no sklearn
+    # dependency at predict time.
     box_classifier = None
     box_classifier_labels = None
     eligible_boxes = {bid for bid, n in box_sample_counts.items() if n >= EGG_VISION_BOX_ID_MIN_SAMPLES_PER_BOX}
     if len(eligible_boxes) >= 2:
         filtered = [(x, y) for x, y in zip(box_X, box_y) if y in eligible_boxes]
-        fX = [x for x, _ in filtered]
-        fy = [y for _, y in filtered]
-        if len(set(fy)) >= 2:
-            box_classifier = LogisticRegression(max_iter=1000).fit(fX, fy)
-            box_classifier_labels = box_classifier.classes_.tolist()
+        if filtered:
+            embs = np.stack([x for x, _ in filtered])
+            labels = [y for _, y in filtered]
+            mean = embs.mean(axis=0)
+            centered = embs - mean
+            norms = np.linalg.norm(centered, axis=1, keepdims=True)
+            norms[norms == 0] = 1.0
+            centered /= norms
+            centroids = {}
+            for bid in sorted(eligible_boxes):
+                rows = centered[[i for i, y in enumerate(labels) if y == bid]]
+                centroid = rows.mean(axis=0)
+                cnorm = float(np.linalg.norm(centroid))
+                centroids[int(bid)] = (centroid / cnorm if cnorm > 0 else centroid).tolist()
+            box_classifier = {
+                "format": EGG_VISION_BOX_MODEL_FORMAT,
+                "kind": "nearest_centroid_cosine",
+                "embedder": {"model": "squeezenet1.1-7"},
+                "dim": int(embs.shape[1]),
+                "mean": mean.tolist(),
+                "centroids": centroids,
+            }
+            box_classifier_labels = sorted(centroids)
 
     return {
         "classifier": classifier,
@@ -1992,6 +2251,7 @@ def api_vision_train_status():
             "training_enabled": training_cfg["enabled"],
             "opencv_available": OPENCV_AVAILABLE,
             "sklearn_available": SKLEARN_AVAILABLE,
+            "box_embedder_available": OPENCV_AVAILABLE and _box_embedder_status()["available"],
             "sample_count": sample_count,
             "retention_count": training_cfg["retention_count"],
             "min_samples_required": EGG_VISION_MIN_TRAINING_SAMPLES,
@@ -2019,7 +2279,13 @@ def api_vision_train():
         return jsonify({"status": "libs_unavailable", "error": OPENCV_ERROR})
     db = get_db()
     sample_count = db.execute("SELECT COUNT(*) FROM egg_vision_samples").fetchone()[0]
-    if sample_count < EGG_VISION_MIN_TRAINING_SAMPLES:
+    # Only "no samples at all" blocks training outright — each sub-model
+    # gates itself on its own minimum inside _train_egg_vision_models.
+    # A single total-count gate here (25, as pre-1.32) silently prevented
+    # the box-ID head from EVER training on a fresh install: the wizard
+    # needs just 3 photos per box, so 2 boxes x a few wizard photos never
+    # reached 25 — the head that only needed 6 samples got none.
+    if sample_count == 0:
         return jsonify(
             {"status": "insufficient_samples", "sample_count": sample_count, "min_required": EGG_VISION_MIN_TRAINING_SAMPLES}
         )
@@ -2425,6 +2691,9 @@ def api_debug():
             "opencv_error": OPENCV_ERROR,
             "sklearn_available": SKLEARN_AVAILABLE,
             "sklearn_error": SKLEARN_ERROR,
+            "box_embedder_available": OPENCV_AVAILABLE and _box_embedder_status()["available"],
+            "box_embedder_error": _box_embedder_status()["error"] if OPENCV_AVAILABLE else "opencv unavailable",
+            "box_embedder_model_path": EGG_VISION_BOX_EMBED_MODEL_PATH,
             "egg_vision_enabled": get_egg_vision_config()["enabled"],
         }
     )

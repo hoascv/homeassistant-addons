@@ -182,12 +182,14 @@ class TestEggVisionRealDetection:
     def test_size_classification_matches_known_geometry(self, client, set_options, nesting_box):
         # Box drawn 1000px wide (80 to 1080), width_mm=320 -> px_per_mm=3.125.
         # An egg width of 140px -> 44.8mm, inside the M|L..L|XL band ("L").
+        # An axis-aligned synthetic box detects as a zero-slant trapezoid,
+        # so the local scale at the egg's row equals the flat span scale.
         set_options(egg_vision_enabled=True)
         photo = _synthetic_box_photo(box=(80, 40, 1080, 860), eggs=[(400, 300, 70, 95, 0)])
         body = client.post("/api/vision/eggs", json={"photo": photo}).get_json()
         assert body["status"] == "ok"
         egg = body["eggs"][0]
-        px_per_mm = (body["box_walls"]["right"] - body["box_walls"]["left"]) / nesting_box["width_mm"]
+        px_per_mm = coopapp._wall_px_per_mm_at(body["box_walls"], egg["cy"], nesting_box["width_mm"])
         width_mm = egg["width_px"] / px_per_mm
         assert egg["size"] == coopapp._egg_size_code(width_mm)
 
@@ -248,6 +250,41 @@ class TestEggVisionRealDetection:
         body = res.get_json()
         assert body["status"] == "error"
         assert body["error"] == "simulated cv2 failure"
+
+    def test_finds_brown_egg_on_straw_bedding(self, client, set_options, nesting_box):
+        # The real-world failure case that motivated the color-distance
+        # pass (1.32.0): a brown egg on pale straw has almost no
+        # BRIGHTNESS contrast (the old grayscale Otsu returned "no eggs
+        # found" on the user's actual photo) but clear COLOR contrast —
+        # the egg is saturated orange-brown, the straw pale yellow.
+        # Straw is simulated as a noisy streak texture so this also
+        # proves texture noise doesn't fragment into false positives.
+        import cv2
+        import numpy as np
+
+        rng = np.random.default_rng(42)
+        img = np.full((900, 1200, 3), 230, np.uint8)
+        straw_base = (150, 200, 210)  # BGR pale yellow — luma ~193
+        cv2.rectangle(img, (80, 40), (1120, 860), straw_base, -1)
+        for _ in range(3000):
+            x1, y1 = int(rng.integers(90, 1110)), int(rng.integers(50, 850))
+            ln, ang = int(rng.integers(10, 60)), float(rng.uniform(0, np.pi))
+            x2, y2 = int(x1 + ln * np.cos(ang)), int(y1 + ln * np.sin(ang))
+            shade = int(rng.integers(-40, 40))
+            color = tuple(int(np.clip(c + shade, 0, 255)) for c in straw_base)
+            cv2.line(img, (x1, y1), (x2, y2), color, 1)
+        # Egg: BGR (110, 150, 215) — luma ~163, only ~30 below the straw
+        # (the old pass needed far more), but strongly redder in Lab.
+        cv2.ellipse(img, (500, 400), (60, 80), 0, 0, 360, (110, 150, 215), -1)
+        ok, buf = cv2.imencode(".jpg", img)
+        photo = "data:image/jpeg;base64," + base64.b64encode(buf.tobytes()).decode()
+
+        set_options(egg_vision_enabled=True)
+        body = client.post("/api/vision/eggs", json={"photo": photo}).get_json()
+        assert body["status"] == "ok"
+        assert len(body["eggs"]) == 1
+        assert body["eggs"][0]["cx"] == pytest.approx(500, abs=10)
+        assert body["eggs"][0]["cy"] == pytest.approx(400, abs=10)
 
     def test_explicit_box_id_is_used_over_auto_resolution(self, client, set_options, nesting_box):
         second_box = client.post("/api/nesting-boxes", json={"name": "Coop B", "width_mm": 400}).get_json()

@@ -111,19 +111,26 @@ you to confirm or add a new one when it isn't confident. Setting up a box
 also walks you through a short guided round of photos so the add-on can
 learn to spot that box's edges reliably before you rely on it day to day.
 
-**For the best results:** lay the eggs flat inside the box on a plain,
-matte, contrasting surface (bedding or the box floor) with even, diffuse
-lighting — avoid a single bright light causing glare on the shells. Keep
-eggs separated, not touching each other, and frame the photo so both side
-walls of the box are visible.
+**For the best results:** eggs are found by their *color* standing out
+from the bedding — brown eggs on pale straw work fine, and so would
+white or even green/blue eggs, as long as the egg's color differs from
+whatever it's lying on (an egg almost exactly the color of its bedding
+is the one genuinely hard case). Even, diffuse lighting helps — avoid a
+single bright light causing glare on the shells. Keep eggs separated,
+not touching each other, and frame the photo so both side walls of the
+box are visible. For an angled shot into a deep box, the two wall lines
+on the review screen can be tilted (drag either end of each line) to
+follow the walls as they converge — egg sizes are then measured against
+the local wall-to-wall distance at each egg's own position, so eggs
+near the back of the box aren't undersized.
 
 **Be aware of the limits:** size is estimated from each egg's measured
 width, which is an approximation of the real, weight-based S/M/L/XL
 grading, not a substitute for a kitchen scale — always glance over the
-suggested sizes before saving. Width is measured as a straight-line scale
-against the box's walls with no correction for a tilted or angled photo,
-so a very oblique shot will be less accurate than one taken roughly
-square-on. Eggs touching or overlapping in the photo may be missed or
+suggested sizes before saving. The tilted-wall measurement corrects for
+walls converging with depth, but not for every possible camera angle —
+a roughly box-aligned shot is still more accurate than a sharply
+rotated one. Eggs touching or overlapping in the photo may be missed or
 undercounted; use the review screen's **+ Add egg** and the ✕ on any chip
 to correct the count by hand. This feature also requires an **amd64** or
 **aarch64** install (the same architecture requirement as the Advanced
@@ -142,16 +149,19 @@ described below). Setting up a nesting box always stores its guided
 setup photos this way too, regardless of this setting, since registering
 a box is itself a deliberate opt-in.
 
-Once at least 25 corrections are collected, open the ⚙️ settings sheet
-and tap **Train now** to fit two small models — one that learns which
-detected shapes are really eggs (replacing a fixed one-size-fits-all
-cutoff), and one that learns your flock's actual size boundaries
-(replacing the standard EU-weight-band formula) — specific to your
-camera, lighting, and eggs. Training also fits a third model, once at
-least two boxes have enough samples, that recognizes which box a photo
-is of automatically. Nothing changes until you train — every install
-that hasn't opted in behaves exactly as described above, and the
-review screen still shows you every result before it's saved either way.
+Open the ⚙️ settings sheet and tap **Train now** to fit up to three
+models, each of which only activates once it has enough of its own data:
+one that learns which detected shapes are really eggs (needs ~25
+corrections; replaces a fixed one-size-fits-all cutoff), one that learns
+your flock's actual size boundaries (needs ~25 sized examples; replaces
+the standard EU-weight-band formula), and one that recognizes which
+registered box a photo is of (activates as soon as two boxes have 3+
+photos each — box recognition compares each photo against a fingerprint
+built by a small bundled image network (~5MB, runs entirely on-device),
+so it keys on the box's actual appearance, not just its overall color).
+Nothing changes until you train — every install that hasn't opted in
+behaves exactly as described above, and the review screen still shows
+you every result before it's saved either way.
 
 Stored photos are capped (**egg_vision_training_retention_count**,
 default 200 — oldest deleted first) and never leave the device unless you

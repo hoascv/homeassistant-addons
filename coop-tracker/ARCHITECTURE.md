@@ -1124,8 +1124,10 @@ nesting box itself. Once the box's own edges are usable as the scale
 reference, a coin adds a physical-object dependency for no remaining
 benefit, so it was removed rather than kept as a second code path.
 
-**Why width-only, not a full 4-corner perspective correction.** A box's
-two facing side walls give one linear scale factor
+**Why width-only, not a full 4-corner perspective correction.**
+*(Partially superseded in v1.32.0 — walls became slantable lines with
+per-row local scale; see §20.2.)* A box's two facing side walls give one
+linear scale factor
 (`pixels_per_mm = (right_wall_x − left_wall_x) / box.width_mm`), the same
 shape of math the coin's diameter gave — deliberately chosen over a full
 `cv2.getPerspectiveTransform` 4-corner homography (which would also
@@ -1199,7 +1201,10 @@ there's no real contour shape signal (`extent`/`solidity`) to trust for a
 blob the CV pass never actually detected.
 
 **Why box identification is a color-histogram classifier, not a coin- or
-box-corner–style geometric detector.** Telling two visually-similar boxes
+box-corner–style geometric detector.** *(Superseded in v1.32.0 — the
+histogram failed on a real two-box install and was replaced by a
+pretrained-CNN embedding; see §20.2 for the post-mortem.)* Telling two
+visually-similar boxes
 apart isn't a "find this shape" problem the way a coin or a box's own
 walls are — it's "which of N known appearances does this most resemble",
 so `_box_id_features` extracts a coarse 48-number HSV color histogram
@@ -1245,3 +1250,105 @@ already-trained model intact (a trained model is a few hundred numbers,
 not privacy-sensitive or storage-heavy the way raw photos are — the same
 call the original `20.1` design made, restated here since it's genuinely
 a preference, not a forced consequence).
+
+### 20.2 Addendum: color-based egg detection, slanted walls, embedding box-ID (v1.32.0)
+
+Three fixes driven directly by the first real-world photos (a brown egg
+on straw bedding, shot handheld into a deep wooden box), in the priority
+order the user set: egg detection first, dimensions second, box
+identification third.
+
+**Egg detection: bedding-color distance instead of grayscale Otsu.** The
+original pass thresholded a *grayscale* image, so a brown egg on pale
+straw — nearly identical in brightness, clearly different in color —
+returned "no eggs found" on the flagship real-world case.
+`_extract_egg_candidates` now estimates the bedding's color as the
+per-channel **median** of the box-cropped photo in Lab space (robust
+because bedding dominates the crop's area while eggs are the minority),
+builds a per-pixel distance map from that estimate with chroma (a/b)
+weighted `EGG_BEDDING_CHROMA_WEIGHT`× over lightness (so shadows and
+dents in the bedding don't read as eggs), and Otsu-thresholds the
+distance map — with an absolute floor (`EGG_MIN_COLOR_DISTANCE`) so an
+eggless, near-uniform scene doesn't get its sensor noise split into
+phantom regions. Everything downstream (morphology, contours,
+`fitEllipse`, the feature dicts the trainable models consume) is
+unchanged, so stored training samples remain fully usable — training
+re-extracts with the new pass. Deliberately **hue-agnostic**: the design
+question "what about green eggs someday?" is answered by construction —
+any egg color that *differs from the bedding* works (brown, white,
+green, blue); the documented hard case is an egg colored almost exactly
+like its bedding, which no color method can solve. This also removed the
+polarity-flip heuristic ("minority class is the foreground") — distance
+from bedding is always "high = not bedding", one less assumption to
+break.
+
+**Dimensions: slanted wall lines with per-row local scale.** A handheld
+camera looking *into* a deep box sees the side walls converge with
+depth, so one global `pixels_per_mm` is systematically wrong — an egg at
+the (farther, narrower-looking) back of the frame measured smaller than
+the same egg at the front. The wall representation became a trapezoid
+(`{top_y, bottom_y, left_top_x, left_bottom_x, right_top_x,
+right_bottom_x}`); each egg's scale is computed at its own image row by
+linear interpolation along both wall lines (`_wall_px_per_mm_at`). This
+captures the dominant perspective effect while still needing only the
+box's *width* measured — chosen (by the user, explicitly) over a full
+4-corner homography, which would also need the box's depth entered and
+its usually bedding-buried floor corners located. Auto-detection tries
+`approxPolyDP` for a convex 4-gon on the winning contour (its left/right
+edges become the slanted lines) before falling back to the bounding
+rectangle as a zero-slant trapezoid; the review screen draws each wall
+with a draggable handle at both ends. Samples stored by 1.31.x carry the
+old flat `{left, top, right, bottom}` shape — `_normalize_box_walls`
+converts them (equal-x trapezoid) so they keep training the size model.
+Honest limit: interpolating scale by image row assumes the camera is
+roughly aligned with the box's axis (rows ≈ constant-depth lines); a
+sharply rotated/oblique shot degrades gracefully toward the old
+single-scale behavior, not catastrophically.
+
+**Box-ID: pretrained-CNN embedding + nearest-centroid, replacing the
+color histogram — a post-mortem and two fixes.** The histogram design
+above failed on the real two-box install for *two* stacked reasons.
+First, a plain bug: `POST /api/vision/train` refused to train anything
+below `EGG_VISION_MIN_TRAINING_SAMPLES` (25) *total* samples, but the
+box head only needs `EGG_VISION_BOX_ID_MIN_SAMPLES_PER_BOX` (3) per box
+— two boxes × a few wizard photos never reached 25, so the head that
+needed only 6 samples had **never trained at all**. The gate now blocks
+only the zero-sample case; each sub-model's own minimum already gates it
+correctly. Second, the feature itself: a global 48-bin HSV histogram
+cannot separate two wooden boxes that differ in texture, wear, and
+layout but not much in overall color, and is lighting-fragile on top.
+`_embed_box_photo` now runs the full photo through a bundled SqueezeNet
+1.1 (`app/models/squeezenet1.1-7.onnx`, 4.7MB, official ONNX Model Zoo,
+sha256-pinned and asserted by a repo-integrity test) via `cv2.dnn` — a
+frozen, generic feature extractor; nothing is fine-tuned and nothing
+leaves the device. The file is committed to the repo rather than
+downloaded at build time because Supervisor rebuilds the image from
+source on every upgrade, and a build-time download would make every
+future upgrade depend on GitHub LFS availability. This export's default
+output *is* the flattened global-pooled conv10 features (no softmax
+layer in the graph — verified empirically), so no intermediate-layer tap
+is needed; one forward ≈ 5ms on x86_64. The head
+(`_train_egg_vision_models`) is nearest-centroid with cosine similarity
+over centered, L2-normalized embeddings — centering against the
+training-set mean matters because ImageNet features share a large common
+component (any two natural photos land at raw cosine ~0.5–0.8), and
+removing it spreads same-box vs cross-box similarities far apart. Chosen
+over LogisticRegression on 1000-d with n=6–20 (p≫n needs regularization
+tuning and yields exactly the overconfident probabilities being
+replaced) and over 1-NN (a single-outlier trap at 3 samples/box). The
+head is a plain dict (`format`, `dim`, `mean`, `centroids`) — no sklearn
+at predict time, inspectable, stored in the same `box_classifier_blob`
+column. A prediction is trusted only when it clears BOTH
+`EGG_VISION_BOX_ID_MIN_SIMILARITY` (absolute floor — rejects "looks like
+neither box": a new box or a terrible photo) AND
+`EGG_VISION_BOX_ID_MIN_MARGIN` over the runner-up (rejects "could be
+either") — two independently meaningful numbers replacing one opaque
+`predict_proba` threshold; both are echoed in the `confirm_box` response
+as tuning telemetry. Migration needed no schema change: a stale 1.31.x
+pickled-sklearn head fails `_predict_box_id`'s format/dim validation (or
+`_load_egg_vision_model`'s now-guarded unpickle) and degrades to
+`confirm_box`; the next retrain rebuilds from the retained photos. If
+the ONNX file is missing or `cv2.dnn` can't load it, the embedder
+reports unavailable (`/api/debug`: `box_embedder_available/_error`) and
+box-ID degrades to manual confirm — the egg and size models are
+unaffected, since only the box head consumes embeddings.

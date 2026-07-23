@@ -610,7 +610,7 @@ const eggVisionWizardFinishBtn = document.getElementById("egg-vision-wizard-fini
 const eggVisionWizardProgress = document.getElementById("egg-vision-wizard-progress");
 
 // eggVisionState: { boxId, boxWidthMm, imageWidth, imageHeight,
-//   boxWalls: {left,top,right,bottom},
+//   boxWalls: {top_y,bottom_y,left_top_x,left_bottom_x,right_top_x,right_bottom_x},
 //   eggs: [{cx,cy,widthPx,heightPx,angle,size,manuallySet,added}] }
 let eggVisionState = null;
 let eggVisionDrag = null; // {wall:"left"|"right"} | {kind:"egg", index}
@@ -758,7 +758,7 @@ async function analyzeEggVisionPhoto(opts = {}) {
 
   eggVisionStatusMsg.textContent =
     body.status === "walls_not_found"
-      ? "Couldn't find the box's edges automatically — drag the two lines onto the box's side walls."
+      ? "Couldn't find the box's edges automatically — drag the line ends onto the box's side walls (tilt them to match an angled photo)."
       : body.status === "no_eggs_found"
       ? "Couldn't detect any eggs — you can still log a count manually below, or use + Add egg."
       : "Drag a line if it isn't on the box's edge. Tap a size chip to correct it.";
@@ -829,22 +829,37 @@ function drawEggVisionOverlay() {
     ctx.restore();
   });
 
+  // Each wall is a (possibly slanted) line with a draggable handle at
+  // both ends, so the trapezoid can follow walls converging with depth
+  // in an angled handheld photo — see wallEndpoints().
   const walls = eggVisionState.boxWalls;
-  const top = walls.top * scale;
-  const bottom = walls.bottom * scale;
   ctx.strokeStyle = "#2b6cb0";
+  ctx.fillStyle = "#2b6cb0";
   ctx.lineWidth = 3;
-  [walls.left, walls.right].forEach((x) => {
-    const sx = x * scale;
+  [
+    [walls.left_top_x, walls.left_bottom_x],
+    [walls.right_top_x, walls.right_bottom_x],
+  ].forEach(([topX, bottomX]) => {
     ctx.beginPath();
-    ctx.moveTo(sx, top);
-    ctx.lineTo(sx, bottom);
+    ctx.moveTo(topX * scale, walls.top_y * scale);
+    ctx.lineTo(bottomX * scale, walls.bottom_y * scale);
     ctx.stroke();
-    ctx.beginPath();
-    ctx.arc(sx, (top + bottom) / 2, 6, 0, 2 * Math.PI);
-    ctx.fillStyle = "#2b6cb0";
-    ctx.fill();
+    [[topX, walls.top_y], [bottomX, walls.bottom_y]].forEach(([hx, hy]) => {
+      ctx.beginPath();
+      ctx.arc(hx * scale, hy * scale, 6, 0, 2 * Math.PI);
+      ctx.fill();
+    });
   });
+}
+
+function wallEndpoints() {
+  const walls = eggVisionState.boxWalls;
+  return [
+    { xKey: "left_top_x", yKey: "top_y", x: walls.left_top_x, y: walls.top_y },
+    { xKey: "left_bottom_x", yKey: "bottom_y", x: walls.left_bottom_x, y: walls.bottom_y },
+    { xKey: "right_top_x", yKey: "top_y", x: walls.right_top_x, y: walls.top_y },
+    { xKey: "right_bottom_x", yKey: "bottom_y", x: walls.right_bottom_x, y: walls.bottom_y },
+  ];
 }
 
 function renderEggVisionChips() {
@@ -882,7 +897,9 @@ eggVisionChips.addEventListener("click", (e) => {
 
 document.getElementById("egg-vision-add-egg").addEventListener("click", () => {
   if (!eggVisionState) return;
-  const span = eggVisionState.boxWalls.right - eggVisionState.boxWalls.left;
+  const walls = eggVisionState.boxWalls;
+  const span =
+    (walls.right_top_x + walls.right_bottom_x - walls.left_top_x - walls.left_bottom_x) / 2;
   eggVisionState.eggs.push({
     cx: eggVisionState.imageWidth / 2,
     cy: eggVisionState.imageHeight / 2,
@@ -898,28 +915,27 @@ document.getElementById("egg-vision-add-egg").addEventListener("click", () => {
   renderEggVisionChips();
 });
 
-// Drag: near a wall line moves it (left/right only — the walls span the
-// full photo height, so there's nothing to resize); near an egg's center
-// moves that egg (the only way to place a "+ Add egg" marker on the
-// actual missed egg, since it starts at the photo's center). Wall drags
-// redraw instantly (pure rendering) but only trigger the mm/size
-// recompute round trip on release, not on every pointermove.
-// pointermove/up on document (not just the canvas) so a fast drag that
-// briefly leaves the canvas bounds doesn't get dropped.
+// Drag: near a wall-line endpoint moves that endpoint (its x freely,
+// and its shared top/bottom y — both walls' top handles ride top_y, both
+// bottom handles ride bottom_y, keeping the trapezoid a trapezoid); near
+// an egg's center moves that egg (the only way to place a "+ Add egg"
+// marker on the actual missed egg, since it starts at the photo's
+// center). Wall drags redraw instantly (pure rendering) but only
+// trigger the mm/size recompute round trip on release, not on every
+// pointermove. pointermove/up on document (not just the canvas) so a
+// fast drag that briefly leaves the canvas bounds doesn't get dropped.
 eggVisionOverlay.addEventListener("pointerdown", (e) => {
   if (!eggVisionState) return;
   const rect = eggVisionOverlay.getBoundingClientRect();
   const x = e.clientX - rect.left;
   const y = e.clientY - rect.top;
   const scale = eggVisionDisplayScale();
-  const walls = eggVisionState.boxWalls;
 
-  if (Math.abs(x - walls.left * scale) < 16) {
-    eggVisionDrag = { wall: "left" };
-    return;
-  }
-  if (Math.abs(x - walls.right * scale) < 16) {
-    eggVisionDrag = { wall: "right" };
+  const endpoint = wallEndpoints().find(
+    (p) => Math.hypot(x - p.x * scale, y - p.y * scale) < 16
+  );
+  if (endpoint) {
+    eggVisionDrag = { wallEndpoint: endpoint };
     return;
   }
 
@@ -938,8 +954,10 @@ document.addEventListener("pointermove", (e) => {
   const y = e.clientY - rect.top;
   const scale = eggVisionDisplayScale();
 
-  if (eggVisionDrag.wall) {
-    eggVisionState.boxWalls[eggVisionDrag.wall] = x / scale;
+  if (eggVisionDrag.wallEndpoint) {
+    const { xKey, yKey } = eggVisionDrag.wallEndpoint;
+    eggVisionState.boxWalls[xKey] = x / scale;
+    eggVisionState.boxWalls[yKey] = y / scale;
     eggVisionTouched = true;
   } else if (eggVisionDrag.kind === "egg") {
     const egg = eggVisionState.eggs[eggVisionDrag.index];
@@ -954,7 +972,7 @@ document.addEventListener("pointermove", (e) => {
 });
 
 document.addEventListener("pointerup", () => {
-  if (eggVisionDrag && eggVisionDrag.wall) recomputeEggSizes();
+  if (eggVisionDrag && eggVisionDrag.wallEndpoint) recomputeEggSizes();
   eggVisionDrag = null;
 });
 
