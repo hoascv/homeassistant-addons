@@ -1,6 +1,6 @@
 build_from:
-  aarch64: "python:3.12-slim-bookworm"
-  amd64: "python:3.12-slim-bookworm"
-  armhf: "python:3.12-slim-bookworm"
-  armv7: "python:3.12-slim-bookworm"
-  i386: "python:3.12-slim-bookworm"
+  aarch64: "docker.io/library/python:3.12-slim-bookworm"
+  amd64: "docker.io/library/python:3.12-slim-bookworm"
+  armhf: "docker.io/library/python:3.12-slim-bookworm"
+  armv7: "docker.io/library/python:3.12-slim-bookworm"
+  i386: "docker.io/library/python:3.12-slim-bookworm"
