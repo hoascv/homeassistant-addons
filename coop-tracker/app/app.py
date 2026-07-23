@@ -260,6 +260,19 @@ DEFAULT_FOOD_TYPES = [
 app = Flask(__name__)
 
 
+def _log(msg):
+    """Prints a timestamped, immediately-flushed [Coop Tracker] log line.
+    Used for the console-visible add-on log (startup/shutdown info,
+    background-loop diagnostics) rather than app.logger, which only
+    surfaces WARNING+ by default (see api routes' own error handling for
+    request-scoped logging). flush=True matters here specifically:
+    stdout is block-buffered (not a TTY under Supervisor/Docker), so an
+    unflushed line can sit in the buffer and be lost entirely if the
+    process is later SIGKILLed rather than exiting normally — see the
+    exit-137-on-restart investigation."""
+    print(f"[Coop Tracker] {datetime.now().isoformat()} {msg}", flush=True)
+
+
 def _read_options():
     try:
         with open(OPTIONS_PATH) as f:
@@ -688,9 +701,11 @@ def _push_ha_sensors_async():
 
 def _background_loop():
     if not SUPERVISOR_TOKEN:
-        app.logger.info(
-            "SUPERVISOR_TOKEN not set; reminder and HA sensor push disabled (local/dev mode)"
-        )
+        # app.logger.info was silently dropped here — Flask's default
+        # logger level is WARNING, so this line (useful for noticing
+        # "why isn't the background loop doing anything") never actually
+        # appeared in the add-on log. _log() is always visible.
+        _log("SUPERVISOR_TOKEN not set; reminder and HA sensor push disabled (local/dev mode)")
         return
     while True:
         iteration_start = time.monotonic()
@@ -710,11 +725,7 @@ def _background_loop():
         # Silent in the normal (fast) case to avoid permanent log noise.
         elapsed = time.monotonic() - iteration_start
         if elapsed > 2:
-            print(
-                f"[Coop Tracker] {datetime.now().isoformat()} background loop "
-                f"iteration took {elapsed:.1f}s (usually near-instant)",
-                flush=True,
-            )
+            _log(f"background loop iteration took {elapsed:.1f}s (usually near-instant)")
         time.sleep(60)
 
 
@@ -2767,18 +2778,18 @@ def api_restore():
 
 def _log_startup_debug_info():
     reminder = get_reminder_config()
-    print("[Coop Tracker] --- startup debug info ---")
-    print(f"[Coop Tracker] version: {APP_VERSION}")
-    print(f"[Coop Tracker] container time: {datetime.now().isoformat()} ({time.tzname})")
-    print(f"[Coop Tracker] SUPERVISOR_TOKEN set: {bool(SUPERVISOR_TOKEN)}")
-    print(f"[Coop Tracker] currency: {_read_options().get('currency', DEFAULT_CURRENCY)}")
-    print(
-        f"[Coop Tracker] reminder: enabled={reminder['enabled']} "
+    _log("--- startup debug info ---")
+    _log(f"version: {APP_VERSION}")
+    _log(f"container timezone: {time.tzname}")
+    _log(f"SUPERVISOR_TOKEN set: {bool(SUPERVISOR_TOKEN)}")
+    _log(f"currency: {_read_options().get('currency', DEFAULT_CURRENCY)}")
+    _log(
+        f"reminder: enabled={reminder['enabled']} "
         f"check_time={reminder['check_time']} threshold_days={reminder['threshold_days']} "
         f"notify_service={reminder['notify_service'] or '(not set)'}"
     )
-    print(f"[Coop Tracker] db path: {DB_PATH}")
-    print("[Coop Tracker] --- end startup debug info ---")
+    _log(f"db path: {DB_PATH}")
+    _log("--- end startup debug info ---")
 
 
 # Set by _handle_shutdown_signal; read after serve() returns to measure how
@@ -2806,11 +2817,7 @@ def _handle_shutdown_signal(signum, frame):
     global _shutdown_signal_at
     _shutdown_signal_at = time.monotonic()
     alive = [f"{t.name}(daemon={t.daemon})" for t in threading.enumerate()]
-    print(
-        f"[Coop Tracker] {datetime.now().isoformat()} received signal {signum}, "
-        f"shutting down; live threads: {alive}",
-        flush=True,
-    )
+    _log(f"received signal {signum}, shutting down; live threads: {alive}")
     sys.exit(0)
 
 
@@ -2822,7 +2829,7 @@ if __name__ == "__main__":
     _log_startup_debug_info()
     threading.Thread(target=_background_loop, daemon=True).start()
     port = int(os.environ.get("COOP_PORT", "8099"))
-    print(f"[Coop Tracker] serving on 0.0.0.0:{port} (waitress)", flush=True)
+    _log(f"serving on 0.0.0.0:{port} (waitress)")
     serve(app, host="0.0.0.0", port=port)
     # Diagnostic for the exit-137-on-restart investigation: if this line
     # never shows up in the logs before a SIGKILL, the hang is inside
@@ -2836,8 +2843,4 @@ if __name__ == "__main__":
         if _shutdown_signal_at is not None
         else "no shutdown signal seen"
     )
-    print(
-        f"[Coop Tracker] {datetime.now().isoformat()} serve() returned "
-        f"({since_signal}), reaching end of __main__",
-        flush=True,
-    )
+    _log(f"serve() returned ({since_signal}), reaching end of __main__")
