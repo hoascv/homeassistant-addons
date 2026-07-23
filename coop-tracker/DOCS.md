@@ -134,6 +134,13 @@ in summer and shorter days lower it in winter, so a projection made in
 autumn correctly shows the coming winter dip (and the spring recovery)
 instead of running the current rate flat.
 
+Once there's enough history, the chart also shades a range around the
+forecast line showing how far off past projections have actually been —
+"typically within ±N eggs," based on comparing what the forecast said in
+past months against what really happened. The range stays the same width
+for every forecasted month rather than widening further out, since that's
+the only claim the historical comparison actually supports.
+
 **Where the baseline comes from:** if you've added at least one chicken
 in **🐔 My Flock** (see below), the forecast uses each of your active
 chickens' actual ages. Otherwise it falls back to flat per-breed counts

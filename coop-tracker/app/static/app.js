@@ -755,6 +755,15 @@ function monthLabel(ym) {
   return `${MONTH_NAMES[month - 1].slice(0, 3)} ${year}`;
 }
 
+// xs/ysUpper/ysLower are already-transformed pixel coordinates (not raw
+// data values) — keeps this a pure SVG-string builder, reusable by any
+// chart regardless of that chart's own value-to-pixel scale.
+function bandPolygon(xs, ysUpper, ysLower, colorVar) {
+  const top = xs.map((x, i) => `${x},${ysUpper[i]}`);
+  const bottom = xs.map((x, i) => `${x},${ysLower[i]}`).reverse();
+  return `<polygon points="${[...top, ...bottom].join(" ")}" fill="var(${colorVar})" fill-opacity="0.12" stroke="none"></polygon>`;
+}
+
 function buildTrendsSvg(data) {
   const pointSpacing = 48;
   const chartH = 120;
@@ -763,6 +772,7 @@ function buildTrendsSvg(data) {
   const forecastMonths = data.forecast_months || [];
   const forecastCollected = data.forecast_collected || [];
   const forecastBacktest = data.forecast_backtest || [];
+  const margin = data.forecast_margin;
   const historyCount = data.months.length;
   const totalCount = historyCount + forecastMonths.length;
   const width = totalCount * pointSpacing;
@@ -773,7 +783,8 @@ function buildTrendsSvg(data) {
     ...data.sold,
     ...data.used,
     ...forecastCollected,
-    ...forecastBacktest
+    ...forecastBacktest,
+    ...(margin != null ? forecastCollected.map((v) => v + margin) : [])
   );
 
   const xAt = (i) => i * pointSpacing + pointSpacing / 2;
@@ -790,6 +801,12 @@ function buildTrendsSvg(data) {
   };
 
   let content = "";
+  if (margin != null && forecastCollected.length > 0) {
+    const xs = forecastCollected.map((_, i) => xAt(historyCount + i));
+    const ysUpper = forecastCollected.map((v) => yAt(v + margin));
+    const ysLower = forecastCollected.map((v) => yAt(Math.max(0, v - margin)));
+    content += bandPolygon(xs, ysUpper, ysLower, "--accent-egg");
+  }
   content += line(data.sold, "--accent-sale");
   content += line(data.used, "--accent-used");
   // one continuous dashed line: backtest over history, projection over the future
@@ -863,10 +880,15 @@ async function loadTrends() {
     data.forecast_flock_basis === "individual"
       ? "your chickens' ages"
       : "flat per-breed counts — add chickens in 🐔 My Flock for an age-adjusted forecast";
-  trendsForecastCaption.textContent =
+  let caption =
     data.forecast_basis === "breed_standard"
       ? `The dashed line is based on breed averages for ${flockBasisNote} and the season (longer days boost laying in summer, shorter days lower it in winter) — log a few weeks of collection to refine it. It also shows what it would have predicted for past months, so you can see how it's tracking.`
       : `The dashed line is based on breed averages for ${flockBasisNote}, adjusted by your last 30 days of collection and the season (longer days boost laying in summer, shorter days lower it in winter). Past months show what it would have predicted at the time, so you can see how it's tracking.`;
+  document.getElementById("trends-legend-margin").hidden = data.forecast_margin == null;
+  if (data.forecast_margin != null) {
+    caption += ` Actual collection has typically landed within ±${data.forecast_margin} eggs of this projection.`;
+  }
+  trendsForecastCaption.textContent = caption;
 
   loadFeedingStatsSummary();
 }

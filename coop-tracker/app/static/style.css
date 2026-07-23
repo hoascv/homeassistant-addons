@@ -790,6 +790,12 @@ main {
   border-top: 2px dashed var(--accent-egg);
   opacity: 0.7;
 }
+.trends-swatch-range {
+  background: var(--accent-egg);
+  opacity: 0.25;
+  height: 0.6rem;
+  border-radius: 2px;
+}
 
 .trends-chart-wrap {
   position: relative;

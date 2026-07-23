@@ -17,7 +17,7 @@ from datetime import date, datetime, time as dtime, timedelta
 import flask
 from flask import Flask, Response, g, jsonify, render_template, request, send_file
 
-APP_VERSION = "1.27.1"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.28.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("COOP_DB_PATH", "/data/coop.db")
 OPTIONS_PATH = os.environ.get("COOP_OPTIONS_PATH", "/data/options.json")
@@ -807,6 +807,27 @@ def _compute_backtest(conn, now, months):
     return {"forecast_backtest": values}
 
 
+def _compute_forecast_margin(collected, backtest):
+    """Mean absolute error between what the backtest predicted and what
+    actually happened, over completed historical months only — excludes
+    the last (current, still-partial) month, same reasoning
+    _compute_backtest's own docstring gives: comparing a full-month
+    projection against a partial actual isn't a fair test. None with no
+    completed month to measure (a fresh install), so callers can suppress
+    the uncertainty band entirely rather than draw one from zero data.
+
+    Flat, not growing with forecast horizon: the backtest only ever tests
+    a 1-month-ahead prediction (data cutoff at a month's start, predicting
+    that same month) — there's no data here on how much worse a 3-month
+    projection is than a 1-month one, so a flat margin is the only claim
+    this data actually backs."""
+    pairs = list(zip(collected, backtest))[:-1]
+    if not pairs:
+        return None
+    errors = [abs(c - b) for c, b in pairs]
+    return round(sum(errors) / len(errors))
+
+
 @app.route("/api/trends")
 def api_trends():
     db = get_db()
@@ -818,6 +839,9 @@ def api_trends():
     result = _compute_trends(db, now, months)
     result.update(_compute_forecast(db, now))
     result.update(_compute_backtest(db, now, months))
+    result["forecast_margin"] = _compute_forecast_margin(
+        result["collected"], result["forecast_backtest"]
+    )
     return jsonify(result)
 
 

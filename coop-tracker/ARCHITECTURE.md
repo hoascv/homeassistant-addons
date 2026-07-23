@@ -535,6 +535,39 @@ basis was active back then" to preserve, and recomputing history with
 better (per-bird) data once you have it is treated as an improvement, not
 a bug to guard against.
 
+### Uncertainty band (v1.28.0)
+
+The Trends chart shades a range around the forward-looking forecast line,
+answering "how far off has this actually been?" instead of asking the
+user to just trust a bare point estimate. `_compute_forecast_margin`
+(app.py, next to `_compute_backtest`) is the mean absolute error between
+`forecast_backtest` and `collected` over *completed* historical months —
+the current, still-in-progress month is excluded for the exact reason
+given above (a full-month projection vs. a partial actual isn't a fair
+comparison, and including it would make the band jump around based on how
+far through the current month it happens to be). `None` with no completed
+month to measure yet (a fresh install), so the frontend suppresses the
+band entirely rather than draw one from zero data.
+
+**Why MAE, not a standard deviation or RMSE:** it's a single number with a
+plain-English reading ("actual collection has typically landed within ±N
+eggs of this projection") — the same "one constant, explained in a
+sentence" style as the age curve (§9 above) and the seasonal amplitude.
+RMSE would let one unusually bad month dominate the figure; MAE treats
+every month's miss equally.
+
+**Why the band is flat across all `FORECAST_MONTHS`, not growing with
+distance into the future** (the intuitive shape — forecasts usually get
+less certain the further out they go): `_compute_backtest` only ever
+tests a **1-month-ahead** prediction — data cutoff at a month's start,
+predicting that same month. It never tests what a 2- or 3-month-ahead
+projection would have looked like, so there's no data in this app
+supporting a claim like "month 3 is twice as uncertain as month 1." A
+flat margin, applied uniformly, is the only shape the existing backtest
+data actually backs — inventing a growth curve on top would be modeling
+something with zero supporting evidence, the opposite of this section's
+established "simple and honest first" bias.
+
 ## 10. Feed duration estimate
 
 A `container_empty` boolean on `logs` (meaningful only for `type =

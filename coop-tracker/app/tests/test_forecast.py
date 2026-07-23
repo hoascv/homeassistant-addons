@@ -241,3 +241,34 @@ def test_backtest_applies_seasonal_factor_retroactively(conn, options_path):
         conn, datetime(2026, 12, 1), when=datetime(2026, 12, 16)
     )
     assert december < june
+
+
+# --- Uncertainty band (forecast_margin) ---
+
+
+def test_forecast_margin_none_with_no_completed_history():
+    assert coopapp._compute_forecast_margin([10], [10]) is None
+    assert coopapp._compute_forecast_margin([], []) is None
+
+
+def test_forecast_margin_zero_for_perfect_backtest():
+    assert coopapp._compute_forecast_margin([10, 10], [10, 10]) == 0
+
+
+def test_forecast_margin_excludes_current_month():
+    # a huge mismatch in the last (current, still-partial) month must not
+    # count — same exclusion _compute_backtest's docstring documents
+    assert coopapp._compute_forecast_margin([10, 999], [10, 0]) == 0
+
+
+def test_forecast_margin_is_mean_absolute_error():
+    # completed months: |10-8|=2, |20-25|=5 -> mean 3.5 -> rounds to 4;
+    # the third (current) month's huge mismatch is excluded
+    assert coopapp._compute_forecast_margin([10, 20, 5], [8, 25, 999]) == 4
+
+
+def test_trends_endpoint_includes_forecast_margin(client):
+    client.post("/api/log", json={"type": "egg", "count": 3, "ts": "2026-01-15T10:00:00"})
+    body = client.get("/api/trends?months=3").get_json()
+    assert "forecast_margin" in body
+    assert body["forecast_margin"] is None or isinstance(body["forecast_margin"], int)

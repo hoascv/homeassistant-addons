@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.28.0
+
+- The Trends chart now shades an **uncertainty range** around the
+  forecast line, based on how far off the backtest has historically been
+  (mean absolute error over completed months). The range is flat across
+  all forecasted months rather than widening further out — the backtest
+  only ever tests a 1-month-ahead prediction, so there's no data to
+  support claiming later months are less certain than the first.
+
 ## 1.27.1
 
 - Fixed sheets (My Flock in particular) overflowing the screen with no
