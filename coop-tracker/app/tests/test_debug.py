@@ -30,3 +30,18 @@ def test_debug_reachable_with_supervisor_token(client, fake_ha_server):
     assert body["supervisor_token_set"] is True
     assert body["ha_api_reachable"] is True
     assert body["ha_api_error"] is None
+
+
+def test_debug_reports_statsmodels_availability(client):
+    body = client.get("/api/debug").get_json()
+    assert body["statsmodels_available"] == coopapp.STATSMODELS_AVAILABLE
+    if coopapp.STATSMODELS_AVAILABLE:
+        assert body["statsmodels_error"] is None
+    else:
+        assert body["statsmodels_error"]
+
+
+def test_debug_reports_advanced_forecast_enabled(client, set_options):
+    set_options(advanced_forecast_enabled=True)
+    body = client.get("/api/debug").get_json()
+    assert body["advanced_forecast_enabled"] is True

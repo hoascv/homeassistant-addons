@@ -17,7 +17,21 @@ from datetime import date, datetime, time as dtime, timedelta
 import flask
 from flask import Flask, Response, g, jsonify, render_template, request, send_file
 
-APP_VERSION = "1.28.0"  # keep in sync with the "version" field in config.yaml
+try:
+    import numpy as np
+    from statsmodels.tsa.holtwinters import ExponentialSmoothing
+
+    STATSMODELS_AVAILABLE = True
+    STATSMODELS_ERROR = None
+except ImportError as e:
+    # statsmodels only has wheels for amd64/aarch64 (see
+    # requirements-advanced.txt, ARCHITECTURE.md §19) — armhf/armv7/i386
+    # builds skip installing it entirely, so this import fails there by
+    # design. Reported via /api/debug instead of crashing the app.
+    STATSMODELS_AVAILABLE = False
+    STATSMODELS_ERROR = str(e)
+
+APP_VERSION = "1.29.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("COOP_DB_PATH", "/data/coop.db")
 OPTIONS_PATH = os.environ.get("COOP_OPTIONS_PATH", "/data/options.json")
@@ -48,6 +62,12 @@ FORECAST_RATIO_BOUNDS = (0.2, 1.8)  # dampens noise from a single unusual week
 # config — see ARCHITECTURE.md §9. Assumes the northern hemisphere.
 SEASONAL_AMPLITUDE = 0.25  # ±25% swing; the tuning knob if the backtest runs off
 SEASONAL_PEAK_DAY = 172  # ~June 21
+
+# Experimental Holt-Winters comparison forecast — see ARCHITECTURE.md §19.
+# "History" = elapsed calendar months since the first-ever egg log, capped
+# at 24 to match _recent_month_starts' own hard cap.
+ADVANCED_FORECAST_MIN_MONTHS = 6  # minimum to attempt a trend-only fit
+ADVANCED_FORECAST_SEASONAL_MIN_MONTHS = 24  # minimum for a seasonal term (2 full cycles)
 
 
 def _seasonal_multiplier(when):
@@ -147,6 +167,10 @@ def get_flock_counts():
 
 def get_supermarket_egg_price():
     return float(_read_options().get("supermarket_egg_price", 2.5))
+
+
+def get_advanced_forecast_config():
+    return {"enabled": bool(_read_options().get("advanced_forecast_enabled", False))}
 
 
 def get_db():
@@ -845,6 +869,85 @@ def api_trends():
     return jsonify(result)
 
 
+def _egg_history_span_months(conn, now):
+    """Elapsed calendar months from the first-ever egg log to now
+    (inclusive), capped at 24 — both the minimum-data gate and the
+    fitting window for the advanced forecast below."""
+    row = conn.execute("SELECT MIN(ts) AS first_ts FROM logs WHERE type = 'egg'").fetchone()
+    if not row["first_ts"]:
+        return 0
+    first = datetime.fromisoformat(row["first_ts"])
+    span = (now.year - first.year) * 12 + (now.month - first.month) + 1
+    return max(0, min(span, 24))
+
+
+def _compute_advanced_forecast(conn, now):
+    """An independent, real statistical model (Holt-Winters) as a check
+    against the hand-tuned forecast above — see ARCHITECTURE.md §19 for
+    why this model, why it's gated the way it is, and why it's a separate
+    endpoint rather than folded into /api/trends."""
+    history_months = _egg_history_span_months(conn, now)
+    result = {
+        "advanced_libs_available": STATSMODELS_AVAILABLE,
+        "advanced_libs_error": STATSMODELS_ERROR,
+        "advanced_enabled": get_advanced_forecast_config()["enabled"],
+        "advanced_error": None,
+        "history_months": history_months,
+        "min_months_required": ADVANCED_FORECAST_MIN_MONTHS,
+        "seasonal_min_months_required": ADVANCED_FORECAST_SEASONAL_MIN_MONTHS,
+        "model": None,
+        "months": [],
+        "collected": [],
+        "advanced_months": [],
+        "advanced_forecast": [],
+        "advanced_ci_lower": [],
+        "advanced_ci_upper": [],
+    }
+    if not STATSMODELS_AVAILABLE or not result["advanced_enabled"]:
+        return result
+    if history_months < ADVANCED_FORECAST_MIN_MONTHS:
+        return result
+
+    trends = _compute_trends(conn, now, history_months)
+    seasonal = history_months >= ADVANCED_FORECAST_SEASONAL_MIN_MONTHS
+    try:
+        fit = ExponentialSmoothing(
+            trends["collected"],
+            trend="add",
+            seasonal="add" if seasonal else None,
+            seasonal_periods=12 if seasonal else None,
+            initialization_method="estimated",
+        ).fit()
+        forecast_values = fit.forecast(FORECAST_MONTHS)
+        # ExponentialSmoothing has no closed-form confidence interval (unlike
+        # SARIMAX) — simulate repetitions of the fitted model and take
+        # percentiles, the standard statsmodels approach for Holt-Winters CIs.
+        sims = fit.simulate(nsimulations=FORECAST_MONTHS, repetitions=1000, error="add")
+        ci_lower = np.percentile(sims, 2.5, axis=1)
+        ci_upper = np.percentile(sims, 97.5, axis=1)
+    except Exception as e:  # noqa: BLE001 - a fit failure degrades, never 500s
+        result["advanced_error"] = str(e)
+        return result
+
+    result.update(
+        {
+            "model": "holt_winters_seasonal" if seasonal else "holt_winters_trend",
+            "months": trends["months"],
+            "collected": trends["collected"],
+            "advanced_months": _compute_forecast(conn, now)["forecast_months"],
+            "advanced_forecast": [max(0, round(v)) for v in forecast_values],
+            "advanced_ci_lower": [max(0, round(v)) for v in ci_lower],
+            "advanced_ci_upper": [max(0, round(v)) for v in ci_upper],
+        }
+    )
+    return result
+
+
+@app.route("/api/trends/advanced")
+def api_trends_advanced():
+    return jsonify(_compute_advanced_forecast(get_db(), datetime.now()))
+
+
 def _compute_feeding_stats(conn, food_type, now):
     food_type = (food_type or "").strip()
     if not food_type:
@@ -1378,6 +1481,9 @@ def api_debug():
             "python_version": sys.version.split()[0],
             "flask_version": flask.__version__,
             "platform": platform.platform(),
+            "statsmodels_available": STATSMODELS_AVAILABLE,
+            "statsmodels_error": STATSMODELS_ERROR,
+            "advanced_forecast_enabled": get_advanced_forecast_config()["enabled"],
         }
     )
 

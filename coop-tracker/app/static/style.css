@@ -892,3 +892,19 @@ main {
   font-size: 1rem;
   margin: 0 0 0.25rem;
 }
+
+.advanced-forecast {
+  margin-top: 1rem;
+}
+
+.advanced-forecast summary {
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  color: var(--text-muted);
+}
+
+.advanced-forecast[open] summary {
+  color: var(--text);
+  margin-bottom: 0.5rem;
+}

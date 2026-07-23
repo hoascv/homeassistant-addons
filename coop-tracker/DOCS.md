@@ -164,6 +164,24 @@ Tap the ⛶ icon on the chart to expand it to fill the screen (tap again,
 or press Esc, to go back) — turning your phone to landscape while
 expanded gives noticeably more width to read a long history at a glance.
 
+### Advanced forecast (experimental)
+
+Below the main chart, an **Experimental: statistical forecast
+(Holt-Winters)** panel offers a second opinion: a real statistical model
+fitted directly on your logged history, shown alongside a shaded
+confidence range, as an independent check against the forecast above —
+not a replacement for it. It's off by default; turn on
+**advanced_forecast_enabled** in the add-on's Configuration tab to try
+it, then tap the panel to load it (it isn't fetched unless you open it).
+
+This needs some history to work with: at least 6 months of egg
+collection for a basic trend-only fit, and 24 months (two full years)
+before it adds a seasonal component of its own — the panel tells you how
+many months you have and how many you need. It's only available on
+**amd64** and **aarch64** installs (e.g. an Intel/AMD mini-PC or a
+64-bit Raspberry Pi OS); on other architectures the panel explains it
+isn't available on that device rather than failing silently.
+
 ### Estimated savings
 
 The Finances section's **Est. savings** figures answer "what would this

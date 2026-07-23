@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.29.0
+
+- New **experimental Advanced forecast** on the Trends tab (off by
+  default — enable with **advanced_forecast_enabled**): a real
+  statistical model (Holt-Winters) fitted directly on your logged
+  history, shown as an independent second opinion alongside the existing
+  forecast, with its own confidence range. Needs at least 6 months of
+  history for a basic fit, 24 months for a seasonal one. Only available
+  on **amd64**/**aarch64** installs — the add-on's base image switched
+  from Alpine to Debian (`python:3.12-slim-bookworm`) on every
+  architecture to make this work on 64-bit Raspberry Pi installs too, not
+  just x86; other architectures are unaffected and simply don't get this
+  one optional feature.
+
 ## 1.28.0
 
 - The Trends chart now shades an **uncertainty range** around the

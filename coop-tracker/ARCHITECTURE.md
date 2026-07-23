@@ -773,17 +773,34 @@ everywhere else.
 ## 14. Packaging & init
 
 Multi-arch build (`aarch64`, `amd64`, `armhf`, `armv7`, `i386`) against
-Home Assistant's own per-arch Python/Alpine base images (`build.yaml`), so
-the add-on matches whatever the Supervisor already ships for that host.
+Debian-based Python images (`build.yaml`) — `python:3.12-slim-bookworm`
+per architecture.
 
-`config.yaml` sets `init: false`. **Why:** the base image already runs
-s6-overlay v3 as PID 1; leaving Supervisor's own init wrapper enabled on
-top of that caused a startup crash (`s6-overlay-suexec: fatal: can only
-run as pid 1`), fixed in v1.1.1. `run.sh` is a `with-contenv` script for
-the same s6-overlay reason — it's what makes `SUPERVISOR_TOKEN` and other
-Supervisor-injected env vars actually visible to `python3 app.py` (v1.6.1
-fix; s6-overlay v3 doesn't pass its environment to a plain script
-otherwise).
+**Why Debian and not Home Assistant's own per-arch Alpine base images
+(pre-v1.29.0 behavior):** §19's advanced forecast needs `statsmodels`,
+which has no musllinux (Alpine/musl) wheel for aarch64 — `pip install`
+would silently fail to give Raspberry Pi 4/5-class installs the feature
+even though `numpy`/`scipy` (its own transitive deps) do have Alpine
+wheels there. Switching every architecture to one glibc-based image keeps
+a single, consistent base rather than mixing Alpine and Debian per arch.
+This still doesn't make the advanced forecast available everywhere — see
+§19 — but it's no longer *blocked* on aarch64 the way Alpine would have
+left it.
+
+`config.yaml` still sets `init: false` — unrelated to which base image is
+used, this just tells Supervisor not to inject its own init wrapper, so
+the app's own process is PID 1 either way. What *did* change with the
+Debian switch: the old Alpine base ran s6-overlay v3, and `run.sh` used
+its `#!/usr/bin/with-contenv bash` shebang to make `SUPERVISOR_TOKEN` and
+other Supervisor-injected env vars visible to the script (v1.6.1 fix —
+s6-overlay v3 doesn't pass its environment to a plain script otherwise).
+Debian's `python:3.12-slim-bookworm` has no s6-overlay at all, so
+`with-contenv` doesn't exist there — `run.sh`'s shebang changed to plain
+`#!/bin/bash` (v1.29.0). This isn't a regression of the v1.6.1 fix: that
+fix existed only to bridge s6-overlay's own env-var isolation; a plain
+Debian container has no such isolation, so the container's env vars
+(`SUPERVISOR_TOKEN` included) are visible to `python3 app.py` without any
+bridging tool at all.
 
 ## 15. Versioning
 
@@ -909,3 +926,72 @@ free-text-fragments lesson as food types (§10) — and `observation` is the
 pressure valve for anything the fixed set doesn't cover, with details in
 `notes`. `weight_grams` is required for `weight` events, optional
 elsewhere.
+
+## 19. Advanced statistical forecast (Holt-Winters, experimental, v1.29.0)
+
+An opt-in (`advanced_forecast_enabled`, default `false`) second chart on
+the Trends tab: a real statistical model (`statsmodels`'
+`ExponentialSmoothing`, i.e. Holt-Winters) fitted directly on logged
+history, shown as an independent check against §9's hand-tuned forecast —
+not a replacement for it. `GET /api/trends/advanced`, gated the same way
+Coop Vision's now-reverted vision pipeline was: a `try/except ImportError`
+guard (`STATSMODELS_AVAILABLE`) reported via `/api/debug`, only installed
+on amd64/aarch64 (`requirements-advanced.txt`, `Dockerfile`), and behind a
+config option defaulting off.
+
+**Why Holt-Winters, not ARIMA:** statsmodels has no auto order-search for
+ARIMA (that's the separate `pmdarima` package) — hand-picking (p,d,q) per
+install isn't something this app can do sensibly, and a wrong guess fails
+silently rather than erroring. Holt-Winters degrades gracefully (trend
+component only, when there isn't enough data for a seasonal one) and its
+seasonal component is *data-driven*, unlike §9's fixed ±25% sinusoid —
+exactly the outside check this feature exists to provide.
+
+**Two-tier minimum-data gate**, both against `_egg_history_span_months`
+(elapsed calendar months since the first-ever egg log, capped at 24 to
+match `_recent_month_starts`' own hard cap — this is a near-term reality
+for almost every install, not an edge case):
+
+- `< ADVANCED_FORECAST_MIN_MONTHS` (6): no fit attempted at all — a model
+  this short-lived on this little data would be fragile to the point of
+  meaningless, and the UI says so plainly rather than showing a number
+  with false confidence.
+- `6-23` months: `trend="add", seasonal=None` — trend-only.
+- `>= ADVANCED_FORECAST_SEASONAL_MIN_MONTHS` (24): `seasonal="add",
+  seasonal_periods=12` — statsmodels' own requirement of roughly 2 full
+  seasonal cycles to initialize a seasonal component reliably.
+
+**Why a separate, lazily-fetched endpoint instead of extending
+`/api/trends`:** `.fit()` is meaningfully heavier than every other
+computation `/api/trends` does (all closed-form arithmetic), and that
+endpoint is hit on every Trends-tab load and every range-selector change.
+Bundling the fit into that path would tax the primary, always-used view
+for a feature that's opt-in and experimental. The frontend fetches
+`/api/trends/advanced` only once, on first expanding the collapsed
+"Experimental: statistical forecast" panel (`toggle` event, guarded by a
+loaded flag) — never on normal page load.
+
+**Confidence interval, not the §9 uncertainty band's statistic:**
+`ExponentialSmoothing` has no closed-form CI the way SARIMAX does, so the
+standard statsmodels approach is used — simulate 1000 repetitions of the
+fitted model (`fit.simulate(..., error="add")`) and take the 2.5th/97.5th
+percentiles. Deliberately independent of §9's backtest-derived MAE band:
+the whole point of this chart is an outside model's own opinion of its
+uncertainty, not reusing the simple forecast's error statistic.
+
+**Why `buildAdvancedForecastSvg` isn't merged with `buildTrendsSvg`:** the
+two charts differ too much — series count, dash styles, the
+backtest-merged dashed line, the history/forecast divider, and x-domain
+source (§9's chart follows the range selector; this one always shows all
+available history) — for a shared builder to save more than it costs in
+indirection. Only the `bandPolygon` primitive (not a full chart builder)
+is genuinely reused between them.
+
+**Architecture gating**, same table shape as the reverted Coop Vision
+precedent:
+
+| Arch | statsmodels wheel | Feature |
+|---|---|---|
+| amd64 | musllinux + manylinux | works |
+| aarch64 | manylinux only (no musllinux) | works (needs the Debian base — see §14) |
+| armv7 / armhf / i386 | none | reports unavailable via `/api/debug`, never crashes |

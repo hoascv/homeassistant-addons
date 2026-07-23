@@ -832,6 +832,102 @@ function buildTrendsSvg(data) {
   return `<svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet">${content}${divider}</svg>`;
 }
 
+// A separate builder rather than sharing buildTrendsSvg above: this chart
+// has one actual series + one forecast line + one CI band over its own
+// x-domain (all available history, not the range selector) with no
+// backtest/divider concept — abstracting over that many differing knobs
+// would cost more indirection than the overlap saves. Only bandPolygon
+// (the primitive, not a full chart builder) is genuinely shared.
+function buildAdvancedForecastSvg(data) {
+  const pointSpacing = 48;
+  const chartH = 120;
+  const topPad = 10;
+  const labelH = 16;
+  const historyCount = data.months.length;
+  const forecastCount = data.advanced_months.length;
+  const totalCount = historyCount + forecastCount;
+  const width = totalCount * pointSpacing;
+  const height = topPad + chartH + labelH;
+  const maxVal = Math.max(1, ...data.collected, ...data.advanced_ci_upper);
+
+  const xAt = (i) => i * pointSpacing + pointSpacing / 2;
+  const yAt = (value) => topPad + chartH - (value / maxVal) * chartH;
+
+  const line = (values, offset, colorVar, { dashed = false } = {}) => {
+    const points = values.map((v, i) => `${xAt(offset + i)},${yAt(v)}`).join(" ");
+    const dash = dashed ? ' stroke-dasharray="4,3"' : "";
+    let svg = `<polyline points="${points}" fill="none" stroke="var(${colorVar})" stroke-width="2"${dash}></polyline>`;
+    values.forEach((v, i) => {
+      svg += `<circle cx="${xAt(offset + i)}" cy="${yAt(v)}" r="2.5" fill="var(${colorVar})"></circle>`;
+    });
+    return svg;
+  };
+
+  let content = "";
+  if (forecastCount > 0) {
+    const xs = data.advanced_forecast.map((_, i) => xAt(historyCount + i));
+    const ysUpper = data.advanced_ci_upper.map(yAt);
+    const ysLower = data.advanced_ci_lower.map(yAt);
+    content += bandPolygon(xs, ysUpper, ysLower, "--accent-egg");
+  }
+  content += line(data.collected, 0, "--accent-egg");
+  if (forecastCount > 0) {
+    content += line(data.advanced_forecast, historyCount, "--accent-egg", { dashed: true });
+  }
+
+  data.months.forEach((ym, i) => {
+    content += `<text class="trends-bar-label" x="${xAt(i)}" y="${height - 2}" text-anchor="middle">${monthLabel(ym).split(" ")[0]}</text>`;
+  });
+  data.advanced_months.forEach((ym, i) => {
+    content += `<text class="trends-bar-label trends-bar-label-forecast" x="${xAt(historyCount + i)}" y="${height - 2}" text-anchor="middle">${monthLabel(ym).split(" ")[0]}</text>`;
+  });
+
+  return `<svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet">${content}</svg>`;
+}
+
+let advancedForecastLoaded = false;
+
+async function loadAdvancedForecast() {
+  const messageEl = document.getElementById("advanced-forecast-message");
+  const chartWrap = document.getElementById("advanced-forecast-chart-wrap");
+  chartWrap.hidden = true;
+  chartWrap.querySelector("svg")?.remove();
+
+  let data;
+  try {
+    const res = await fetch("api/trends/advanced");
+    data = await res.json();
+  } catch (err) {
+    messageEl.textContent = "Couldn't load the advanced forecast — check your connection.";
+    return;
+  }
+
+  if (!data.advanced_enabled) {
+    messageEl.textContent = "Enable Advanced forecast in the add-on's Configuration tab to try this.";
+  } else if (!data.advanced_libs_available) {
+    messageEl.textContent = "Not available on this device's architecture (requires amd64 or aarch64).";
+  } else if (data.advanced_error) {
+    messageEl.textContent = "Couldn't fit a model with your current data.";
+  } else if (data.history_months < data.min_months_required) {
+    messageEl.textContent = `Log at least ${data.min_months_required} months of egg collection to unlock this (${data.history_months} so far).`;
+  } else {
+    const seasonalNote =
+      data.model === "holt_winters_seasonal"
+        ? "This includes a data-driven seasonal component (24+ months of history)."
+        : `This is a trend-only fit — log ${data.seasonal_min_months_required} months total for a seasonal component too (${data.history_months} so far).`;
+    messageEl.textContent = `An independent statistical model (Holt-Winters), fitted directly on your history, as a check against the forecast above. ${seasonalNote} The shaded range is its 95% confidence interval.`;
+    chartWrap.insertAdjacentHTML("beforeend", buildAdvancedForecastSvg(data));
+    chartWrap.hidden = false;
+  }
+}
+
+document.getElementById("advanced-forecast-panel").addEventListener("toggle", (e) => {
+  if (e.target.open && !advancedForecastLoaded) {
+    advancedForecastLoaded = true;
+    loadAdvancedForecast();
+  }
+});
+
 async function loadTrends() {
   const months = trendsRangeSelect.value;
   const res = await fetch(`api/trends?months=${months}`);
