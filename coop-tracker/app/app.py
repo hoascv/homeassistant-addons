@@ -1800,16 +1800,34 @@ def _log_startup_debug_info():
     print("[Coop Tracker] --- end startup debug info ---")
 
 
+# Set by _handle_shutdown_signal; read after serve() returns to measure how
+# long shutdown actually took (diagnostic for the exit-137 investigation).
+_shutdown_signal_at = None
+
+
 def _handle_shutdown_signal(signum, frame):
     # Diagnostic for the exit-137-on-restart investigation: Supervisor
     # restarts consistently take ~10s and end in SIGKILL (exit 137), but
     # every local reproduction of a bare SIGTERM exits instantly and
     # cleanly (exit 143) — this log line is the one thing that can tell us,
     # from the real environment, whether the signal is even being received
-    # promptly or not. Exits immediately after logging; no cleanup is
-    # needed (DB connections are per-request/per-thread, not held open).
+    # promptly or not.
+    #
+    # sys.exit(0) here raises SystemExit on the main thread, which interrupts
+    # waitress's asyncore select/poll loop. Waitress's own BaseWSGIServer.run()
+    # catches that SystemExit internally (it does NOT propagate it) and calls
+    # task_dispatcher.shutdown(timeout=5) — which blocks for up to 5s waiting
+    # on any worker thread still mid-request — before returning normally to
+    # this __main__ block. So this log line alone only proves the signal
+    # arrived; it says nothing about whether that shutdown() call, or
+    # anything after it, is what eats the remaining time. The thread dump
+    # below and the post-serve() log line close that gap.
+    global _shutdown_signal_at
+    _shutdown_signal_at = time.monotonic()
+    alive = [f"{t.name}(daemon={t.daemon})" for t in threading.enumerate()]
     print(
-        f"[Coop Tracker] {datetime.now().isoformat()} received signal {signum}, shutting down",
+        f"[Coop Tracker] {datetime.now().isoformat()} received signal {signum}, "
+        f"shutting down; live threads: {alive}",
         flush=True,
     )
     sys.exit(0)
@@ -1825,3 +1843,20 @@ if __name__ == "__main__":
     port = int(os.environ.get("COOP_PORT", "8099"))
     print(f"[Coop Tracker] serving on 0.0.0.0:{port} (waitress)", flush=True)
     serve(app, host="0.0.0.0", port=port)
+    # Diagnostic for the exit-137-on-restart investigation: if this line
+    # never shows up in the logs before a SIGKILL, the hang is inside
+    # waitress's shutdown (most likely task_dispatcher.shutdown()'s 5s wait
+    # on a busy worker thread) or the signal never interrupted the accept
+    # loop at all. If it DOES show up, the hang is somewhere after this
+    # point — interpreter finalization, an atexit hook, or a non-daemon
+    # thread we haven't identified yet.
+    since_signal = (
+        f"{time.monotonic() - _shutdown_signal_at:.1f}s after signal"
+        if _shutdown_signal_at is not None
+        else "no shutdown signal seen"
+    )
+    print(
+        f"[Coop Tracker] {datetime.now().isoformat()} serve() returned "
+        f"({since_signal}), reaching end of __main__",
+        flush=True,
+    )
