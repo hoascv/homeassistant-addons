@@ -1,6 +1,7 @@
 import base64
 import binascii
 import csv
+import importlib.metadata
 import io
 import json
 import math
@@ -15,7 +16,6 @@ import urllib.error
 import urllib.request
 from datetime import date, datetime, time as dtime, timedelta
 
-import flask
 from flask import Flask, Response, g, jsonify, render_template, request, send_file
 
 try:
@@ -2693,7 +2693,7 @@ def api_debug():
                 else _get_app_state(db, "reminder_last_checked_date")
             ),
             "python_version": sys.version.split()[0],
-            "flask_version": flask.__version__,
+            "flask_version": importlib.metadata.version("flask"),
             "platform": platform.platform(),
             "statsmodels_available": STATSMODELS_AVAILABLE,
             "statsmodels_error": STATSMODELS_ERROR,
