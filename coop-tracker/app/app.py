@@ -6,6 +6,7 @@ import json
 import math
 import os
 import platform
+import signal
 import sqlite3
 import sys
 import threading
@@ -556,6 +557,7 @@ def _background_loop():
         )
         return
     while True:
+        iteration_start = time.monotonic()
         try:
             conn = _db_connect_standalone()
             try:
@@ -565,6 +567,18 @@ def _background_loop():
                 conn.close()
         except Exception:  # noqa: BLE001 - keep the loop alive across any single failure
             app.logger.exception("background loop iteration failed")
+        # Diagnostic for the exit-137-on-restart investigation: _push_ha_sensors
+        # makes up to 9 sequential HA API calls (5s timeout each) — if a restart
+        # happens while this loop is mid-iteration, this is the trail that would
+        # show whether it was ever the reason the process was slow to exit.
+        # Silent in the normal (fast) case to avoid permanent log noise.
+        elapsed = time.monotonic() - iteration_start
+        if elapsed > 2:
+            print(
+                f"[Coop Tracker] {datetime.now().isoformat()} background loop "
+                f"iteration took {elapsed:.1f}s (usually near-instant)",
+                flush=True,
+            )
         time.sleep(60)
 
 
@@ -1786,9 +1800,25 @@ def _log_startup_debug_info():
     print("[Coop Tracker] --- end startup debug info ---")
 
 
+def _handle_shutdown_signal(signum, frame):
+    # Diagnostic for the exit-137-on-restart investigation: Supervisor
+    # restarts consistently take ~10s and end in SIGKILL (exit 137), but
+    # every local reproduction of a bare SIGTERM exits instantly and
+    # cleanly (exit 143) — this log line is the one thing that can tell us,
+    # from the real environment, whether the signal is even being received
+    # promptly or not. Exits immediately after logging; no cleanup is
+    # needed (DB connections are per-request/per-thread, not held open).
+    print(
+        f"[Coop Tracker] {datetime.now().isoformat()} received signal {signum}, shutting down",
+        flush=True,
+    )
+    sys.exit(0)
+
+
 if __name__ == "__main__":
     from waitress import serve
 
+    signal.signal(signal.SIGTERM, _handle_shutdown_signal)
     init_db()
     _log_startup_debug_info()
     threading.Thread(target=_background_loop, daemon=True).start()
