@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.31.1
+
+- Fixed the nesting-box setup wizard letting **Finish** be tapped after
+  just one photo — with multiple boxes registered, each needs at least a
+  few samples before the app can learn to recognize it automatically,
+  otherwise every photo falls back to asking "which box is this?" with
+  no auto-detection ever kicking in. Finish now stays disabled until
+  enough photos have been taken.
+- Added a **+ Train more** button next to each nesting box in the ⚙️
+  settings sheet, showing how many auto-identification samples it has
+  so far — lets you top up an already-registered box's training photos
+  without creating a duplicate box.
+
 ## 1.31.0
 
 - **Egg photo counting & sizing now measures against a nesting box

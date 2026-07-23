@@ -1078,9 +1078,18 @@ function startEggVisionWizard(boxId, boxName) {
 function updateWizardProgress() {
   if (!eggVisionWizard) return;
   const { streak, attempts, boxName } = eggVisionWizard;
+  const currentAttemptNumber = attempts + 1; // this photo, if submitted now
   const ready = streak >= EGG_VISION_WIZARD_STREAK_TARGET;
+  const metMinimum = currentAttemptNumber >= coopBoxIdMinSamples;
+  // Below the minimum, Finish is disabled outright — otherwise a box can
+  // end up with too few samples for the auto-identification classifier
+  // to ever train once a second box exists (see ARCHITECTURE.md §20
+  // addendum / EGG_VISION_BOX_ID_MIN_SAMPLES_PER_BOX).
+  eggVisionWizardFinishBtn.disabled = !metMinimum;
   eggVisionWizardProgress.textContent = ready
     ? `✓ "${boxName}" looks reliable (${streak} correct in a row) — Finish, or keep going.`
+    : !metMinimum
+    ? `Photo ${currentAttemptNumber}/${coopBoxIdMinSamples} — need at least ${coopBoxIdMinSamples} before finishing, so it has enough to tell this box apart from others.`
     : `${streak}/${EGG_VISION_WIZARD_STREAK_TARGET} correct in a row · attempt ${attempts + 1}/${EGG_VISION_WIZARD_MAX_ATTEMPTS}`;
 }
 
@@ -1196,18 +1205,24 @@ async function loadNestingBoxes() {
   const list = document.getElementById("nesting-boxes-list");
   list.innerHTML = '<li class="notify-services-empty">Loading…</li>';
   try {
-    const res = await fetch("api/nesting-boxes");
-    const boxes = await res.json();
+    const [boxesRes, statusRes] = await Promise.all([fetch("api/nesting-boxes"), fetch("api/vision/train/status")]);
+    const boxes = await boxesRes.json();
+    const trainStatus = await statusRes.json().catch(() => null);
+    const samplesPerBox = (trainStatus && trainStatus.samples_per_box) || {};
+    const minPerBox = coopBoxIdMinSamples;
     list.innerHTML = boxes.length
       ? boxes
-          .map(
-            (b) => `
+          .map((b) => {
+            const n = samplesPerBox[String(b.id)] || samplesPerBox[b.id] || 0;
+            const auto = boxes.length > 1 ? ` · ${n}/${minPerBox} auto-ID samples` : "";
+            return `
               <li>
-                ${escapeHtml(b.name)} — ${(b.width_mm / 10).toFixed(1)}cm
+                ${escapeHtml(b.name)} — ${(b.width_mm / 10).toFixed(1)}cm${auto}
+                <button type="button" class="link-btn nesting-box-train" data-id="${b.id}" data-name="${escapeHtml(b.name)}">+ Train more</button>
                 <button type="button" class="link-btn nesting-box-delete" data-id="${b.id}" aria-label="Delete ${escapeHtml(b.name)}">✕</button>
               </li>
-            `
-          )
+            `;
+          })
           .join("")
       : '<li class="notify-services-empty">No nesting boxes set up yet.</li>';
   } catch (e) {
@@ -1215,7 +1230,18 @@ async function loadNestingBoxes() {
   }
 }
 
+// Keep in sync with app.py's EGG_VISION_BOX_ID_MIN_SAMPLES_PER_BOX — a
+// box needs at least this many samples before it's eligible for the
+// auto-identification classifier once >=2 boxes exist.
+const coopBoxIdMinSamples = 3;
+
 document.getElementById("nesting-boxes-list").addEventListener("click", async (e) => {
+  const trainBtn = e.target.closest(".nesting-box-train");
+  if (trainBtn) {
+    backupBackdrop.classList.remove("open");
+    startEggVisionWizard(Number(trainBtn.dataset.id), trainBtn.dataset.name);
+    return;
+  }
   const btn = e.target.closest(".nesting-box-delete");
   if (!btn) return;
   if (!confirm("Delete this nesting box? Already-collected training photos are kept.")) return;
