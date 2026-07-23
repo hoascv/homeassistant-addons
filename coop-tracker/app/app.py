@@ -46,7 +46,7 @@ except ImportError as e:
     OPENCV_AVAILABLE = False
     OPENCV_ERROR = str(e)
 
-APP_VERSION = "1.30.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.30.1"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("COOP_DB_PATH", "/data/coop.db")
 OPTIONS_PATH = os.environ.get("COOP_OPTIONS_PATH", "/data/options.json")

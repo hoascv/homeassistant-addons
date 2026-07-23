@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.30.1
+
+- No user-facing changes. Added diagnostic logging around Supervisor
+  restarts (SIGTERM receipt, live thread state, and shutdown timing) to
+  investigate add-ons occasionally being killed (exit 137) instead of
+  exiting cleanly on restart.
+
 ## 1.30.0
 
 - New **experimental egg photo counting & sizing** on the Log Eggs sheet
