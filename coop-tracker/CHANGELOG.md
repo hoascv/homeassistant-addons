@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.32.1
+
+- No user-facing behavior changes, but two real bugs fixed: several
+  startup log lines had no `flush=True`, so under Supervisor/Docker's
+  buffered stdout they could be lost entirely if the add-on were ever
+  SIGKILLed before flushing on its own; and the "SUPERVISOR_TOKEN not
+  set" background-loop line was silently dropped by Flask's default
+  logger threshold and never appeared in the log at all. All add-on log
+  output is now timestamped and immediately flushed. Also fixed a Flask
+  deprecation warning (`flask.__version__`, removed in Flask 3.2) in the
+  debug endpoint's reported Flask version.
+
 ## 1.32.0
 
 - **Eggs are now found by color, not brightness** — the flagship
