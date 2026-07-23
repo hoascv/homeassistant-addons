@@ -79,7 +79,8 @@ CREATE TABLE logs (
     cost REAL,              -- expense
     category TEXT,          -- expense
     container_empty INTEGER,-- feeding: 0/1/NULL, see §10
-    given_away INTEGER      -- used: 0/1/NULL, see §11
+    given_away INTEGER,     -- used: 0/1/NULL, see §11
+    egg_sizes TEXT          -- egg: comma-delimited size codes, see §20
 )
 ```
 
@@ -776,6 +777,24 @@ Multi-arch build (`aarch64`, `amd64`, `armhf`, `armv7`, `i386`) against
 Debian-based Python images (`build.yaml`) — `python:3.12-slim-bookworm`
 per architecture.
 
+**`build_from` values must be fully qualified as `namespace/repo:tag`**
+(here: `docker.io/library/python:3.12-slim-bookworm`), not the bare
+`python:3.12-slim-bookworm` shorthand Docker itself accepts. Supervisor
+validates `build.yaml`'s `build_from` entries against its own regex, which
+requires a `/` — a bare official-image reference fails that check and
+Supervisor **silently falls back to a default base image**
+(`ghcr.io/home-assistant/base:latest`) rather than erroring, logging only
+a `WARNING ... using defaults` easy to miss. This broke the actual
+v1.29.0 rollout (the default base has no `pip3`, so every build failed) —
+the Dockerfile itself built and deployed correctly, so the failure looked
+like a Supervisor caching/staleness issue at first, not a `build.yaml`
+schema rejection. Verified directly against the regex from Supervisor's
+own log (`^([a-zA-Z\-\.:\d{}]+/)*?([\-\w{}]+)/([\-\w{}]+)(:[\.\-\w{}]+)?$`)
+before landing the fix, rather than trusting a local `docker build
+--build-arg BUILD_FROM=...` pass — that only exercises Docker's own `FROM`
+resolution, not Supervisor's separate `build.yaml` validation layer, which
+is exactly the gap that let this ship unnoticed.
+
 **Why Debian and not Home Assistant's own per-arch Alpine base images
 (pre-v1.29.0 behavior):** §19's advanced forecast needs `statsmodels`,
 which has no musllinux (Alpine/musl) wheel for aarch64 — `pip install`
@@ -888,6 +907,18 @@ stays fast.
   coop would see less seasonal swing than modeled. Both are acceptable
   for a single-known-user add-on; the constants are the tuning point if
   that changes.
+- **Egg photo sizes (§20) are width, not weight.** S/M/L/XL is a
+  photo-measured approximation of the real, weight-based grading — a
+  couple millimeters of measurement noise near a boundary can flip the
+  suggested size, which is exactly why it's always reviewable/correctable
+  before saving, never presented as an authoritative reading.
+- **Egg photo analysis doesn't split touching/overlapping eggs (§20).** A
+  merged blob is excluded from the auto-count rather than guessed at, and
+  only reliably excluded when the overlap is moderate — a heavy overlap
+  can round out into a blob that isn't flagged. Corrected with "+ Add
+  egg"/chip removal, not attempted algorithmically (watershed
+  segmentation would be the real fix, deferred as real complexity for
+  uncertain benefit over the existing manual correction).
 
 ## 18. Per-chicken health records (v1.27.0)
 
@@ -995,3 +1026,83 @@ precedent:
 | amd64 | musllinux + manylinux | works |
 | aarch64 | manylinux only (no musllinux) | works (needs the Debian base — see §14) |
 | armv7 / armhf / i386 | none | reports unavailable via `/api/debug`, never crashes |
+
+## 20. Egg photo analysis (coin-calibrated count & size, v1.30.0)
+
+An opt-in (`egg_vision_enabled`, default `false`) addition to the Log Eggs
+sheet: photograph a batch of eggs alongside a coin, and `POST
+/api/vision/eggs` counts them and estimates each one's size (S/M/L/XL),
+calibrated against the coin's known real-world diameter
+(`egg_vision_coin_diameter_mm`, user-configured — this isn't tied to any
+one currency's coin). The result is always a **reviewable suggestion**: a
+canvas overlay lets the coin position/size be dragged into place, and every
+egg's size (and the count itself, via +/- Add egg/chip removal) can be
+corrected before it ever reaches the same count-stepper and Save button the
+manual entry flow already uses. Gated the same way the reverted Coop
+Vision chicken-ID feature and the shipped statsmodels advanced forecast
+(§19) both are: a `try/except ImportError` guard (`OPENCV_AVAILABLE`),
+reported via `/api/debug`, installed only on amd64/arm64
+(`requirements-advanced.txt`, `Dockerfile` — the same conditional block
+§19's statsmodels install uses, for an independent reason: opencv has
+manylinux wheels for amd64/aarch64 but none at all for
+armv7/armhf/i386, under any libc, so no further base-image change was
+needed on top of §19's Debian switch).
+
+**Why classical CV (OpenCV: Hough circles + contour/ellipse fitting), not
+a trained model:** no model weights to ship or update, deterministic,
+explainable — the same reasoning §19 gives for Holt-Winters over a
+per-install-tuned ARIMA. Coin detection (`cv2.HoughCircles`) and egg
+detection (Otsu threshold → contours → `cv2.fitEllipse`) are independent
+passes; a missing/wrong coin never blocks counting eggs, it just leaves
+their size uncalibrated until the review screen gets a coin position
+(automatic or dragged into place manually).
+
+**Why the coin's search radius is capped well below typical egg size**
+(`COIN_MAX_RADIUS_FRACTION = 0.08` of the photo's shorter side): without
+this, a heavily-overlapping merged-egg blob can coincidentally end up
+circular and coin-sized, and Hough circle detection has no way to tell
+"a round coin" from "a round thing" — verified directly against synthetic
+test images (a merged pair with centers 50px apart round out into a
+near-perfect circle, exactly the shape Hough is looking for). A coin is
+physically about half an egg's width, so a tight radius cap makes this
+collision much less likely; it can't be eliminated entirely, which is
+exactly why the coin position is always draggable, never authoritative.
+
+**Why the egg-merge exclusion threshold is an aspect ratio of 1.6, not
+2.2:** tuned empirically against synthetic test images — a single egg's
+major/minor ratio is ~1.3, and two horizontally-touching eggs merged into
+one contour top out around ~1.7-1.8 before `fitEllipse`'s fit naturally
+separates them into two contours again (verified by sweeping the overlap
+amount). 1.6 sits between the two with modest margin on each side. This
+threshold only catches *moderate* overlaps that produce an elongated
+blob — a *heavy* overlap that rounds back out (see above) isn't caught by
+this heuristic at all, which is why it's listed in §17 as an accepted,
+not fully solved, limitation. A wrong exclusion (a real single, unusually
+elongated egg) costs one "+ Add egg" tap; a wrong inclusion would
+silently report a bogus size for two merged eggs — the asymmetry is why
+this threshold errs toward excluding.
+
+**Why the photo itself is never persisted** — unlike chicken photos
+(`chickens.photo`, a stored `BLOB`, §4): a chicken photo is added once per
+bird; an egg photo could happen daily. The photo is analyzed once,
+in-memory, for the single `/api/vision/eggs` request, and discarded; only
+`egg_sizes` (the reviewed, user-corrected result) is logged, as an
+ordinary flat column on `logs` — the same "extra nullable column,
+meaningful only for one type" convention as `container_empty`/`given_away`
+(§4), not a child table, since a size list is generated once and tied to
+exactly one already-existing log row, never queried independently of it
+(contrast with `health_events`, §18, a genuine one-to-many relationship
+with its own CRUD).
+
+**Size math**: `pixels_per_mm = (2 × coin.r) / egg_vision_coin_diameter_mm`;
+each egg's measured width (the ellipse's minor axis) is converted to mm
+and bucketed via `EGG_SIZE_MM_BOUNDS` — thresholds derived from standard
+EU weight bands (S<53g, M 53-63g, L 63-73g, XL>73g) via isometric scaling
+anchored at a 63g (M/L boundary) egg ≈ 44mm wide. This is an
+approximation of weight-based grading from a 2D measurement, not a real
+weight — stated in DOCS.md and never hidden behind the familiar S/M/L/XL
+labels (see §17). The same formula is mirrored in `app.js`
+(`eggSizeCode`/`EGG_SIZE_MM_BOUNDS`) so dragging the coin recomputes every
+egg's size instantly, with no extra round trip to the server — the
+backend response already includes each egg's raw pixel measurements, not
+just a size code, specifically so the frontend can do this.

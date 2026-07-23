@@ -229,6 +229,25 @@
   </div>
 </div>
 
+<div class="sheet-backdrop" id="egg-vision-backdrop">
+  <div class="sheet">
+    <h2>Count &amp; size from a photo</h2>
+    <div class="egg-vision-canvas-wrap" id="egg-vision-canvas-wrap" hidden>
+      <img id="egg-vision-photo" alt="">
+      <canvas id="egg-vision-overlay"></canvas>
+    </div>
+    <p class="trends-forecast-caption" id="egg-vision-status-msg"></p>
+    <div class="egg-vision-chips" id="egg-vision-chips"></div>
+    <div class="sheet-actions">
+      <button type="button" class="link-btn" id="egg-vision-add-egg">+ Add egg</button>
+    </div>
+    <div class="sheet-actions">
+      <button type="button" class="btn-secondary" id="egg-vision-cancel-btn">Cancel</button>
+      <button type="button" class="btn-primary" id="egg-vision-use-btn">Use these results</button>
+    </div>
+  </div>
+</div>
+
 <div class="sheet-backdrop" id="backup-backdrop">
   <div class="sheet">
     <h2>Backup &amp; Restore</h2>
@@ -418,6 +437,11 @@
     symbol: "{{ currency_symbol }}",
     position: "{{ currency_position }}",
     decimals: {{ currency_decimals }}
+  };
+  window.EGG_VISION = {
+    enabled: {{ egg_vision_enabled | tojson }},
+    available: {{ egg_vision_available | tojson }},
+    coinDiameterMm: {{ egg_vision_coin_diameter_mm }}
   };
 </script>
 <script src="static/app.js?v={{ app_version }}"></script>

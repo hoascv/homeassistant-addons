@@ -54,3 +54,15 @@ def test_options_missing_file_returns_defaults(options_path):
     # the options_path fixture points at a path that doesn't exist yet,
     # matching a freshly-installed add-on before its first Configuration save
     assert coopapp._read_options() == {}
+
+
+def test_egg_vision_config_defaults(options_path):
+    cfg = coopapp.get_egg_vision_config()
+    assert cfg == {"enabled": False, "coin_diameter_mm": 24.5}
+
+
+def test_egg_vision_config_overrides(set_options):
+    set_options(egg_vision_enabled=True, egg_vision_coin_diameter_mm=21.21)
+    cfg = coopapp.get_egg_vision_config()
+    assert cfg["enabled"] is True
+    assert cfg["coin_diameter_mm"] == 21.21

@@ -82,3 +82,9 @@ def test_restore_backfills_columns_from_older_schema(client, tmp_path):
     entries = client.get("/api/entries").get_json()
     assert entries[0]["count"] == 4
     assert entries[0]["price"] is None  # backfilled column, defaults to NULL
+    assert entries[0]["egg_sizes"] is None  # backfilled column, defaults to NULL
+
+    # the backfilled column must also be usable going forward, not just present
+    res = client.put(f"/api/entries/{entries[0]['id']}", json={"egg_sizes": "M,L"})
+    assert res.status_code == 200
+    assert client.get("/api/entries").get_json()[0]["egg_sizes"] == "M,L"

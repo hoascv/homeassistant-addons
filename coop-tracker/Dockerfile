@@ -8,13 +8,15 @@ WORKDIR /app
 COPY app/requirements.txt .
 RUN pip3 install --no-cache-dir -r requirements.txt
 
-# Advanced-forecast deps (statsmodels) only have musllinux wheels for
-# amd64 and manylinux (glibc) wheels for amd64/aarch64 — no musllinux
-# aarch64 wheel exists, which is why the base image above is Debian, not
-# Alpine. armv7/armhf/i386 have no wheel at all under any libc. Skipped on
-# other architectures rather than failing the whole build; the app
-# detects the absence via an import guard (app.py) and reports the
-# feature unavailable instead.
+# Advanced/heavy deps, two independent features sharing one install gate:
+# - statsmodels (advanced forecast, §19): musllinux wheel for amd64, and a
+#   manylinux (glibc) wheel for amd64/aarch64 — no musllinux aarch64 wheel,
+#   which is why the base image above is Debian, not Alpine.
+# - opencv-python-headless (egg photo analysis, §20): amd64/aarch64
+#   manylinux wheels, none at all for armv7/armhf/i386, under any libc.
+# Both skipped on other architectures rather than failing the whole build;
+# the app detects each one's absence via its own import guard (app.py) and
+# reports that feature unavailable instead, independently of the other.
 COPY app/requirements-advanced.txt .
 RUN if [ "$TARGETARCH" = "amd64" ] || [ "$TARGETARCH" = "arm64" ]; then \
       pip3 install --no-cache-dir -r requirements-advanced.txt; \

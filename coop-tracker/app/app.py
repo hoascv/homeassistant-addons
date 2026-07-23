@@ -31,7 +31,21 @@ except ImportError as e:
     STATSMODELS_AVAILABLE = False
     STATSMODELS_ERROR = str(e)
 
-APP_VERSION = "1.29.0"  # keep in sync with the "version" field in config.yaml
+try:
+    import cv2
+    import numpy as np  # own guard — must not depend on the statsmodels import above
+
+    OPENCV_AVAILABLE = True
+    OPENCV_ERROR = None
+except ImportError as e:
+    # opencv-python-headless has amd64/aarch64 manylinux wheels but none at
+    # all for armv7/armhf/i386, under any libc — a different reason than
+    # statsmodels' aarch64 gap above, but the same amd64/arm64 install gate
+    # (see requirements-advanced.txt, ARCHITECTURE.md §20).
+    OPENCV_AVAILABLE = False
+    OPENCV_ERROR = str(e)
+
+APP_VERSION = "1.30.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("COOP_DB_PATH", "/data/coop.db")
 OPTIONS_PATH = os.environ.get("COOP_OPTIONS_PATH", "/data/options.json")
@@ -68,6 +82,43 @@ SEASONAL_PEAK_DAY = 172  # ~June 21
 # at 24 to match _recent_month_starts' own hard cap.
 ADVANCED_FORECAST_MIN_MONTHS = 6  # minimum to attempt a trend-only fit
 ADVANCED_FORECAST_SEASONAL_MIN_MONTHS = 24  # minimum for a seasonal term (2 full cycles)
+
+# Egg photo analysis (count + size from a photo) — see ARCHITECTURE.md §20.
+EGG_SIZE_CODES = ("S", "M", "L", "XL")
+# Width-in-mm thresholds an egg is bucketed into, derived from standard EU
+# weight bands (S<53g, M 53-63g, L 63-73g, XL>73g) via isometric scaling
+# anchored at a 63g (M/L boundary) egg ≈ 44mm wide. An approximation of
+# weight-based grading from a 2D photo measurement, not a real weight.
+EGG_SIZE_MM_BOUNDS = (41.5, 44.0, 46.5)  # S|M, M|L, L|XL boundaries
+
+# Hough circle search bounds, as a fraction of the photo's shorter side
+# (resolution-independent, since the upload is resized to a fixed target
+# client-side before it reaches here). Capped well below typical egg size
+# in-frame (a coin is ~half an egg's diameter) — a wider upper bound risks
+# Hough mistaking a roundish merged-egg blob for the coin, since nothing
+# else disambiguates "coin" from "egg-shaped thing" besides size and the
+# eggs' own aspect-ratio filter (see EGG_MIN_AREA_FRACTION below).
+COIN_MIN_RADIUS_FRACTION = 0.02
+COIN_MAX_RADIUS_FRACTION = 0.08
+
+# Contour-area bounds for "plausibly one egg", as a fraction of the whole
+# photo's area — filters out sensor noise (too small) and a misclassified
+# background/shadow blob (too large).
+EGG_MIN_AREA_FRACTION = 0.0015
+EGG_MAX_AREA_FRACTION = 0.20
+
+# A single egg's major/minor axis ratio is typically ~1.3-1.5 (chicken eggs
+# aren't very elongated); horizontally-touching eggs merged into one
+# contour top out empirically around ~1.7-1.8 before fitEllipse's fit
+# naturally separates them into two contours again. 1.6 sits between the
+# two with modest margin on each side — imperfect (a genuinely elongated
+# single egg near this ratio could get wrongly excluded, and some merged
+# pairs at lower overlap won't reach it), but excluding is the safer
+# failure: a wrong exclusion costs one "+ Add egg" tap, a wrong inclusion
+# silently reports a bogus size for two eggs merged into one.
+EGG_MAX_ASPECT = 1.6
+
+MAX_EGG_VISION_PHOTO_BYTES = 8 * 1024 * 1024  # analysis photo, not the 3MB chicken-photo cap
 
 
 def _seasonal_multiplier(when):
@@ -173,6 +224,14 @@ def get_advanced_forecast_config():
     return {"enabled": bool(_read_options().get("advanced_forecast_enabled", False))}
 
 
+def get_egg_vision_config():
+    opts = _read_options()
+    return {
+        "enabled": bool(opts.get("egg_vision_enabled", False)),
+        "coin_diameter_mm": float(opts.get("egg_vision_coin_diameter_mm", 24.5)),
+    }
+
+
 def get_db():
     if "db" not in g:
         os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
@@ -212,6 +271,7 @@ def init_db():
         ("category", "TEXT"),
         ("container_empty", "INTEGER"),
         ("given_away", "INTEGER"),
+        ("egg_sizes", "TEXT"),
     ):
         if column not in existing_columns:
             conn.execute(f"ALTER TABLE logs ADD COLUMN {column} {coltype}")
@@ -511,12 +571,16 @@ def _background_loop():
 @app.route("/")
 def index():
     currency = get_currency()
+    egg_vision_cfg = get_egg_vision_config()
     return render_template(
         "index.html",
         currency_symbol=currency["symbol"],
         currency_position=currency["position"],
         currency_decimals=currency["decimals"],
         app_version=APP_VERSION,
+        egg_vision_enabled=egg_vision_cfg["enabled"],
+        egg_vision_available=egg_vision_cfg["enabled"] and OPENCV_AVAILABLE,
+        egg_vision_coin_diameter_mm=egg_vision_cfg["coin_diameter_mm"],
     )
 
 
@@ -1110,17 +1174,163 @@ def _parse_hatch_date(value):
     return _parse_date_field(value, "hatch_date")
 
 
-def _decode_photo_data_uri(data_uri):
-    """Decodes a `data:image/...;base64,...` string (as produced by the
-    chicken form's client-side resize) into raw bytes for storage."""
+def _decode_photo_data_uri(data_uri, max_bytes=None):
+    """Decodes a `data:image/...;base64,...` string (as produced by a
+    client-side canvas resize) into raw bytes. `max_bytes` defaults to the
+    chicken-photo cap (resolved at call time, not import time, so tests can
+    still monkeypatch MAX_PHOTO_BYTES); the egg-vision endpoint passes a
+    larger one since that image is analyzed, not stored — see
+    MAX_EGG_VISION_PHOTO_BYTES."""
+    if max_bytes is None:
+        max_bytes = MAX_PHOTO_BYTES
     try:
         _, encoded = data_uri.split(",", 1)
         photo_bytes = base64.b64decode(encoded)
     except (ValueError, binascii.Error):
         return None, "invalid photo data"
-    if len(photo_bytes) > MAX_PHOTO_BYTES:
+    if len(photo_bytes) > max_bytes:
         return None, "photo is too large"
     return photo_bytes, None
+
+
+def _egg_size_code(width_mm):
+    """Buckets a measured egg width (mm) into S/M/L/XL via
+    EGG_SIZE_MM_BOUNDS — see ARCHITECTURE.md §20 for the derivation and
+    its honesty caveat (width, not weight)."""
+    s_m, m_l, l_xl = EGG_SIZE_MM_BOUNDS
+    if width_mm < s_m:
+        return "S"
+    if width_mm < m_l:
+        return "M"
+    if width_mm < l_xl:
+        return "L"
+    return "XL"
+
+
+def _analyze_egg_photo(photo_bytes, coin_diameter_mm):
+    """Classical CV egg count + size estimate — see ARCHITECTURE.md §20 for
+    why classical CV (no trained model) and the full failure-mode
+    reasoning. Never raises for "nothing found"; only for a genuinely
+    undecodable image. Coin detection (Hough circles) and egg detection
+    (Otsu threshold + contour/ellipse fitting) are independent — a missing
+    coin never prevents counting eggs, it just leaves their `size` unset
+    until the frontend gets a coin position (auto or manual)."""
+    arr = np.frombuffer(photo_bytes, dtype=np.uint8)
+    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    if img is None:
+        return {"status": "error", "error": "couldn't decode image", "eggs": [], "coin": None}
+
+    h, w = img.shape[:2]
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    blurred = cv2.GaussianBlur(gray, (9, 9), 2)
+
+    # --- coin: Hough circle transform. Coins are near-perfectly round,
+    # unlike ovoid eggs, so circularity alone disambiguates them. param2
+    # (accumulator threshold) is deliberately conservative: a lower value
+    # picks up spurious "circles" from egg-edge clutter (verified against
+    # synthetic test images with no coin drawn at all), and a missed coin
+    # just costs one manual tap on the review screen — a false positive
+    # would silently miscalibrate every egg's size instead.
+    short_side = min(h, w)
+    circles = cv2.HoughCircles(
+        blurred,
+        cv2.HOUGH_GRADIENT,
+        dp=1.5,
+        minDist=short_side * 0.15,
+        param1=100,
+        param2=60,
+        minRadius=int(short_side * COIN_MIN_RADIUS_FRACTION),
+        maxRadius=int(short_side * COIN_MAX_RADIUS_FRACTION),
+    )
+    coin = None
+    if circles is not None:
+        # HoughCircles orders by accumulator confidence descending — the
+        # top hit is the best single guess, never treated as authoritative
+        # (always adjustable on the review screen, see app.js).
+        cx, cy, r = circles[0][0]
+        coin = {"cx": float(cx), "cy": float(cy), "r": float(r)}
+
+    # --- eggs: Otsu threshold + contours. Assumes a plain, contrasting
+    # background — see DOCS.md for photographing tips. ---
+    _, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    # Otsu's polarity isn't knowable in advance; assume the minority-area
+    # class is the foreground (eggs+coin normally occupy less area than
+    # the surface they're laid on).
+    if cv2.countNonZero(thresh) > (thresh.size - cv2.countNonZero(thresh)):
+        thresh = cv2.bitwise_not(thresh)
+    kernel = np.ones((5, 5), np.uint8)
+    thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
+    thresh = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
+
+    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    photo_area = h * w
+    eggs = []
+    for c in contours:
+        area = cv2.contourArea(c)
+        if not (EGG_MIN_AREA_FRACTION * photo_area <= area <= EGG_MAX_AREA_FRACTION * photo_area):
+            continue
+        if len(c) < 5:
+            continue  # fitEllipse needs >= 5 points
+        (ex, ey), (minor, major), angle = cv2.fitEllipse(c)
+        if minor <= 0:
+            continue
+        if major / minor > EGG_MAX_ASPECT:
+            continue  # too elongated: likely 2+ touching eggs merged into one blob
+        if coin and math.hypot(ex - coin["cx"], ey - coin["cy"]) < coin["r"] * 1.5:
+            continue  # this contour is the coin itself, not an egg
+        eggs.append(
+            {"cx": float(ex), "cy": float(ey), "width_px": float(minor), "height_px": float(major), "angle": float(angle)}
+        )
+
+    status = "ok"
+    if not eggs:
+        status = "no_eggs_found"
+    elif coin is None:
+        status = "coin_not_found"
+
+    return {
+        "status": status,
+        "error": None,
+        "image_width": w,
+        "image_height": h,
+        "eggs": eggs,
+        "coin": coin,
+        "coin_diameter_mm": coin_diameter_mm,
+    }
+
+
+@app.route("/api/vision/eggs", methods=["POST"])
+def api_vision_eggs():
+    cfg = get_egg_vision_config()
+    if not cfg["enabled"]:
+        return jsonify({"status": "disabled", "error": None, "eggs": [], "coin": None})
+    if not OPENCV_AVAILABLE:
+        return jsonify({"status": "libs_unavailable", "error": OPENCV_ERROR, "eggs": [], "coin": None})
+
+    data = request.get_json(force=True, silent=True) or {}
+    photo_bytes, err = _decode_photo_data_uri(data.get("photo") or "", max_bytes=MAX_EGG_VISION_PHOTO_BYTES)
+    if err:
+        return jsonify({"error": err}), 400
+
+    try:
+        result = _analyze_egg_photo(photo_bytes, cfg["coin_diameter_mm"])
+    except Exception as e:  # noqa: BLE001 - analysis failure degrades, never 500s
+        return jsonify(
+            {
+                "status": "error",
+                "error": str(e),
+                "eggs": [],
+                "coin": None,
+                "coin_diameter_mm": cfg["coin_diameter_mm"],
+            }
+        )
+
+    if result["status"] == "ok":
+        px_per_mm = (2 * result["coin"]["r"]) / cfg["coin_diameter_mm"]
+        for egg in result["eggs"]:
+            egg["size"] = _egg_size_code(egg["width_px"] / px_per_mm)
+
+    return jsonify(result)
 
 
 @app.route("/api/chickens")
@@ -1335,6 +1545,7 @@ def api_log():
     category = data.get("category")
     container_empty = _normalize_bool_flag(data.get("container_empty"))
     given_away = _normalize_bool_flag(data.get("given_away"))
+    egg_sizes = data.get("egg_sizes")
 
     ts_input = data.get("ts")
     if ts_input:
@@ -1348,10 +1559,10 @@ def api_log():
     db = get_db()
     cur = db.execute(
         """
-        INSERT INTO logs (type, ts, count, food_type, amount, notes, price, cost, category, container_empty, given_away)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO logs (type, ts, count, food_type, amount, notes, price, cost, category, container_empty, given_away, egg_sizes)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (entry_type, ts, count, food_type, amount, notes, price, cost, category, container_empty, given_away),
+        (entry_type, ts, count, food_type, amount, notes, price, cost, category, container_empty, given_away, egg_sizes),
     )
     db.commit()
     threading.Thread(target=_push_ha_sensors_async, daemon=True).start()
@@ -1386,12 +1597,13 @@ def api_update_entry(entry_id):
     category = data.get("category", row["category"])
     container_empty = _normalize_bool_flag(data.get("container_empty", row["container_empty"]))
     given_away = _normalize_bool_flag(data.get("given_away", row["given_away"]))
+    egg_sizes = data.get("egg_sizes", row["egg_sizes"])
 
     db.execute(
         """
         UPDATE logs
         SET ts = ?, count = ?, food_type = ?, amount = ?, notes = ?, price = ?, cost = ?,
-            category = ?, container_empty = ?, given_away = ?
+            category = ?, container_empty = ?, given_away = ?, egg_sizes = ?
         WHERE id = ?
         """,
         (
@@ -1405,6 +1617,7 @@ def api_update_entry(entry_id):
             category,
             container_empty,
             given_away,
+            egg_sizes,
             entry_id,
         ),
     )
@@ -1484,6 +1697,9 @@ def api_debug():
             "statsmodels_available": STATSMODELS_AVAILABLE,
             "statsmodels_error": STATSMODELS_ERROR,
             "advanced_forecast_enabled": get_advanced_forecast_config()["enabled"],
+            "opencv_available": OPENCV_AVAILABLE,
+            "opencv_error": OPENCV_ERROR,
+            "egg_vision_enabled": get_egg_vision_config()["enabled"],
         }
     )
 
@@ -1501,7 +1717,7 @@ def api_backup():
 # (only the .db backup can be restored, see api_restore).
 EXPORT_COLUMNS = (
     "id", "type", "ts", "count", "food_type", "amount",
-    "notes", "price", "cost", "category", "container_empty", "given_away",
+    "notes", "price", "cost", "category", "container_empty", "given_away", "egg_sizes",
 )
 
 

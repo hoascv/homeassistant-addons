@@ -23,11 +23,25 @@ def _free_port():
 
 
 @pytest.fixture(scope="session")
-def app_server(tmp_path_factory):
+def _app_server_data_dir(tmp_path_factory):
+    return tmp_path_factory.mktemp("e2e-data")
+
+
+@pytest.fixture(scope="session")
+def app_server_options_path(_app_server_data_dir):
+    """The exact path the running app_server reads via COOP_OPTIONS_PATH —
+    options are read fresh on every request (no in-memory cache, see
+    ARCHITECTURE.md §8), so a test can write this file directly to flip a
+    feature flag without needing to restart the shared session server."""
+    return str(_app_server_data_dir / "options.json")
+
+
+@pytest.fixture(scope="session")
+def app_server(_app_server_data_dir):
     """The actual production entry point (`python app.py` → waitress) on a
     free port, with a throwaway DB and no SUPERVISOR_TOKEN so the
     background loop exits immediately and nothing talks to Home Assistant."""
-    data_dir = tmp_path_factory.mktemp("e2e-data")
+    data_dir = _app_server_data_dir
     port = _free_port()
     env = os.environ.copy()
     env.pop("SUPERVISOR_TOKEN", None)

@@ -18,7 +18,10 @@ def test_export_empty_db_has_header_only(client):
 
 
 def test_export_one_entry_of_each_type_lands_in_right_columns(client):
-    client.post("/api/log", json={"type": "egg", "count": 3, "ts": "2026-01-01T10:00:00"})
+    client.post(
+        "/api/log",
+        json={"type": "egg", "count": 3, "egg_sizes": "M,M,L", "ts": "2026-01-01T10:00:00"},
+    )
     client.post("/api/log", json={"type": "cleaning", "notes": "bedding", "ts": "2026-01-02T10:00:00"})
     client.post(
         "/api/log",
@@ -55,6 +58,9 @@ def test_export_one_entry_of_each_type_lands_in_right_columns(client):
     # columns that don't apply to a type stay blank, not "None"
     assert by_type["egg"][col["price"]] == ""
     assert by_type["cleaning"][col["count"]] == ""
+    # egg_sizes itself contains commas — a real quoting test, not just a
+    # column-presence check
+    assert by_type["egg"][col["egg_sizes"]] == "M,M,L"
 
 
 def test_export_notes_with_commas_and_newlines_round_trip(client):

@@ -908,3 +908,64 @@ main {
   color: var(--text);
   margin-bottom: 0.5rem;
 }
+
+.egg-vision-canvas-wrap {
+  position: relative;
+  width: 100%;
+  margin-bottom: 0.6rem;
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: #000; /* letterbox behind the photo while it loads */
+  touch-action: none;
+}
+
+.egg-vision-canvas-wrap img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+#egg-vision-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+  cursor: grab;
+}
+
+.egg-sizes-readout {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--text-muted);
+}
+
+.egg-vision-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-bottom: 0.6rem;
+}
+
+.egg-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.25rem 0.5rem;
+  border-radius: 999px;
+  color: #fff;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.egg-chip-remove {
+  border: none;
+  background: none;
+  color: #fff;
+  opacity: 0.85;
+  font-size: 0.75rem;
+  cursor: pointer;
+  padding: 0;
+  line-height: 1;
+}

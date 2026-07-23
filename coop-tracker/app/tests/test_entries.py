@@ -97,6 +97,37 @@ def test_update_entry_rejects_invalid_timestamp(client):
     assert res.get_json()["error"] == "invalid ts"
 
 
+def test_log_egg_stores_egg_sizes(client):
+    res = client.post("/api/log", json={"type": "egg", "count": 3, "egg_sizes": "M,M,L"})
+    assert res.status_code == 201
+    entries = client.get("/api/entries").get_json()
+    assert entries[0]["egg_sizes"] == "M,M,L"
+
+
+def test_log_egg_without_egg_sizes_is_null(client):
+    client.post("/api/log", json={"type": "egg", "count": 1})
+    entries = client.get("/api/entries").get_json()
+    assert entries[0]["egg_sizes"] is None
+
+
+def test_update_entry_updates_egg_sizes(client):
+    created = client.post(
+        "/api/log", json={"type": "egg", "count": 2, "egg_sizes": "S,S"}
+    ).get_json()
+    client.put(f"/api/entries/{created['id']}", json={"egg_sizes": "L,XL"})
+    entries = client.get("/api/entries").get_json()
+    assert entries[0]["egg_sizes"] == "L,XL"
+
+
+def test_update_without_egg_sizes_field_preserves_existing_value(client):
+    created = client.post(
+        "/api/log", json={"type": "egg", "count": 2, "egg_sizes": "S,S"}
+    ).get_json()
+    client.put(f"/api/entries/{created['id']}", json={"count": 3})
+    entries = client.get("/api/entries").get_json()
+    assert entries[0]["egg_sizes"] == "S,S"
+
+
 def test_delete_entry(client):
     created = client.post("/api/log", json={"type": "egg", "count": 1}).get_json()
     res = client.delete(f"/api/entries/{created['id']}")

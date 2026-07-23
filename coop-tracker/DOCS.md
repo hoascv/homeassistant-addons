@@ -6,7 +6,8 @@ your chickens, right from your phone via the Home Assistant sidebar.
 ## Features
 
 - Quick-add buttons for eggs, cleaning, feeding, sales, expenses, and
-  eggs used/consumed
+  eggs used/consumed — logging eggs can optionally count and size them
+  from a photo (amd64/aarch64 only, off by default)
 - A small red/green dot in the top bar showing whether the add-on can
   reach Home Assistant right now — tap it for the full connection detail
 - "Container was empty" checkbox on feeding entries, with a live estimate
@@ -85,6 +86,41 @@ refills, how long ago it was last emptied, and how many times you've fed
 it — independent of the 3/6/12-month range used for the egg chart above
 it, since a meaningful refill average usually needs longer than that to
 build up.
+
+## Egg photo counting & sizing (experimental)
+
+Off by default; turn on **egg_vision_enabled** in Configuration to add a
+**📷 Count & size from a photo** button to the Log Eggs sheet. Take (or
+choose) a photo of your eggs with a coin placed in the same shot, and the
+add-on counts the eggs and estimates each one's size (Small/Medium/
+Large/XL) by comparing them against the coin's known real-world size.
+Nothing is ever logged automatically — you always land on a review screen
+first, where you can drag the coin into place if it wasn't found
+automatically, tap any egg to cycle its size, add a missed egg, or remove
+a wrongly-detected one, before the results fill in the usual count and
+you hit Save like normal.
+
+**Set egg_vision_coin_diameter_mm to your actual coin's diameter in
+millimeters** (default `24.5`) — measure it, don't guess, since this is
+what makes the size estimate meaningful at all. Any coin works as long as
+you're consistent and the value matches it.
+
+**For the best results:** lay the eggs and the coin flat on a plain,
+matte, contrasting background (a light background for brown eggs, a dark
+one for white eggs) with even, diffuse lighting — avoid a single bright
+light causing glare on the shells. Keep eggs and the coin separated, not
+touching each other, and hold the camera roughly straight overhead so the
+coin's circular shape isn't distorted by the camera angle.
+
+**Be aware of the limits:** size is estimated from each egg's measured
+width, which is an approximation of the real, weight-based S/M/L/XL
+grading, not a substitute for a kitchen scale — always glance over the
+suggested sizes before saving. Eggs touching or overlapping in the photo
+may be missed or undercounted; use the review screen's **+ Add egg** and
+the ✕ on any chip to correct the count by hand. This feature also
+requires an **amd64** or **aarch64** install (the same architecture
+requirement as the Advanced forecast feature below) — on other
+architectures the button explains it isn't available on that device.
 
 ## Configuration
 

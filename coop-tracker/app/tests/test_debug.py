@@ -45,3 +45,18 @@ def test_debug_reports_advanced_forecast_enabled(client, set_options):
     set_options(advanced_forecast_enabled=True)
     body = client.get("/api/debug").get_json()
     assert body["advanced_forecast_enabled"] is True
+
+
+def test_debug_reports_opencv_availability(client):
+    body = client.get("/api/debug").get_json()
+    assert body["opencv_available"] == coopapp.OPENCV_AVAILABLE
+    if coopapp.OPENCV_AVAILABLE:
+        assert body["opencv_error"] is None
+    else:
+        assert body["opencv_error"]
+
+
+def test_debug_reports_egg_vision_enabled(client, set_options):
+    set_options(egg_vision_enabled=True)
+    body = client.get("/api/debug").get_json()
+    assert body["egg_vision_enabled"] is True

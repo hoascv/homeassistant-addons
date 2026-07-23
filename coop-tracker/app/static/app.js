@@ -246,11 +246,13 @@ function openSheet(type, entry = null) {
   currentEntryId = entry ? entry.id : null;
   sheetTitle.textContent = entry ? `Edit ${TITLES[type].replace("Log ", "")}` : TITLES[type];
   sheetFields.innerHTML = "";
+  delete sheetForm.dataset.eggSizes;
 
   const tsValue = toLocalInputValue(entry ? new Date(entry.ts) : new Date());
 
   if (type === "egg") {
     const initialCount = entry ? entry.count ?? 1 : 1;
+    if (entry && entry.egg_sizes) sheetForm.dataset.eggSizes = entry.egg_sizes;
     sheetFields.innerHTML = `
       <div class="field">
         <label>Eggs collected</label>
@@ -260,6 +262,19 @@ function openSheet(type, entry = null) {
           <button type="button" id="inc">+</button>
         </div>
       </div>
+      ${
+        window.EGG_VISION && window.EGG_VISION.enabled
+          ? `<div class="field">
+               <button type="button" class="link-btn" id="egg-photo-btn">📷 Count &amp; size from a photo</button>
+               <input type="file" id="egg-photo-input" accept="image/*" capture="environment" hidden>
+             </div>`
+          : ""
+      }
+      ${
+        entry && entry.egg_sizes
+          ? `<div class="field"><label>Sizes</label><p class="egg-sizes-readout" id="egg-sizes-readout">${escapeHtml(entry.egg_sizes)}</p></div>`
+          : ""
+      }
       ${dateFieldHtml(tsValue)}
       <div class="field">
         <label>Notes (optional)</label>
@@ -276,6 +291,22 @@ function openSheet(type, entry = null) {
       count += 1;
       countValue.textContent = count;
     });
+    const photoBtn = document.getElementById("egg-photo-btn");
+    if (photoBtn) {
+      photoBtn.addEventListener("click", () => {
+        if (!window.EGG_VISION.available) {
+          alert("Not available on this device's architecture (requires amd64 or aarch64).");
+          return;
+        }
+        document.getElementById("egg-photo-input").click();
+      });
+      document.getElementById("egg-photo-input").addEventListener("change", async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        await startEggVisionReview(file);
+        e.target.value = "";
+      });
+    }
   } else if (type === "cleaning") {
     sheetFields.innerHTML = `
       ${dateFieldHtml(tsValue)}
@@ -477,6 +508,7 @@ sheetForm.addEventListener("submit", async (e) => {
   if (currentType === "egg") {
     payload.count = parseInt(document.getElementById("count-value").textContent, 10);
     payload.notes = sheetForm.notes.value || null;
+    payload.egg_sizes = sheetForm.dataset.eggSizes || null;
   } else if (currentType === "cleaning") {
     payload.notes = sheetForm.notes.value || null;
   } else if (currentType === "feeding") {
@@ -527,6 +559,289 @@ sheetForm.addEventListener("submit", async (e) => {
     saveBtn.disabled = false;
     saveBtn.textContent = originalLabel;
   }
+});
+
+// --- Egg photo count & size review (Log Eggs sheet) ---
+//
+// A photo is analyzed once server-side (POST /api/vision/eggs, classical
+// OpenCV — see ARCHITECTURE.md §20) and never stored; only the reviewed,
+// user-corrected count/sizes end up logged. Coin position/size can always
+// be dragged into place here, since auto-detection is a best guess, never
+// authoritative — a missed/wrong coin must never block logging.
+
+// Mirrors app.py's EGG_SIZE_MM_BOUNDS/_egg_size_code exactly, so dragging
+// the coin recomputes every egg's size instantly, client-side, with no
+// extra round trip to the server.
+const EGG_SIZE_MM_BOUNDS = [41.5, 44.0, 46.5];
+function eggSizeCode(widthMm) {
+  const [sM, mL, lXl] = EGG_SIZE_MM_BOUNDS;
+  if (widthMm < sM) return "S";
+  if (widthMm < mL) return "M";
+  if (widthMm < lXl) return "L";
+  return "XL";
+}
+const EGG_SIZE_COLORS = { S: "#8aa9c9", M: "#6fb37a", L: "#d9a441", XL: "#c05d5d" };
+const EGG_SIZE_CYCLE = ["S", "M", "L", "XL"];
+
+const eggVisionBackdrop = document.getElementById("egg-vision-backdrop");
+const eggVisionCanvasWrap = document.getElementById("egg-vision-canvas-wrap");
+const eggVisionPhotoImg = document.getElementById("egg-vision-photo");
+const eggVisionOverlay = document.getElementById("egg-vision-overlay");
+const eggVisionStatusMsg = document.getElementById("egg-vision-status-msg");
+const eggVisionChips = document.getElementById("egg-vision-chips");
+const eggVisionUseBtn = document.getElementById("egg-vision-use-btn");
+
+let eggVisionState = null; // { imageWidth, imageHeight, coinDiameterMm, coin: {cx,cy,r}, eggs: [{cx,cy,widthPx,heightPx,angle,size,manuallySet}] }
+let eggVisionDrag = null; // { kind: "coin"|"egg", index, mode: "move"|"resize" }
+
+async function startEggVisionReview(file) {
+  eggVisionUseBtn.disabled = true;
+  eggVisionCanvasWrap.hidden = true;
+  eggVisionChips.innerHTML = "";
+  eggVisionStatusMsg.textContent = "Analyzing…";
+  eggVisionBackdrop.classList.add("open");
+
+  let dataUri;
+  try {
+    dataUri = await resizeImageToDataUri(file, 1600, 0.85);
+  } catch (err) {
+    eggVisionStatusMsg.textContent = "Couldn't read that photo — try again.";
+    return;
+  }
+
+  let body;
+  try {
+    const res = await fetch("api/vision/eggs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ photo: dataUri }),
+    });
+    body = await res.json();
+  } catch (err) {
+    eggVisionStatusMsg.textContent = "Couldn't reach the server — check your connection.";
+    return;
+  }
+
+  if (body.status === "disabled" || body.status === "libs_unavailable" || body.status === "error") {
+    eggVisionStatusMsg.textContent =
+      body.status === "error"
+        ? "Couldn't analyze that photo — try a different one, or log counts manually."
+        : "Photo analysis isn't available right now.";
+    return;
+  }
+
+  eggVisionState = {
+    imageWidth: body.image_width,
+    imageHeight: body.image_height,
+    coinDiameterMm: body.coin_diameter_mm || window.EGG_VISION.coinDiameterMm,
+    coin: body.coin
+      ? { cx: body.coin.cx, cy: body.coin.cy, r: body.coin.r }
+      : { cx: body.image_width / 2, cy: body.image_height / 2, r: Math.min(body.image_width, body.image_height) * 0.06 },
+    eggs: body.eggs.map((e) => ({
+      cx: e.cx,
+      cy: e.cy,
+      widthPx: e.width_px,
+      heightPx: e.height_px,
+      angle: e.angle,
+      size: e.size || "M",
+      manuallySet: false,
+    })),
+  };
+
+  eggVisionPhotoImg.src = dataUri;
+  eggVisionPhotoImg.onload = () => {
+    eggVisionCanvasWrap.hidden = false;
+    recomputeEggSizes();
+    drawEggVisionOverlay();
+    renderEggVisionChips();
+  };
+
+  eggVisionStatusMsg.textContent =
+    body.status === "coin_not_found"
+      ? "Couldn't find a reference coin automatically — drag the circle onto your coin (center to move, edge to resize)."
+      : body.status === "no_eggs_found"
+      ? "Couldn't detect any eggs — you can still log a count manually below, or use + Add egg."
+      : "Drag the circle if it isn't on your coin. Tap a size chip to correct it.";
+  eggVisionUseBtn.disabled = false;
+}
+
+function recomputeEggSizes() {
+  if (!eggVisionState || !eggVisionState.coin || eggVisionState.coin.r <= 0) return;
+  const pxPerMm = (2 * eggVisionState.coin.r) / eggVisionState.coinDiameterMm;
+  eggVisionState.eggs.forEach((egg) => {
+    if (egg.manuallySet) return;
+    egg.size = eggSizeCode(egg.widthPx / pxPerMm);
+  });
+}
+
+function eggVisionDisplayScale() {
+  return eggVisionPhotoImg.clientWidth / eggVisionState.imageWidth;
+}
+
+function drawEggVisionOverlay() {
+  if (!eggVisionState) return;
+  const scale = eggVisionDisplayScale();
+  const canvas = eggVisionOverlay;
+  canvas.width = eggVisionPhotoImg.clientWidth;
+  canvas.height = eggVisionPhotoImg.clientHeight;
+  const ctx = canvas.getContext("2d");
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  eggVisionState.eggs.forEach((egg) => {
+    ctx.save();
+    ctx.translate(egg.cx * scale, egg.cy * scale);
+    ctx.rotate((egg.angle * Math.PI) / 180);
+    ctx.strokeStyle = EGG_SIZE_COLORS[egg.size] || "#888";
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.ellipse(0, 0, (egg.widthPx / 2) * scale, (egg.heightPx / 2) * scale, 0, 0, 2 * Math.PI);
+    ctx.stroke();
+    ctx.restore();
+  });
+
+  const coin = eggVisionState.coin;
+  ctx.strokeStyle = "#2b6cb0";
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.arc(coin.cx * scale, coin.cy * scale, coin.r * scale, 0, 2 * Math.PI);
+  ctx.stroke();
+  ctx.fillStyle = "#2b6cb0";
+  ctx.beginPath();
+  ctx.arc(coin.cx * scale, coin.cy * scale, 3, 0, 2 * Math.PI);
+  ctx.fill();
+  // edge handle, at the 3-o'clock point of the circle
+  ctx.beginPath();
+  ctx.arc((coin.cx + coin.r) * scale, coin.cy * scale, 5, 0, 2 * Math.PI);
+  ctx.fill();
+}
+
+function renderEggVisionChips() {
+  eggVisionChips.innerHTML = eggVisionState.eggs
+    .map(
+      (egg, i) => `
+        <span class="egg-chip" data-idx="${i}" style="background:${EGG_SIZE_COLORS[egg.size]}">
+          ${egg.size}
+          <button type="button" class="egg-chip-remove" data-idx="${i}" aria-label="Remove egg">✕</button>
+        </span>
+      `
+    )
+    .join("");
+}
+
+eggVisionChips.addEventListener("click", (e) => {
+  const removeBtn = e.target.closest(".egg-chip-remove");
+  if (removeBtn) {
+    eggVisionState.eggs.splice(Number(removeBtn.dataset.idx), 1);
+    drawEggVisionOverlay();
+    renderEggVisionChips();
+    return;
+  }
+  const chip = e.target.closest(".egg-chip");
+  if (chip) {
+    const egg = eggVisionState.eggs[Number(chip.dataset.idx)];
+    egg.size = EGG_SIZE_CYCLE[(EGG_SIZE_CYCLE.indexOf(egg.size) + 1) % EGG_SIZE_CYCLE.length];
+    egg.manuallySet = true;
+    drawEggVisionOverlay();
+    renderEggVisionChips();
+  }
+});
+
+document.getElementById("egg-vision-add-egg").addEventListener("click", () => {
+  if (!eggVisionState) return;
+  eggVisionState.eggs.push({
+    cx: eggVisionState.imageWidth / 2,
+    cy: eggVisionState.imageHeight / 2,
+    widthPx: eggVisionState.coin.r * 3,
+    heightPx: eggVisionState.coin.r * 4,
+    angle: 0,
+    size: "M",
+    manuallySet: true,
+  });
+  drawEggVisionOverlay();
+  renderEggVisionChips();
+});
+
+// Drag: near the coin's center moves it, near its edge resizes it; near an
+// egg's center moves that egg (the only way to place a "+ Add egg" marker
+// on the actual missed egg, since it starts at the photo's center).
+// pointermove/up on document (not just the canvas) so a fast drag that
+// briefly leaves the canvas bounds doesn't get dropped.
+eggVisionOverlay.addEventListener("pointerdown", (e) => {
+  if (!eggVisionState) return;
+  const rect = eggVisionOverlay.getBoundingClientRect();
+  const x = e.clientX - rect.left;
+  const y = e.clientY - rect.top;
+  const scale = eggVisionDisplayScale();
+  const coin = eggVisionState.coin;
+  const coinX = coin.cx * scale;
+  const coinY = coin.cy * scale;
+  const coinR = coin.r * scale;
+  const distFromCenter = Math.hypot(x - coinX, y - coinY);
+
+  if (Math.abs(distFromCenter - coinR) < 14) {
+    eggVisionDrag = { kind: "coin", mode: "resize" };
+    return;
+  }
+  if (distFromCenter < coinR + 14) {
+    eggVisionDrag = { kind: "coin", mode: "move" };
+    return;
+  }
+
+  const eggIndex = eggVisionState.eggs.findIndex(
+    (egg) => Math.hypot(x - egg.cx * scale, y - egg.cy * scale) < 20
+  );
+  if (eggIndex !== -1) {
+    eggVisionDrag = { kind: "egg", index: eggIndex, mode: "move" };
+  }
+});
+
+document.addEventListener("pointermove", (e) => {
+  if (!eggVisionDrag || !eggVisionState) return;
+  const rect = eggVisionOverlay.getBoundingClientRect();
+  const x = e.clientX - rect.left;
+  const y = e.clientY - rect.top;
+  const scale = eggVisionDisplayScale();
+
+  if (eggVisionDrag.kind === "coin") {
+    const coin = eggVisionState.coin;
+    if (eggVisionDrag.mode === "move") {
+      coin.cx = x / scale;
+      coin.cy = y / scale;
+    } else if (eggVisionDrag.mode === "resize") {
+      coin.r = Math.max(4, Math.hypot(x - coin.cx * scale, y - coin.cy * scale) / scale);
+    }
+    recomputeEggSizes();
+  } else if (eggVisionDrag.kind === "egg") {
+    const egg = eggVisionState.eggs[eggVisionDrag.index];
+    if (egg) {
+      egg.cx = x / scale;
+      egg.cy = y / scale;
+    }
+  }
+  drawEggVisionOverlay();
+  renderEggVisionChips();
+});
+
+document.addEventListener("pointerup", () => {
+  eggVisionDrag = null;
+});
+
+function closeEggVisionReview() {
+  eggVisionBackdrop.classList.remove("open");
+  eggVisionState = null;
+  eggVisionDrag = null;
+}
+
+document.getElementById("egg-vision-cancel-btn").addEventListener("click", closeEggVisionReview);
+eggVisionBackdrop.addEventListener("click", (e) => {
+  if (e.target === eggVisionBackdrop) closeEggVisionReview();
+});
+
+eggVisionUseBtn.addEventListener("click", () => {
+  if (!eggVisionState) return;
+  document.getElementById("count-value").textContent = eggVisionState.eggs.length;
+  sheetForm.dataset.eggSizes = eggVisionState.eggs.map((e) => e.size).join(",");
+  closeEggVisionReview();
 });
 
 historyList.addEventListener("click", async (e) => {

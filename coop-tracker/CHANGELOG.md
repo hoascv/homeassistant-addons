@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.30.0
+
+- New **experimental egg photo counting & sizing** on the Log Eggs sheet
+  (off by default — enable with **egg_vision_enabled**): photograph your
+  eggs alongside a coin, and the add-on counts them and estimates each
+  one's size (S/M/L/XL) calibrated against the coin's real-world diameter
+  (**egg_vision_coin_diameter_mm** — set it to your coin's actual size).
+  The result is always a reviewable suggestion — drag the coin into
+  place, correct any egg's size, add a missed egg, or remove a wrong one
+  — before it fills in the usual count and you hit Save. Only available
+  on **amd64**/**aarch64** installs; no further base-image change was
+  needed beyond the Debian switch that shipped in 1.29.0. See the app's
+  documentation for photographing tips and this feature's honest limits
+  (width-based sizing approximates real weight-based grading; touching
+  eggs may need manual correction).
+
 ## 1.29.0
 
 - New **experimental Advanced forecast** on the Trends tab (off by
