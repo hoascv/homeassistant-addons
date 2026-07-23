@@ -91,36 +91,75 @@ build up.
 
 Off by default; turn on **egg_vision_enabled** in Configuration to add a
 **📷 Count & size from a photo** button to the Log Eggs sheet. Take (or
-choose) a photo of your eggs with a coin placed in the same shot, and the
+choose) a photo of your eggs sitting in a registered nesting box, and the
 add-on counts the eggs and estimates each one's size (Small/Medium/
-Large/XL) by comparing them against the coin's known real-world size.
-Nothing is ever logged automatically — you always land on a review screen
-first, where you can drag the coin into place if it wasn't found
-automatically, tap any egg to cycle its size, add a missed egg, or remove
-a wrongly-detected one, before the results fill in the usual count and
-you hit Save like normal.
+Large/XL) by measuring them against that box's known inside width — no
+coin needed, since the camera is handheld and a box's own edges are
+already in every shot. Nothing is ever logged automatically — you always
+land on a review screen first, where you can drag the box's side-wall
+lines into place if they weren't found automatically, tap any egg to
+cycle its size, add a missed egg, or remove a wrongly-detected one,
+before the results fill in the usual count and you hit Save like normal.
 
-**Set egg_vision_coin_diameter_mm to your actual coin's diameter in
-millimeters** (default `24.5`) — measure it, don't guess, since this is
-what makes the size estimate meaningful at all. Any coin works as long as
-you're consistent and the value matches it.
+**Set up a nesting box before first use.** From the ⚙️ settings sheet
+(or straight from the Log Eggs photo button if no box exists yet), enter
+the box's name and its inside width in centimeters — measure it, don't
+guess, since this is what makes every size estimate meaningful. You can
+register more than one box; the app tries to recognize which one is in
+each photo automatically (once it's seen enough of each), and only asks
+you to confirm or add a new one when it isn't confident. Setting up a box
+also walks you through a short guided round of photos so the add-on can
+learn to spot that box's edges reliably before you rely on it day to day.
 
-**For the best results:** lay the eggs and the coin flat on a plain,
-matte, contrasting background (a light background for brown eggs, a dark
-one for white eggs) with even, diffuse lighting — avoid a single bright
-light causing glare on the shells. Keep eggs and the coin separated, not
-touching each other, and hold the camera roughly straight overhead so the
-coin's circular shape isn't distorted by the camera angle.
+**For the best results:** lay the eggs flat inside the box on a plain,
+matte, contrasting surface (bedding or the box floor) with even, diffuse
+lighting — avoid a single bright light causing glare on the shells. Keep
+eggs separated, not touching each other, and frame the photo so both side
+walls of the box are visible.
 
 **Be aware of the limits:** size is estimated from each egg's measured
 width, which is an approximation of the real, weight-based S/M/L/XL
 grading, not a substitute for a kitchen scale — always glance over the
-suggested sizes before saving. Eggs touching or overlapping in the photo
-may be missed or undercounted; use the review screen's **+ Add egg** and
-the ✕ on any chip to correct the count by hand. This feature also
-requires an **amd64** or **aarch64** install (the same architecture
-requirement as the Advanced forecast feature below) — on other
-architectures the button explains it isn't available on that device.
+suggested sizes before saving. Width is measured as a straight-line scale
+against the box's walls with no correction for a tilted or angled photo,
+so a very oblique shot will be less accurate than one taken roughly
+square-on. Eggs touching or overlapping in the photo may be missed or
+undercounted; use the review screen's **+ Add egg** and the ✕ on any chip
+to correct the count by hand. This feature also requires an **amd64** or
+**aarch64** install (the same architecture requirement as the Advanced
+forecast feature below) — on other architectures the button explains it
+isn't available on that device.
+
+### Training the model (optional)
+
+Off by default; turn on **egg_vision_training_enabled** in Configuration
+to have the add-on learn from your own corrections over time. When on,
+each time you review and save a photo, the **photo itself, the
+automatically-detected result, and your corrected result** are stored
+on-device (a separate table from your chicken photos — nothing leaves
+the device, and nothing is included anywhere except the backup file
+described below). Setting up a nesting box always stores its guided
+setup photos this way too, regardless of this setting, since registering
+a box is itself a deliberate opt-in.
+
+Once at least 25 corrections are collected, open the ⚙️ settings sheet
+and tap **Train now** to fit two small models — one that learns which
+detected shapes are really eggs (replacing a fixed one-size-fits-all
+cutoff), and one that learns your flock's actual size boundaries
+(replacing the standard EU-weight-band formula) — specific to your
+camera, lighting, and eggs. Training also fits a third model, once at
+least two boxes have enough samples, that recognizes which box a photo
+is of automatically. Nothing changes until you train — every install
+that hasn't opted in behaves exactly as described above, and the
+review screen still shows you every result before it's saved either way.
+
+Stored photos are capped (**egg_vision_training_retention_count**,
+default 200 — oldest deleted first) and never leave the device unless you
+download a backup. **Clear training data** in the settings sheet deletes
+every stored photo immediately (a trained model itself — a few hundred
+numbers, not a photo — is kept; only the raw images are removed). Note
+that enabling this materially increases the size of the **.db** file
+produced by Backup & Restore, since the stored photos travel with it.
 
 ## Configuration
 

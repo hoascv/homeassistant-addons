@@ -46,7 +46,24 @@ except ImportError as e:
     OPENCV_AVAILABLE = False
     OPENCV_ERROR = str(e)
 
-APP_VERSION = "1.30.1"  # keep in sync with the "version" field in config.yaml
+try:
+    import pickle
+
+    from sklearn.linear_model import LogisticRegression
+
+    SKLEARN_AVAILABLE = True
+    SKLEARN_ERROR = None
+except ImportError as e:
+    # scikit-learn ships in requirements-advanced.txt alongside
+    # opencv-python-headless, same amd64/aarch64 install gate — in every
+    # real deployment the two succeed or fail together, but this is
+    # guarded independently (like statsmodels vs. opencv above) so a
+    # missing scikit-learn reports clearly via /api/debug rather than
+    # crashing at import time. See ARCHITECTURE.md §20 addendum.
+    SKLEARN_AVAILABLE = False
+    SKLEARN_ERROR = str(e)
+
+APP_VERSION = "1.31.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("COOP_DB_PATH", "/data/coop.db")
 OPTIONS_PATH = os.environ.get("COOP_OPTIONS_PATH", "/data/options.json")
@@ -92,16 +109,6 @@ EGG_SIZE_CODES = ("S", "M", "L", "XL")
 # weight-based grading from a 2D photo measurement, not a real weight.
 EGG_SIZE_MM_BOUNDS = (41.5, 44.0, 46.5)  # S|M, M|L, L|XL boundaries
 
-# Hough circle search bounds, as a fraction of the photo's shorter side
-# (resolution-independent, since the upload is resized to a fixed target
-# client-side before it reaches here). Capped well below typical egg size
-# in-frame (a coin is ~half an egg's diameter) — a wider upper bound risks
-# Hough mistaking a roundish merged-egg blob for the coin, since nothing
-# else disambiguates "coin" from "egg-shaped thing" besides size and the
-# eggs' own aspect-ratio filter (see EGG_MIN_AREA_FRACTION below).
-COIN_MIN_RADIUS_FRACTION = 0.02
-COIN_MAX_RADIUS_FRACTION = 0.08
-
 # Contour-area bounds for "plausibly one egg", as a fraction of the whole
 # photo's area — filters out sensor noise (too small) and a misclassified
 # background/shadow blob (too large).
@@ -116,10 +123,54 @@ EGG_MAX_AREA_FRACTION = 0.20
 # single egg near this ratio could get wrongly excluded, and some merged
 # pairs at lower overlap won't reach it), but excluding is the safer
 # failure: a wrong exclusion costs one "+ Add egg" tap, a wrong inclusion
-# silently reports a bogus size for two eggs merged into one.
+# silently reports a bogus size for two eggs merged into one. This is the
+# fallback used whenever no trained classifier exists yet — see
+# EGG_VISION_MIN_TRAINING_SAMPLES below.
 EGG_MAX_ASPECT = 1.6
 
 MAX_EGG_VISION_PHOTO_BYTES = 8 * 1024 * 1024  # analysis photo, not the 3MB chicken-photo cap
+
+# Nesting-box width calibration (handheld camera, no coin — see
+# ARCHITECTURE.md §20 addendum): a box's interior should dominate a
+# properly-framed photo, the same "obvious, hard-to-miss geometric
+# primitive" reasoning that made Hough circles the right fit for a coin
+# in the original design. Calibration is width-only: the two facing
+# side walls are detected, the pixel distance between them plus the
+# box's known real-world width give a single linear scale factor — same
+# shape of math a coin's diameter gave, just derived from box walls.
+# No perspective/tilt correction, by deliberate choice (simpler, and a
+# handheld photo close to square-on is the common case).
+BOX_MIN_AREA_FRACTION = 0.15
+
+# Trainable egg-vision model (opt-in, see ARCHITECTURE.md §20 addendum):
+# minimum stored samples/examples before "Train now" (or the wizard's
+# auto-retrain) produces a usable model, and before each sub-model is
+# considered trained. Deliberately conservative — a model fit on a
+# handful of examples is worse than the fixed heuristics it replaces.
+EGG_VISION_MIN_TRAINING_SAMPLES = 25
+EGG_VISION_MIN_CLASSIFIER_POS = 15
+EGG_VISION_MIN_CLASSIFIER_NEG = 15
+EGG_VISION_MIN_SIZE_SAMPLES = 25
+
+# Box identification (which registered nesting box is in this photo —
+# see ARCHITECTURE.md §20 addendum): a simple global color-appearance
+# classifier, not a full CNN — feasible because boxes are visually
+# distinct (different color/material/wear), not because the model is
+# small. With exactly one registered box there's nothing to
+# disambiguate, so no classifier is needed at all; from two boxes on,
+# the classifier's confidence gates whether an ambiguous/new box
+# surfaces as "please confirm" rather than a silent wrong guess.
+EGG_VISION_BOX_ID_CONFIDENCE_THRESHOLD = 0.65
+EGG_VISION_BOX_ID_MIN_SAMPLES_PER_BOX = 3
+
+# The nesting-box wizard's stopping rule (see ARCHITECTURE.md §20
+# addendum): keep collecting corrected photos for a box until the
+# freshly-retrained model gets N in a row exactly right (zero
+# corrections needed, and — once >=2 boxes exist — correct box
+# identification too), proving it's reliably right rather than luck.
+# Capped so a run that never converges still ends.
+EGG_VISION_WIZARD_STREAK_TARGET = 3
+EGG_VISION_WIZARD_MAX_ATTEMPTS = 30
 
 
 def _seasonal_multiplier(when):
@@ -226,10 +277,14 @@ def get_advanced_forecast_config():
 
 
 def get_egg_vision_config():
+    return {"enabled": bool(_read_options().get("egg_vision_enabled", False))}
+
+
+def get_egg_vision_training_config():
     opts = _read_options()
     return {
-        "enabled": bool(opts.get("egg_vision_enabled", False)),
-        "coin_diameter_mm": float(opts.get("egg_vision_coin_diameter_mm", 24.5)),
+        "enabled": bool(opts.get("egg_vision_training_enabled", False)),
+        "retention_count": int(opts.get("egg_vision_training_retention_count", 200)),
     }
 
 
@@ -346,6 +401,60 @@ def init_db():
             weight_grams INTEGER,
             notes TEXT,
             created_at TEXT NOT NULL
+        )
+        """
+    )
+
+    # Egg vision: nesting boxes (handheld-camera, width-only calibration
+    # reference — see ARCHITECTURE.md §20 addendum) and the optional,
+    # opt-in trainable model. box_id is nullable so a sample from a
+    # since-deleted box still has a home.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS nesting_boxes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            width_mm REAL NOT NULL,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS egg_vision_samples (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at TEXT NOT NULL,
+            photo BLOB NOT NULL,
+            image_width INTEGER NOT NULL,
+            image_height INTEGER NOT NULL,
+            box_id INTEGER REFERENCES nesting_boxes(id),
+            original_detection TEXT NOT NULL,
+            corrected_result TEXT NOT NULL
+        )
+        """
+    )
+
+    # At most one row: training does DELETE then INSERT (see
+    # _save_egg_vision_model) so inference is always a trivial SELECT with
+    # no "most recent" query logic to get wrong. Models are trained with
+    # scikit-learn (see ARCHITECTURE.md §20 addendum) and stored as
+    # pickled blobs — internally generated and read back by this same
+    # app, never loaded from an untrusted source.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS egg_vision_models (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            trained_at TEXT NOT NULL,
+            trained_on_sample_count INTEGER NOT NULL,
+            classifier_blob BLOB,
+            classifier_positive_count INTEGER,
+            classifier_negative_count INTEGER,
+            size_model_blob BLOB,
+            size_model_sample_count INTEGER,
+            box_classifier_blob BLOB,
+            box_classifier_labels TEXT,
+            box_classifier_sample_count INTEGER
         )
         """
     )
@@ -586,6 +695,7 @@ def _background_loop():
 def index():
     currency = get_currency()
     egg_vision_cfg = get_egg_vision_config()
+    training_cfg = get_egg_vision_training_config()
     return render_template(
         "index.html",
         currency_symbol=currency["symbol"],
@@ -593,8 +703,8 @@ def index():
         currency_decimals=currency["decimals"],
         app_version=APP_VERSION,
         egg_vision_enabled=egg_vision_cfg["enabled"],
-        egg_vision_available=egg_vision_cfg["enabled"] and OPENCV_AVAILABLE,
-        egg_vision_coin_diameter_mm=egg_vision_cfg["coin_diameter_mm"],
+        egg_vision_available=egg_vision_cfg["enabled"] and OPENCV_AVAILABLE and SKLEARN_AVAILABLE,
+        egg_vision_training_enabled=training_cfg["enabled"],
     )
 
 
@@ -1210,7 +1320,8 @@ def _decode_photo_data_uri(data_uri, max_bytes=None):
 def _egg_size_code(width_mm):
     """Buckets a measured egg width (mm) into S/M/L/XL via
     EGG_SIZE_MM_BOUNDS — see ARCHITECTURE.md §20 for the derivation and
-    its honesty caveat (width, not weight)."""
+    its honesty caveat (width, not weight). This is the fallback used
+    whenever no trained size model exists — see _egg_size_code_ml."""
     s_m, m_l, l_xl = EGG_SIZE_MM_BOUNDS
     if width_mm < s_m:
         return "S"
@@ -1221,55 +1332,115 @@ def _egg_size_code(width_mm):
     return "XL"
 
 
-def _analyze_egg_photo(photo_bytes, coin_diameter_mm):
-    """Classical CV egg count + size estimate — see ARCHITECTURE.md §20 for
-    why classical CV (no trained model) and the full failure-mode
-    reasoning. Never raises for "nothing found"; only for a genuinely
-    undecodable image. Coin detection (Hough circles) and egg detection
-    (Otsu threshold + contour/ellipse fitting) are independent — a missing
-    coin never prevents counting eggs, it just leaves their `size` unset
-    until the frontend gets a coin position (auto or manual)."""
-    arr = np.frombuffer(photo_bytes, dtype=np.uint8)
-    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-    if img is None:
-        return {"status": "error", "error": "couldn't decode image", "eggs": [], "coin": None}
+def _ml_is_egg(candidate, classifier):
+    """Applies a trained scikit-learn classifier — replaces the fixed
+    EGG_MAX_ASPECT cutoff once a model has been trained on this install's
+    own corrections. See ARCHITECTURE.md §20 addendum."""
+    x = [[candidate["area_fraction"], candidate["aspect_ratio"], candidate["extent"], candidate["solidity"]]]
+    return bool(classifier.predict(x)[0])
 
+
+def _egg_size_code_ml(width_mm, aspect_ratio, extent, size_model):
+    """Applies a trained scikit-learn multi-class classifier — replaces
+    EGG_SIZE_MM_BOUNDS once a model has been trained on this install's
+    own corrections."""
+    x = [[width_mm, aspect_ratio, extent]]
+    return size_model.predict(x)[0]
+
+
+def _detect_box_walls(gray, blurred):
+    """Finds a nesting box's interior extent: the largest sufficiently-
+    large, non-degenerate contour's bounding rectangle. A box interior is
+    a large, high-contrast region against its walls/bedding — the same
+    "obvious, hard-to-miss geometric primitive" reasoning that made Hough
+    circles the right fit for a coin in the original design, just using a
+    bounding extent instead of a circle fit, since only the width
+    (left-to-right) axis is used for calibration — see ARCHITECTURE.md
+    §20 addendum.
+
+    Unlike the coin/egg case, the box is typically the MAJORITY of the
+    frame, not a small minority blob — so unlike _extract_egg_candidates,
+    this can't assume "the smaller class is the foreground". Instead it
+    tries both polarities of the Otsu split and keeps whichever produces
+    a large-but-not-degenerate contour (a contour close to the full
+    photo's bounds is almost always the image border itself, e.g. when
+    the background — not the box — ends up as the "foreground" class,
+    since background typically touches all 4 edges of a photo).
+
+    Returns {left, top, right, bottom} in pixels, or None if nothing
+    qualifies (box out of frame / heavily occluded / no plain background
+    to contrast against) — the caller always falls back to a default so
+    the user has draggable handles to correct, never a dead end."""
+    _, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    photo_area = gray.shape[0] * gray.shape[1]
+    kernel = np.ones((15, 15), np.uint8)
+    best = None
+    for candidate in (thresh, cv2.bitwise_not(thresh)):
+        closed = cv2.morphologyEx(candidate, cv2.MORPH_CLOSE, kernel)
+        contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not contours:
+            continue
+        largest = max(contours, key=cv2.contourArea)
+        area = cv2.contourArea(largest)
+        if area < BOX_MIN_AREA_FRACTION * photo_area or area > 0.98 * photo_area:
+            continue
+        if best is None or area < cv2.contourArea(best):
+            best = largest  # prefer the tighter of the two valid candidates
+    if best is None:
+        return None
+    x, y, w, h = cv2.boundingRect(best)
+    return {"left": float(x), "top": float(y), "right": float(x + w), "bottom": float(y + h)}
+
+
+def _default_box_walls(w, h):
+    """Centered inset guess when auto-detection fails — mirrors the
+    original coin's default center/radius guess in app.js so the user
+    always has something draggable."""
+    return {"left": w * 0.1, "top": h * 0.1, "right": w * 0.9, "bottom": h * 0.9}
+
+
+def _crop_to_box(img, box_walls):
+    """Crops to the detected/default box interior before running egg
+    detection. Without this, the box's own bounding rectangle — which
+    typically dominates the frame — gets lumped together with eggs
+    against a much smaller background class under a single Otsu split,
+    breaking the "smaller class is the object of interest" assumption
+    _extract_egg_candidates relies on (the same assumption that worked
+    fine for the original coin, which really was always the minority).
+    Cropping restores a clean two-class (box floor vs egg) scene, and is
+    the semantically correct thing to do anyway — there's no reason to
+    go looking for eggs outside the box. Returns (cropped_img, offset_x,
+    offset_y); callers add the offset back onto every candidate's cx/cy
+    so downstream consumers keep working in full-photo pixel
+    coordinates. See ARCHITECTURE.md §20 addendum."""
+    h, w = img.shape[:2]
+    left = max(0, int(box_walls["left"]))
+    top = max(0, int(box_walls["top"]))
+    right = min(w, int(box_walls["right"]))
+    bottom = min(h, int(box_walls["bottom"]))
+    if right <= left or bottom <= top:
+        return img, 0, 0
+    return img[top:bottom, left:right], left, top
+
+
+def _extract_egg_candidates(img):
+    """Otsu threshold + contour pass shared by live inference
+    (_analyze_egg_photo) and training-time re-extraction
+    (_train_egg_vision_models), so a model is always trained on exactly
+    the features it's later applied against. Returns every contour above
+    the tiny-noise floor (EGG_MIN_AREA_FRACTION) with a full feature
+    dict — deliberately applies NO upper-area or aspect-ratio filtering
+    here; that "is this plausibly one egg" decision belongs to the caller
+    (hardcoded defaults, or a trained classifier — see ARCHITECTURE.md
+    §20 addendum). Assumes a plain, contrasting background — see DOCS.md
+    for photographing tips."""
     h, w = img.shape[:2]
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     blurred = cv2.GaussianBlur(gray, (9, 9), 2)
-
-    # --- coin: Hough circle transform. Coins are near-perfectly round,
-    # unlike ovoid eggs, so circularity alone disambiguates them. param2
-    # (accumulator threshold) is deliberately conservative: a lower value
-    # picks up spurious "circles" from egg-edge clutter (verified against
-    # synthetic test images with no coin drawn at all), and a missed coin
-    # just costs one manual tap on the review screen — a false positive
-    # would silently miscalibrate every egg's size instead.
-    short_side = min(h, w)
-    circles = cv2.HoughCircles(
-        blurred,
-        cv2.HOUGH_GRADIENT,
-        dp=1.5,
-        minDist=short_side * 0.15,
-        param1=100,
-        param2=60,
-        minRadius=int(short_side * COIN_MIN_RADIUS_FRACTION),
-        maxRadius=int(short_side * COIN_MAX_RADIUS_FRACTION),
-    )
-    coin = None
-    if circles is not None:
-        # HoughCircles orders by accumulator confidence descending — the
-        # top hit is the best single guess, never treated as authoritative
-        # (always adjustable on the review screen, see app.js).
-        cx, cy, r = circles[0][0]
-        coin = {"cx": float(cx), "cy": float(cy), "r": float(r)}
-
-    # --- eggs: Otsu threshold + contours. Assumes a plain, contrasting
-    # background — see DOCS.md for photographing tips. ---
     _, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     # Otsu's polarity isn't knowable in advance; assume the minority-area
-    # class is the foreground (eggs+coin normally occupy less area than
-    # the surface they're laid on).
+    # class is the foreground (eggs normally occupy less area than the
+    # surface they're laid on).
     if cv2.countNonZero(thresh) > (thresh.size - cv2.countNonZero(thresh)):
         thresh = cv2.bitwise_not(thresh)
     kernel = np.ones((5, 5), np.uint8)
@@ -1278,29 +1449,138 @@ def _analyze_egg_photo(photo_bytes, coin_diameter_mm):
 
     contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     photo_area = h * w
-    eggs = []
+    candidates = []
     for c in contours:
         area = cv2.contourArea(c)
-        if not (EGG_MIN_AREA_FRACTION * photo_area <= area <= EGG_MAX_AREA_FRACTION * photo_area):
+        if area < EGG_MIN_AREA_FRACTION * photo_area:
             continue
         if len(c) < 5:
             continue  # fitEllipse needs >= 5 points
         (ex, ey), (minor, major), angle = cv2.fitEllipse(c)
         if minor <= 0:
             continue
-        if major / minor > EGG_MAX_ASPECT:
-            continue  # too elongated: likely 2+ touching eggs merged into one blob
-        if coin and math.hypot(ex - coin["cx"], ey - coin["cy"]) < coin["r"] * 1.5:
-            continue  # this contour is the coin itself, not an egg
+        bx, by, bw, bh = cv2.boundingRect(c)
+        hull_area = cv2.contourArea(cv2.convexHull(c))
+        candidates.append(
+            {
+                "cx": float(ex),
+                "cy": float(ey),
+                "width_px": float(minor),
+                "height_px": float(major),
+                "angle": float(angle),
+                "area_fraction": float(area / photo_area),
+                "aspect_ratio": float(major / minor),
+                "extent": float(area / (bw * bh)) if bw and bh else 0.0,
+                "solidity": float(area / hull_area) if hull_area > 0 else 0.0,
+            }
+        )
+    return candidates
+
+
+def _box_id_features(img):
+    """A coarse HSV color histogram — boxes are identified by visible
+    material/color/wear, not fine detail, so a global color signature is
+    enough signal without needing a full CNN. Fixed-length (48 numbers)
+    regardless of photo size/orientation. See ARCHITECTURE.md §20
+    addendum."""
+    small = cv2.resize(img, (64, 64))
+    hsv = cv2.cvtColor(small, cv2.COLOR_BGR2HSV)
+    features = []
+    for ch in range(3):
+        hist = cv2.calcHist([hsv], [ch], None, [16], [0, 256])
+        total = hist.sum()
+        features.extend((hist.flatten() / total if total > 0 else hist.flatten()).tolist())
+    return features
+
+
+def _predict_box_id(img, box_classifier, box_classifier_labels):
+    """Returns (box_id, confidence) for the best-matching registered box
+    given a trained box-ID classifier, or (None, 0.0) if no classifier
+    exists yet. The caller applies EGG_VISION_BOX_ID_CONFIDENCE_THRESHOLD
+    to decide whether to trust this or ask the user — with only one
+    registered box, or with fewer than two boxes having enough samples,
+    no classifier is ever trained (see _train_egg_vision_models), so this
+    naturally always returns (None, 0.0) in that case."""
+    if box_classifier is None:
+        return None, 0.0
+    x = [_box_id_features(img)]
+    proba = box_classifier.predict_proba(x)[0]
+    best_i = int(np.argmax(proba))
+    return box_classifier_labels[best_i], float(proba[best_i])
+
+
+def _analyze_egg_photo(photo_bytes, box, classifier=None):
+    """Classical CV egg count + size estimate — see ARCHITECTURE.md §20
+    (and its addendum) for why classical CV is the base layer and the
+    full failure-mode reasoning. Never raises for "nothing found"; only
+    for a genuinely undecodable image.
+
+    `box` is {"id":.., "width_mm":..} — which registered nesting box
+    this photo is of, resolved by the caller (explicit selection, the
+    sole registered box, or a confident box-ID classifier match — see
+    api_vision_eggs/_resolve_egg_vision_box). `classifier` is an
+    optional trained scikit-learn egg/not-egg model (see _ml_is_egg);
+    when None (the default, and the case for every install that hasn't
+    opted in and trained), egg detection is exactly the original
+    fixed-threshold implementation. Size bucketing (S/M/L/XL) is
+    deliberately NOT done here — see _apply_egg_sizes, called by the
+    endpoint only once status is "ok", mirroring how a missing coin used
+    to leave `size` unset in the original coin-based design."""
+    arr = np.frombuffer(photo_bytes, dtype=np.uint8)
+    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    if img is None:
+        return {
+            "status": "error",
+            "error": "couldn't decode image",
+            "image_width": None,
+            "image_height": None,
+            "eggs": [],
+            "box_walls": None,
+            "box": None,
+        }
+
+    h, w = img.shape[:2]
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    blurred = cv2.GaussianBlur(gray, (9, 9), 2)
+
+    detected = _detect_box_walls(gray, blurred)
+    walls_found = detected is not None
+    box_walls = detected or _default_box_walls(w, h)
+    wall_span = box_walls["right"] - box_walls["left"]
+    px_per_mm = (wall_span / box["width_mm"]) if box.get("width_mm") and wall_span > 0 else None
+
+    cropped, offset_x, offset_y = _crop_to_box(img, box_walls)
+    candidates = _extract_egg_candidates(cropped)
+    for c in candidates:
+        c["cx"] += offset_x
+        c["cy"] += offset_y
+
+    eggs = []
+    for c in candidates:
+        if c["area_fraction"] > EGG_MAX_AREA_FRACTION:
+            continue  # always-applied hard ceiling, model or not — see ARCHITECTURE.md §20 addendum
+        keep = _ml_is_egg(c, classifier) if classifier is not None else (c["aspect_ratio"] <= EGG_MAX_ASPECT)
+        if not keep:
+            continue
+        width_mm = (c["width_px"] / px_per_mm) if px_per_mm else None
         eggs.append(
-            {"cx": float(ex), "cy": float(ey), "width_px": float(minor), "height_px": float(major), "angle": float(angle)}
+            {
+                "cx": c["cx"],
+                "cy": c["cy"],
+                "width_px": c["width_px"],
+                "height_px": c["height_px"],
+                "angle": c["angle"],
+                "aspect_ratio": c["aspect_ratio"],
+                "extent": c["extent"],
+                "width_mm": width_mm,
+            }
         )
 
     status = "ok"
     if not eggs:
         status = "no_eggs_found"
-    elif coin is None:
-        status = "coin_not_found"
+    elif not walls_found:
+        status = "walls_not_found"
 
     return {
         "status": status,
@@ -1308,43 +1588,473 @@ def _analyze_egg_photo(photo_bytes, coin_diameter_mm):
         "image_width": w,
         "image_height": h,
         "eggs": eggs,
-        "coin": coin,
-        "coin_diameter_mm": coin_diameter_mm,
+        "box_walls": box_walls,
+        "box": box,
     }
+
+
+def _resolve_egg_vision_box(db, box_id):
+    """Resolves which registered nesting box a photo is of, for the
+    cases that don't need the photo itself:
+      - explicit box_id given and it exists -> ("ok", box)
+      - no box_id, but exactly one box is registered -> ("ok", box)
+        (nothing to disambiguate, so auto-identification is skipped
+        entirely — see ARCHITECTURE.md §20 addendum)
+      - no boxes registered at all -> ("no_boxes_registered", None)
+      - no box_id and >=2 boxes registered -> ("confirm_box", None):
+        the caller must decode the photo and try the box-ID classifier
+        (see api_vision_eggs)."""
+    if box_id is not None:
+        row = db.execute("SELECT * FROM nesting_boxes WHERE id = ?", (box_id,)).fetchone()
+        if row is not None:
+            return "ok", {"id": row["id"], "name": row["name"], "width_mm": row["width_mm"]}
+    boxes = db.execute("SELECT * FROM nesting_boxes ORDER BY id ASC").fetchall()
+    if not boxes:
+        return "no_boxes_registered", None
+    if len(boxes) == 1:
+        row = boxes[0]
+        return "ok", {"id": row["id"], "name": row["name"], "width_mm": row["width_mm"]}
+    return "confirm_box", None
+
+
+def _load_egg_vision_model(db):
+    row = db.execute("SELECT * FROM egg_vision_models").fetchone()
+    if row is None:
+        return None
+    return {
+        "classifier": pickle.loads(row["classifier_blob"]) if row["classifier_blob"] else None,
+        "size_model": pickle.loads(row["size_model_blob"]) if row["size_model_blob"] else None,
+        "box_classifier": pickle.loads(row["box_classifier_blob"]) if row["box_classifier_blob"] else None,
+        "box_classifier_labels": json.loads(row["box_classifier_labels"]) if row["box_classifier_labels"] else None,
+    }
+
+
+def _apply_egg_sizes(eggs, size_model):
+    for egg in eggs:
+        if egg["width_mm"] is None:
+            continue
+        egg["size"] = (
+            _egg_size_code_ml(egg["width_mm"], egg["aspect_ratio"], egg["extent"], size_model)
+            if size_model is not None
+            else _egg_size_code(egg["width_mm"])
+        )
 
 
 @app.route("/api/vision/eggs", methods=["POST"])
 def api_vision_eggs():
     cfg = get_egg_vision_config()
+    empty = {"eggs": [], "box_walls": None, "box": None}
     if not cfg["enabled"]:
-        return jsonify({"status": "disabled", "error": None, "eggs": [], "coin": None})
+        return jsonify({"status": "disabled", "error": None, **empty})
     if not OPENCV_AVAILABLE:
-        return jsonify({"status": "libs_unavailable", "error": OPENCV_ERROR, "eggs": [], "coin": None})
+        return jsonify({"status": "libs_unavailable", "error": OPENCV_ERROR, **empty})
 
     data = request.get_json(force=True, silent=True) or {}
     photo_bytes, err = _decode_photo_data_uri(data.get("photo") or "", max_bytes=MAX_EGG_VISION_PHOTO_BYTES)
     if err:
         return jsonify({"error": err}), 400
 
+    db = get_db()
+    box_status, box = _resolve_egg_vision_box(db, data.get("box_id"))
+    model = _load_egg_vision_model(db)
+
+    if box_status == "no_boxes_registered":
+        return jsonify({"status": "no_boxes_registered", "error": None, **empty})
+
+    if box_status == "confirm_box":
+        arr = np.frombuffer(photo_bytes, dtype=np.uint8)
+        img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        predicted_id, confidence = (None, 0.0)
+        if img is not None and model and model["box_classifier"] is not None:
+            predicted_id, confidence = _predict_box_id(img, model["box_classifier"], model["box_classifier_labels"])
+        if predicted_id is not None and confidence >= EGG_VISION_BOX_ID_CONFIDENCE_THRESHOLD:
+            row = db.execute("SELECT * FROM nesting_boxes WHERE id = ?", (predicted_id,)).fetchone()
+            if row is not None:
+                box_status, box = "ok", {"id": row["id"], "name": row["name"], "width_mm": row["width_mm"]}
+        if box_status != "ok":
+            candidates = [dict(row) for row in db.execute("SELECT id, name FROM nesting_boxes ORDER BY id ASC")]
+            return jsonify(
+                {
+                    "status": "confirm_box",
+                    "error": None,
+                    **empty,
+                    "box_candidates": candidates,
+                    "predicted_box_id": predicted_id,
+                    "confidence": confidence,
+                }
+            )
+
     try:
-        result = _analyze_egg_photo(photo_bytes, cfg["coin_diameter_mm"])
+        result = _analyze_egg_photo(photo_bytes, box, classifier=(model["classifier"] if model else None))
     except Exception as e:  # noqa: BLE001 - analysis failure degrades, never 500s
-        return jsonify(
-            {
-                "status": "error",
-                "error": str(e),
-                "eggs": [],
-                "coin": None,
-                "coin_diameter_mm": cfg["coin_diameter_mm"],
-            }
-        )
+        return jsonify({"status": "error", "error": str(e), **empty, "box": box})
 
     if result["status"] == "ok":
-        px_per_mm = (2 * result["coin"]["r"]) / cfg["coin_diameter_mm"]
-        for egg in result["eggs"]:
-            egg["size"] = _egg_size_code(egg["width_px"] / px_per_mm)
+        _apply_egg_sizes(result["eggs"], model["size_model"] if model else None)
 
     return jsonify(result)
+
+
+@app.route("/api/vision/eggs/recompute", methods=["POST"])
+def api_vision_eggs_recompute():
+    """Re-runs width scaling + sizing against corrected box walls and the
+    eggs' already-known pixel geometry — no image decode needed. Fired on
+    pointerup while dragging a wall handle. The width-only scale factor
+    is cheap enough that this could be done client-side, but sizing
+    (once a trained scikit-learn size model exists) can't be — routing
+    both through one endpoint avoids two implementations of the same
+    math drifting apart."""
+    data = request.get_json(force=True, silent=True) or {}
+    box_id, walls = data.get("box_id"), data.get("box_walls")
+    if box_id is None or not walls:
+        return jsonify({"error": "box_id and box_walls are required"}), 400
+    box = get_db().execute("SELECT * FROM nesting_boxes WHERE id = ?", (box_id,)).fetchone()
+    if box is None:
+        return jsonify({"error": "no such nesting box"}), 400
+
+    wall_span = walls["right"] - walls["left"]
+    px_per_mm = (wall_span / box["width_mm"]) if box["width_mm"] and wall_span > 0 else None
+    model = _load_egg_vision_model(get_db())
+    size_model = model["size_model"] if model else None
+    out = []
+    for e in data.get("eggs", []):
+        width_mm = (e["width_px"] / px_per_mm) if px_per_mm else None
+        size = None
+        if width_mm is not None:
+            size = (
+                _egg_size_code_ml(width_mm, e["aspect_ratio"], e["extent"], size_model)
+                if size_model is not None
+                else _egg_size_code(width_mm)
+            )
+        out.append({"width_mm": width_mm, "size": size})
+    return jsonify({"eggs": out})
+
+
+@app.route("/api/nesting-boxes")
+def api_nesting_boxes():
+    db = get_db()
+    rows = db.execute("SELECT id, name, width_mm, created_at FROM nesting_boxes ORDER BY id ASC").fetchall()
+    return jsonify([dict(row) for row in rows])
+
+
+@app.route("/api/nesting-boxes", methods=["POST"])
+def api_add_nesting_box():
+    data = request.get_json(force=True, silent=True) or {}
+    name = (data.get("name") or "").strip()
+    if not name:
+        return jsonify({"error": "name is required"}), 400
+    try:
+        width_mm = float(data.get("width_mm"))
+    except (TypeError, ValueError):
+        return jsonify({"error": "width_mm must be a number"}), 400
+    if width_mm <= 0:
+        return jsonify({"error": "width_mm must be positive"}), 400
+
+    db = get_db()
+    existing = db.execute("SELECT id FROM nesting_boxes WHERE LOWER(name) = LOWER(?)", (name,)).fetchone()
+    if existing:
+        return jsonify({"error": "a nesting box with that name already exists"}), 400
+
+    created_at = datetime.now().isoformat()
+    cur = db.execute(
+        "INSERT INTO nesting_boxes (name, width_mm, created_at) VALUES (?, ?, ?)",
+        (name, width_mm, created_at),
+    )
+    db.commit()
+    return jsonify({"id": cur.lastrowid, "name": name, "width_mm": width_mm, "created_at": created_at}), 201
+
+
+@app.route("/api/nesting-boxes/<int:box_id>", methods=["DELETE"])
+def api_delete_nesting_box(box_id):
+    # Un-link rather than cascade: preserve already-collected training
+    # photos even if their box definition is later removed.
+    db = get_db()
+    db.execute("UPDATE egg_vision_samples SET box_id = NULL WHERE box_id = ?", (box_id,))
+    db.execute("DELETE FROM nesting_boxes WHERE id = ?", (box_id,))
+    db.commit()
+    return "", 204
+
+
+def _match_candidate(candidate, corrected_eggs, used):
+    """Nearest-center match between a re-extracted CV candidate and the
+    user's corrected egg list, tolerance scaled to egg size — used to
+    label training examples (matched = positive, unmatched = negative)."""
+    best_i, best_d = None, None
+    for i, egg in enumerate(corrected_eggs):
+        if i in used:
+            continue
+        d = math.hypot(candidate["cx"] - egg["cx"], candidate["cy"] - egg["cy"])
+        tol = 0.5 * max(candidate["width_px"], egg["width_px"])
+        if d <= tol and (best_d is None or d < best_d):
+            best_i, best_d = i, d
+    return best_i
+
+
+def _train_egg_vision_models(samples):
+    """Re-extracts CV candidates from each stored sample's photo (via the
+    same _extract_egg_candidates pass live inference uses, so a model is
+    always trained on exactly the features it's later applied against)
+    and matches them against the user's corrected result to build labeled
+    training examples for three independent scikit-learn models: the
+    egg/not-egg classifier, the size classifier, and (once >=2 boxes have
+    enough samples) the box-ID classifier. Deterministic where it can be:
+    Otsu/contours have no randomness, so a candidate the old fixed
+    heuristic would have excluded, and a candidate the user explicitly
+    removed with the chip's X, both surface here as classifier negatives
+    the same way. See ARCHITECTURE.md §20 addendum."""
+    classifier_X, classifier_y = [], []
+    size_X, size_y = [], []
+    box_X, box_y = [], []
+    box_sample_counts = {}
+
+    for row in samples:
+        try:
+            corrected = json.loads(row["corrected_result"])
+        except (TypeError, ValueError):
+            continue
+        corrected_eggs = corrected.get("eggs") or []
+        box_walls = corrected.get("box_walls")
+        box_width_mm = corrected.get("box_width_mm")
+        box_id = row["box_id"]
+
+        arr = np.frombuffer(row["photo"], dtype=np.uint8)
+        img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        if img is None:
+            continue
+
+        if box_id is not None:
+            box_X.append(_box_id_features(img))
+            box_y.append(box_id)
+            box_sample_counts[box_id] = box_sample_counts.get(box_id, 0) + 1
+
+        if not box_walls or not box_width_mm:
+            continue
+        wall_span = box_walls["right"] - box_walls["left"]
+        if wall_span <= 0:
+            continue
+        px_per_mm = wall_span / box_width_mm
+
+        cropped, offset_x, offset_y = _crop_to_box(img, box_walls)
+        candidates = _extract_egg_candidates(cropped)
+        for c in candidates:
+            c["cx"] += offset_x
+            c["cy"] += offset_y
+        used = set()
+        for c in candidates:
+            match_i = _match_candidate(c, corrected_eggs, used)
+            classifier_X.append([c["area_fraction"], c["aspect_ratio"], c["extent"], c["solidity"]])
+            if match_i is None:
+                classifier_y.append(0)
+                continue
+            used.add(match_i)
+            classifier_y.append(1)
+            matched_egg = corrected_eggs[match_i]
+            width_mm = c["width_px"] / px_per_mm
+            if matched_egg.get("size") in EGG_SIZE_CODES:
+                size_X.append([width_mm, c["aspect_ratio"], c["extent"]])
+                size_y.append(matched_egg["size"])
+
+        # Eggs the user manually placed (no matching contour — a genuinely
+        # missed detection) still teach the size model, using the placed
+        # ellipse geometry directly. Excluded from the classifier: there's
+        # no real contour shape signal (extent/solidity) to trust for a
+        # blob that was never actually detected by the CV pass.
+        for i, egg in enumerate(corrected_eggs):
+            if i in used or not egg.get("added"):
+                continue
+            if egg.get("size") not in EGG_SIZE_CODES or not egg.get("width_px"):
+                continue
+            width_mm = egg["width_px"] / px_per_mm
+            aspect_ratio = (egg["height_px"] / egg["width_px"]) if egg.get("height_px") else 1.0
+            size_X.append([width_mm, aspect_ratio, 1.0])  # extent: idealized ellipse, no real contour to measure
+            size_y.append(egg["size"])
+
+    classifier = None
+    pos = sum(1 for v in classifier_y if v == 1)
+    neg = sum(1 for v in classifier_y if v == 0)
+    if pos >= EGG_VISION_MIN_CLASSIFIER_POS and neg >= EGG_VISION_MIN_CLASSIFIER_NEG:
+        classifier = LogisticRegression(max_iter=1000).fit(classifier_X, classifier_y)
+
+    size_model = None
+    if len(size_y) >= EGG_VISION_MIN_SIZE_SAMPLES and len(set(size_y)) >= 2:
+        size_model = LogisticRegression(max_iter=1000).fit(size_X, size_y)
+
+    box_classifier = None
+    box_classifier_labels = None
+    eligible_boxes = {bid for bid, n in box_sample_counts.items() if n >= EGG_VISION_BOX_ID_MIN_SAMPLES_PER_BOX}
+    if len(eligible_boxes) >= 2:
+        filtered = [(x, y) for x, y in zip(box_X, box_y) if y in eligible_boxes]
+        fX = [x for x, _ in filtered]
+        fy = [y for _, y in filtered]
+        if len(set(fy)) >= 2:
+            box_classifier = LogisticRegression(max_iter=1000).fit(fX, fy)
+            box_classifier_labels = box_classifier.classes_.tolist()
+
+    return {
+        "classifier": classifier,
+        "classifier_positive_count": pos,
+        "classifier_negative_count": neg,
+        "size_model": size_model,
+        "size_model_sample_count": len(size_y),
+        "box_classifier": box_classifier,
+        "box_classifier_labels": box_classifier_labels,
+        "box_classifier_sample_count": len(box_y),
+    }
+
+
+def _save_egg_vision_model(db, result, sample_count):
+    db.execute("DELETE FROM egg_vision_models")
+    db.execute(
+        "INSERT INTO egg_vision_models (trained_at, trained_on_sample_count, classifier_blob, "
+        "classifier_positive_count, classifier_negative_count, size_model_blob, size_model_sample_count, "
+        "box_classifier_blob, box_classifier_labels, box_classifier_sample_count) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            datetime.now().isoformat(),
+            sample_count,
+            pickle.dumps(result["classifier"]) if result["classifier"] is not None else None,
+            result["classifier_positive_count"],
+            result["classifier_negative_count"],
+            pickle.dumps(result["size_model"]) if result["size_model"] is not None else None,
+            result["size_model_sample_count"],
+            pickle.dumps(result["box_classifier"]) if result["box_classifier"] is not None else None,
+            json.dumps(result["box_classifier_labels"]) if result["box_classifier_labels"] is not None else None,
+            result["box_classifier_sample_count"],
+        ),
+    )
+    db.commit()
+
+
+@app.route("/api/vision/eggs/sample", methods=["POST"])
+def api_vision_eggs_sample():
+    """Persists one training sample: the review photo plus the
+    pre-correction detection and the user's final corrected result
+    (which nests box_id, box_width_mm, box_walls, and eggs — see
+    app.js). Fired fire-and-forget from app.js after a successful log
+    save (or, during the nesting-box wizard, after each guided photo —
+    see `source` below). Gated on egg_vision_training_enabled UNLESS
+    source is "wizard": the wizard is itself an explicit, deliberate
+    opt-in and stores its seed photos regardless of whether ongoing
+    day-to-day capture is on — see ARCHITECTURE.md §20 addendum."""
+    training_cfg = get_egg_vision_training_config()
+    data = request.get_json(force=True, silent=True) or {}
+    if not training_cfg["enabled"] and data.get("source") != "wizard":
+        return jsonify({"status": "disabled"})
+    if not OPENCV_AVAILABLE:
+        return jsonify({"status": "libs_unavailable", "error": OPENCV_ERROR})
+
+    photo_bytes, err = _decode_photo_data_uri(data.get("photo") or "", max_bytes=MAX_EGG_VISION_PHOTO_BYTES)
+    if err:
+        return jsonify({"error": err}), 400
+
+    corrected = data.get("corrected") or {}
+    original = data.get("original") or {}
+    box_id = corrected.get("box_id")
+    if not isinstance(corrected.get("eggs"), list) or box_id is None:
+        return jsonify({"error": "invalid corrected result"}), 400
+
+    arr = np.frombuffer(photo_bytes, dtype=np.uint8)
+    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    if img is None:
+        return jsonify({"error": "couldn't decode image"}), 400
+    h, w = img.shape[:2]
+
+    db = get_db()
+    db.execute(
+        "INSERT INTO egg_vision_samples (created_at, photo, image_width, image_height, box_id, "
+        "original_detection, corrected_result) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (datetime.now().isoformat(), photo_bytes, w, h, box_id, json.dumps(original), json.dumps(corrected)),
+    )
+    db.execute(
+        "DELETE FROM egg_vision_samples WHERE id NOT IN "
+        "(SELECT id FROM egg_vision_samples ORDER BY id DESC LIMIT ?)",
+        (training_cfg["retention_count"],),
+    )
+    db.commit()
+    count = db.execute("SELECT COUNT(*) FROM egg_vision_samples").fetchone()[0]
+    return jsonify({"status": "stored", "sample_count": count}), 201
+
+
+@app.route("/api/vision/train/status")
+def api_vision_train_status():
+    training_cfg = get_egg_vision_training_config()
+    db = get_db()
+    sample_count = db.execute("SELECT COUNT(*) FROM egg_vision_samples").fetchone()[0]
+    samples_per_box = {
+        row["box_id"]: row["n"]
+        for row in db.execute(
+            "SELECT box_id, COUNT(*) as n FROM egg_vision_samples WHERE box_id IS NOT NULL GROUP BY box_id"
+        )
+    }
+    row = db.execute("SELECT * FROM egg_vision_models").fetchone()
+    return jsonify(
+        {
+            "training_enabled": training_cfg["enabled"],
+            "opencv_available": OPENCV_AVAILABLE,
+            "sklearn_available": SKLEARN_AVAILABLE,
+            "sample_count": sample_count,
+            "retention_count": training_cfg["retention_count"],
+            "min_samples_required": EGG_VISION_MIN_TRAINING_SAMPLES,
+            "samples_per_box": samples_per_box,
+            "model": None
+            if row is None
+            else {
+                "trained_at": row["trained_at"],
+                "trained_on_sample_count": row["trained_on_sample_count"],
+                "has_classifier": row["classifier_blob"] is not None,
+                "classifier_positive_count": row["classifier_positive_count"],
+                "classifier_negative_count": row["classifier_negative_count"],
+                "has_size_model": row["size_model_blob"] is not None,
+                "size_model_sample_count": row["size_model_sample_count"],
+                "has_box_classifier": row["box_classifier_blob"] is not None,
+                "box_classifier_sample_count": row["box_classifier_sample_count"],
+            },
+        }
+    )
+
+
+@app.route("/api/vision/train", methods=["POST"])
+def api_vision_train():
+    if not OPENCV_AVAILABLE:
+        return jsonify({"status": "libs_unavailable", "error": OPENCV_ERROR})
+    db = get_db()
+    sample_count = db.execute("SELECT COUNT(*) FROM egg_vision_samples").fetchone()[0]
+    if sample_count < EGG_VISION_MIN_TRAINING_SAMPLES:
+        return jsonify(
+            {"status": "insufficient_samples", "sample_count": sample_count, "min_required": EGG_VISION_MIN_TRAINING_SAMPLES}
+        )
+    samples = db.execute("SELECT box_id, photo, corrected_result FROM egg_vision_samples").fetchall()
+    try:
+        result = _train_egg_vision_models(samples)
+    except Exception as e:  # noqa: BLE001 - training failure degrades, never 500s
+        return jsonify({"status": "error", "error": str(e)})
+    _save_egg_vision_model(db, result, sample_count)
+    return jsonify(
+        {
+            "status": "trained",
+            "trained_on_sample_count": sample_count,
+            "classifier_trained": result["classifier"] is not None,
+            "classifier_positive_count": result["classifier_positive_count"],
+            "classifier_negative_count": result["classifier_negative_count"],
+            "size_model_trained": result["size_model"] is not None,
+            "size_model_sample_count": result["size_model_sample_count"],
+            "box_classifier_trained": result["box_classifier"] is not None,
+            "box_classifier_sample_count": result["box_classifier_sample_count"],
+        }
+    )
+
+
+@app.route("/api/vision/train/clear", methods=["POST"])
+def api_vision_train_clear():
+    # Deliberately deletes only the stored photos, not an already-trained
+    # model — a trained model is small and not privacy-sensitive the way
+    # raw photos are, so there's no reason a "delete my photos" action
+    # should also throw away a model derived from them. See
+    # ARCHITECTURE.md §20 addendum.
+    db = get_db()
+    db.execute("DELETE FROM egg_vision_samples")
+    db.commit()
+    return jsonify({"status": "cleared"})
 
 
 @app.route("/api/chickens")
@@ -1713,6 +2423,8 @@ def api_debug():
             "advanced_forecast_enabled": get_advanced_forecast_config()["enabled"],
             "opencv_available": OPENCV_AVAILABLE,
             "opencv_error": OPENCV_ERROR,
+            "sklearn_available": SKLEARN_AVAILABLE,
+            "sklearn_error": SKLEARN_ERROR,
             "egg_vision_enabled": get_egg_vision_config()["enabled"],
         }
     )

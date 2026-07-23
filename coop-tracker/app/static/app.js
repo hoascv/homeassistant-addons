@@ -247,6 +247,7 @@ function openSheet(type, entry = null) {
   sheetTitle.textContent = entry ? `Edit ${TITLES[type].replace("Log ", "")}` : TITLES[type];
   sheetFields.innerHTML = "";
   delete sheetForm.dataset.eggSizes;
+  pendingEggVisionSample = null;
 
   const tsValue = toLocalInputValue(entry ? new Date(entry.ts) : new Date());
 
@@ -490,6 +491,7 @@ function closeSheet() {
   sheetBackdrop.classList.remove("open");
   currentType = null;
   currentEntryId = null;
+  pendingEggVisionSample = null;
 }
 
 document.querySelectorAll(".action-btn").forEach((btn) => {
@@ -550,6 +552,17 @@ sheetForm.addEventListener("submit", async (e) => {
 
     if (!res.ok) throw new Error(`server returned ${res.status}`);
 
+    if (currentType === "egg" && pendingEggVisionSample) {
+      // Fire-and-forget — a failed sample upload shouldn't affect the
+      // save itself, this is purely observability for later training.
+      fetch("api/vision/eggs/sample", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(pendingEggVisionSample),
+      }).catch(() => {});
+      pendingEggVisionSample = null;
+    }
+
     closeSheet();
     loadSummary();
     loadHistory();
@@ -563,43 +576,91 @@ sheetForm.addEventListener("submit", async (e) => {
 
 // --- Egg photo count & size review (Log Eggs sheet) ---
 //
-// A photo is analyzed once server-side (POST /api/vision/eggs, classical
-// OpenCV — see ARCHITECTURE.md §20) and never stored; only the reviewed,
-// user-corrected count/sizes end up logged. Coin position/size can always
-// be dragged into place here, since auto-detection is a best guess, never
-// authoritative — a missed/wrong coin must never block logging.
+// A photo is analyzed server-side (POST /api/vision/eggs) against a
+// registered nesting box's known inside width — the box's own side
+// walls are the in-frame scale reference, not a coin, since the camera
+// is handheld (see ARCHITECTURE.md §20 addendum). Wall position can
+// always be dragged into place here, since auto-detection is a best
+// guess, never authoritative — a missed/wrong wall must never block
+// logging. If training is enabled, the corrected result (and the photo)
+// get stored server-side after a successful save, to fit a trainable
+// model against this install's own corrections.
 
-// Mirrors app.py's EGG_SIZE_MM_BOUNDS/_egg_size_code exactly, so dragging
-// the coin recomputes every egg's size instantly, client-side, with no
-// extra round trip to the server.
-const EGG_SIZE_MM_BOUNDS = [41.5, 44.0, 46.5];
-function eggSizeCode(widthMm) {
-  const [sM, mL, lXl] = EGG_SIZE_MM_BOUNDS;
-  if (widthMm < sM) return "S";
-  if (widthMm < mL) return "M";
-  if (widthMm < lXl) return "L";
-  return "XL";
-}
 const EGG_SIZE_COLORS = { S: "#8aa9c9", M: "#6fb37a", L: "#d9a441", XL: "#c05d5d" };
 const EGG_SIZE_CYCLE = ["S", "M", "L", "XL"];
+// Keep in sync with app.py's EGG_VISION_WIZARD_STREAK_TARGET/MAX_ATTEMPTS
+// — purely a client-side UX pacing choice, the server doesn't enforce
+// these itself.
+const EGG_VISION_WIZARD_STREAK_TARGET = 3;
+const EGG_VISION_WIZARD_MAX_ATTEMPTS = 30;
 
 const eggVisionBackdrop = document.getElementById("egg-vision-backdrop");
+const eggVisionNoBoxPanel = document.getElementById("egg-vision-no-box");
+const eggVisionConfirmBoxPanel = document.getElementById("egg-vision-confirm-box");
+const eggVisionReviewPanel = document.getElementById("egg-vision-review");
 const eggVisionCanvasWrap = document.getElementById("egg-vision-canvas-wrap");
 const eggVisionPhotoImg = document.getElementById("egg-vision-photo");
 const eggVisionOverlay = document.getElementById("egg-vision-overlay");
 const eggVisionStatusMsg = document.getElementById("egg-vision-status-msg");
 const eggVisionChips = document.getElementById("egg-vision-chips");
 const eggVisionUseBtn = document.getElementById("egg-vision-use-btn");
+const eggVisionCancelBtn = document.getElementById("egg-vision-cancel-btn");
+const eggVisionWizardNextBtn = document.getElementById("egg-vision-wizard-next-btn");
+const eggVisionWizardFinishBtn = document.getElementById("egg-vision-wizard-finish-btn");
+const eggVisionWizardProgress = document.getElementById("egg-vision-wizard-progress");
 
-let eggVisionState = null; // { imageWidth, imageHeight, coinDiameterMm, coin: {cx,cy,r}, eggs: [{cx,cy,widthPx,heightPx,angle,size,manuallySet}] }
-let eggVisionDrag = null; // { kind: "coin"|"egg", index, mode: "move"|"resize" }
+// eggVisionState: { boxId, boxWidthMm, imageWidth, imageHeight,
+//   boxWalls: {left,top,right,bottom},
+//   eggs: [{cx,cy,widthPx,heightPx,angle,size,manuallySet,added}] }
+let eggVisionState = null;
+let eggVisionDrag = null; // {wall:"left"|"right"} | {kind:"egg", index}
+let eggVisionOriginal = null; // frozen pre-correction detection, snake_case, for the training sample
+let eggVisionPhotoDataUri = null; // cached exact bytes analysis was run against
+let eggVisionTouched = false; // did the user change anything from the auto-detected result?
+let eggVisionWizard = null; // null, or {boxId, boxName, streak, attempts}
+let pendingEggVisionSample = null; // built on "Use these results", submitted after a successful save
 
-async function startEggVisionReview(file) {
+function eggToSnakeCase(e) {
+  return {
+    cx: e.cx,
+    cy: e.cy,
+    width_px: e.widthPx,
+    height_px: e.heightPx,
+    angle: e.angle,
+    size: e.size,
+    manually_set: e.manuallySet,
+    added: e.added,
+  };
+}
+
+function buildEggVisionSamplePayload(source) {
+  const payload = {
+    photo: eggVisionPhotoDataUri,
+    original: eggVisionOriginal,
+    corrected: {
+      box_id: eggVisionState.boxId,
+      box_width_mm: eggVisionState.boxWidthMm,
+      box_walls: eggVisionState.boxWalls,
+      eggs: eggVisionState.eggs.map(eggToSnakeCase),
+    },
+  };
+  if (source) payload.source = source;
+  return payload;
+}
+
+function eggVisionShowPanel(panel) {
+  eggVisionNoBoxPanel.hidden = panel !== "no_box";
+  eggVisionConfirmBoxPanel.hidden = panel !== "confirm_box";
+  eggVisionReviewPanel.hidden = panel !== "review";
+}
+
+async function startEggVisionReview(file, opts = {}) {
+  eggVisionBackdrop.classList.add("open");
+  eggVisionShowPanel("review");
   eggVisionUseBtn.disabled = true;
   eggVisionCanvasWrap.hidden = true;
   eggVisionChips.innerHTML = "";
   eggVisionStatusMsg.textContent = "Analyzing…";
-  eggVisionBackdrop.classList.add("open");
 
   let dataUri;
   try {
@@ -608,13 +669,32 @@ async function startEggVisionReview(file) {
     eggVisionStatusMsg.textContent = "Couldn't read that photo — try again.";
     return;
   }
+  eggVisionPhotoDataUri = dataUri;
+  await analyzeEggVisionPhoto(opts);
+}
+
+async function analyzeEggVisionPhoto(opts = {}) {
+  eggVisionTouched = false;
+  document.getElementById("egg-vision-title").textContent = eggVisionWizard
+    ? `Teach it to spot "${eggVisionWizard.boxName}"`
+    : "Count & size from a photo";
+  eggVisionUseBtn.hidden = !!eggVisionWizard;
+  eggVisionCancelBtn.hidden = !!eggVisionWizard;
+  eggVisionWizardNextBtn.hidden = !eggVisionWizard;
+  eggVisionWizardFinishBtn.hidden = !eggVisionWizard;
+  eggVisionWizardProgress.hidden = !eggVisionWizard;
+  eggVisionShowPanel("review");
+  eggVisionUseBtn.disabled = true;
+  eggVisionCanvasWrap.hidden = true;
+  eggVisionChips.innerHTML = "";
+  eggVisionStatusMsg.textContent = "Analyzing…";
 
   let body;
   try {
     const res = await fetch("api/vision/eggs", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ photo: dataUri }),
+      body: JSON.stringify({ photo: eggVisionPhotoDataUri, box_id: opts.boxId ?? undefined }),
     });
     body = await res.json();
   } catch (err) {
@@ -622,6 +702,21 @@ async function startEggVisionReview(file) {
     return;
   }
 
+  if (body.status === "no_boxes_registered") {
+    eggVisionShowPanel("no_box");
+    return;
+  }
+  if (body.status === "confirm_box") {
+    const list = document.getElementById("egg-vision-box-candidates");
+    list.innerHTML = body.box_candidates
+      .map(
+        (b) =>
+          `<li><button type="button" class="link-btn egg-vision-box-candidate" data-box-id="${b.id}">${escapeHtml(b.name)}</button></li>`
+      )
+      .join("");
+    eggVisionShowPanel("confirm_box");
+    return;
+  }
   if (body.status === "disabled" || body.status === "libs_unavailable" || body.status === "error") {
     eggVisionStatusMsg.textContent =
       body.status === "error"
@@ -631,12 +726,11 @@ async function startEggVisionReview(file) {
   }
 
   eggVisionState = {
+    boxId: body.box.id,
+    boxWidthMm: body.box.width_mm,
     imageWidth: body.image_width,
     imageHeight: body.image_height,
-    coinDiameterMm: body.coin_diameter_mm || window.EGG_VISION.coinDiameterMm,
-    coin: body.coin
-      ? { cx: body.coin.cx, cy: body.coin.cy, r: body.coin.r }
-      : { cx: body.image_width / 2, cy: body.image_height / 2, r: Math.min(body.image_width, body.image_height) * 0.06 },
+    boxWalls: { ...body.box_walls },
     eggs: body.eggs.map((e) => ({
       cx: e.cx,
       cy: e.cy,
@@ -645,33 +739,69 @@ async function startEggVisionReview(file) {
       angle: e.angle,
       size: e.size || "M",
       manuallySet: false,
+      added: false,
     })),
   };
+  eggVisionOriginal = {
+    box_id: body.box.id,
+    box_width_mm: body.box.width_mm,
+    box_walls: { ...body.box_walls },
+    eggs: eggVisionState.eggs.map(eggToSnakeCase),
+  };
 
-  eggVisionPhotoImg.src = dataUri;
+  eggVisionPhotoImg.src = eggVisionPhotoDataUri;
   eggVisionPhotoImg.onload = () => {
     eggVisionCanvasWrap.hidden = false;
-    recomputeEggSizes();
     drawEggVisionOverlay();
     renderEggVisionChips();
   };
 
   eggVisionStatusMsg.textContent =
-    body.status === "coin_not_found"
-      ? "Couldn't find a reference coin automatically — drag the circle onto your coin (center to move, edge to resize)."
+    body.status === "walls_not_found"
+      ? "Couldn't find the box's edges automatically — drag the two lines onto the box's side walls."
       : body.status === "no_eggs_found"
       ? "Couldn't detect any eggs — you can still log a count manually below, or use + Add egg."
-      : "Drag the circle if it isn't on your coin. Tap a size chip to correct it.";
+      : "Drag a line if it isn't on the box's edge. Tap a size chip to correct it.";
   eggVisionUseBtn.disabled = false;
+  updateWizardProgress();
 }
 
-function recomputeEggSizes() {
-  if (!eggVisionState || !eggVisionState.coin || eggVisionState.coin.r <= 0) return;
-  const pxPerMm = (2 * eggVisionState.coin.r) / eggVisionState.coinDiameterMm;
-  eggVisionState.eggs.forEach((egg) => {
-    if (egg.manuallySet) return;
-    egg.size = eggSizeCode(egg.widthPx / pxPerMm);
-  });
+async function recomputeEggSizes() {
+  // Box-width scaling is a plain division (no perspective correction —
+  // see ARCHITECTURE.md §20 addendum), but sizing once a trained model
+  // exists needs scikit-learn, so this still round-trips to the server
+  // rather than being ported to JS.
+  if (!eggVisionState) return;
+  try {
+    const res = await fetch("api/vision/eggs/recompute", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        box_id: eggVisionState.boxId,
+        box_walls: eggVisionState.boxWalls,
+        eggs: eggVisionState.eggs.map((e) => ({
+          cx: e.cx,
+          cy: e.cy,
+          width_px: e.widthPx,
+          height_px: e.heightPx,
+          angle: e.angle,
+          aspect_ratio: e.heightPx / e.widthPx,
+          extent: 1.0,
+        })),
+      }),
+    });
+    const body = await res.json();
+    if (Array.isArray(body.eggs)) {
+      body.eggs.forEach((r, i) => {
+        const egg = eggVisionState.eggs[i];
+        if (egg && !egg.manuallySet && r.size) egg.size = r.size;
+      });
+    }
+  } catch (err) {
+    // Best-effort — leave sizes as-is if the recompute round trip fails.
+  }
+  drawEggVisionOverlay();
+  renderEggVisionChips();
 }
 
 function eggVisionDisplayScale() {
@@ -699,20 +829,22 @@ function drawEggVisionOverlay() {
     ctx.restore();
   });
 
-  const coin = eggVisionState.coin;
+  const walls = eggVisionState.boxWalls;
+  const top = walls.top * scale;
+  const bottom = walls.bottom * scale;
   ctx.strokeStyle = "#2b6cb0";
   ctx.lineWidth = 3;
-  ctx.beginPath();
-  ctx.arc(coin.cx * scale, coin.cy * scale, coin.r * scale, 0, 2 * Math.PI);
-  ctx.stroke();
-  ctx.fillStyle = "#2b6cb0";
-  ctx.beginPath();
-  ctx.arc(coin.cx * scale, coin.cy * scale, 3, 0, 2 * Math.PI);
-  ctx.fill();
-  // edge handle, at the 3-o'clock point of the circle
-  ctx.beginPath();
-  ctx.arc((coin.cx + coin.r) * scale, coin.cy * scale, 5, 0, 2 * Math.PI);
-  ctx.fill();
+  [walls.left, walls.right].forEach((x) => {
+    const sx = x * scale;
+    ctx.beginPath();
+    ctx.moveTo(sx, top);
+    ctx.lineTo(sx, bottom);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(sx, (top + bottom) / 2, 6, 0, 2 * Math.PI);
+    ctx.fillStyle = "#2b6cb0";
+    ctx.fill();
+  });
 }
 
 function renderEggVisionChips() {
@@ -732,6 +864,7 @@ eggVisionChips.addEventListener("click", (e) => {
   const removeBtn = e.target.closest(".egg-chip-remove");
   if (removeBtn) {
     eggVisionState.eggs.splice(Number(removeBtn.dataset.idx), 1);
+    eggVisionTouched = true;
     drawEggVisionOverlay();
     renderEggVisionChips();
     return;
@@ -741,6 +874,7 @@ eggVisionChips.addEventListener("click", (e) => {
     const egg = eggVisionState.eggs[Number(chip.dataset.idx)];
     egg.size = EGG_SIZE_CYCLE[(EGG_SIZE_CYCLE.indexOf(egg.size) + 1) % EGG_SIZE_CYCLE.length];
     egg.manuallySet = true;
+    eggVisionTouched = true;
     drawEggVisionOverlay();
     renderEggVisionChips();
   }
@@ -748,22 +882,28 @@ eggVisionChips.addEventListener("click", (e) => {
 
 document.getElementById("egg-vision-add-egg").addEventListener("click", () => {
   if (!eggVisionState) return;
+  const span = eggVisionState.boxWalls.right - eggVisionState.boxWalls.left;
   eggVisionState.eggs.push({
     cx: eggVisionState.imageWidth / 2,
     cy: eggVisionState.imageHeight / 2,
-    widthPx: eggVisionState.coin.r * 3,
-    heightPx: eggVisionState.coin.r * 4,
+    widthPx: span * 0.06,
+    heightPx: span * 0.08,
     angle: 0,
     size: "M",
     manuallySet: true,
+    added: true,
   });
+  eggVisionTouched = true;
   drawEggVisionOverlay();
   renderEggVisionChips();
 });
 
-// Drag: near the coin's center moves it, near its edge resizes it; near an
-// egg's center moves that egg (the only way to place a "+ Add egg" marker
-// on the actual missed egg, since it starts at the photo's center).
+// Drag: near a wall line moves it (left/right only — the walls span the
+// full photo height, so there's nothing to resize); near an egg's center
+// moves that egg (the only way to place a "+ Add egg" marker on the
+// actual missed egg, since it starts at the photo's center). Wall drags
+// redraw instantly (pure rendering) but only trigger the mm/size
+// recompute round trip on release, not on every pointermove.
 // pointermove/up on document (not just the canvas) so a fast drag that
 // briefly leaves the canvas bounds doesn't get dropped.
 eggVisionOverlay.addEventListener("pointerdown", (e) => {
@@ -772,18 +912,14 @@ eggVisionOverlay.addEventListener("pointerdown", (e) => {
   const x = e.clientX - rect.left;
   const y = e.clientY - rect.top;
   const scale = eggVisionDisplayScale();
-  const coin = eggVisionState.coin;
-  const coinX = coin.cx * scale;
-  const coinY = coin.cy * scale;
-  const coinR = coin.r * scale;
-  const distFromCenter = Math.hypot(x - coinX, y - coinY);
+  const walls = eggVisionState.boxWalls;
 
-  if (Math.abs(distFromCenter - coinR) < 14) {
-    eggVisionDrag = { kind: "coin", mode: "resize" };
+  if (Math.abs(x - walls.left * scale) < 16) {
+    eggVisionDrag = { wall: "left" };
     return;
   }
-  if (distFromCenter < coinR + 14) {
-    eggVisionDrag = { kind: "coin", mode: "move" };
+  if (Math.abs(x - walls.right * scale) < 16) {
+    eggVisionDrag = { wall: "right" };
     return;
   }
 
@@ -791,7 +927,7 @@ eggVisionOverlay.addEventListener("pointerdown", (e) => {
     (egg) => Math.hypot(x - egg.cx * scale, y - egg.cy * scale) < 20
   );
   if (eggIndex !== -1) {
-    eggVisionDrag = { kind: "egg", index: eggIndex, mode: "move" };
+    eggVisionDrag = { kind: "egg", index: eggIndex };
   }
 });
 
@@ -802,20 +938,15 @@ document.addEventListener("pointermove", (e) => {
   const y = e.clientY - rect.top;
   const scale = eggVisionDisplayScale();
 
-  if (eggVisionDrag.kind === "coin") {
-    const coin = eggVisionState.coin;
-    if (eggVisionDrag.mode === "move") {
-      coin.cx = x / scale;
-      coin.cy = y / scale;
-    } else if (eggVisionDrag.mode === "resize") {
-      coin.r = Math.max(4, Math.hypot(x - coin.cx * scale, y - coin.cy * scale) / scale);
-    }
-    recomputeEggSizes();
+  if (eggVisionDrag.wall) {
+    eggVisionState.boxWalls[eggVisionDrag.wall] = x / scale;
+    eggVisionTouched = true;
   } else if (eggVisionDrag.kind === "egg") {
     const egg = eggVisionState.eggs[eggVisionDrag.index];
     if (egg) {
       egg.cx = x / scale;
       egg.cy = y / scale;
+      eggVisionTouched = true;
     }
   }
   drawEggVisionOverlay();
@@ -823,16 +954,21 @@ document.addEventListener("pointermove", (e) => {
 });
 
 document.addEventListener("pointerup", () => {
+  if (eggVisionDrag && eggVisionDrag.wall) recomputeEggSizes();
   eggVisionDrag = null;
 });
 
 function closeEggVisionReview() {
   eggVisionBackdrop.classList.remove("open");
   eggVisionState = null;
+  eggVisionOriginal = null;
   eggVisionDrag = null;
+  eggVisionWizard = null;
 }
 
-document.getElementById("egg-vision-cancel-btn").addEventListener("click", closeEggVisionReview);
+eggVisionCancelBtn.addEventListener("click", closeEggVisionReview);
+document.getElementById("egg-vision-no-box-cancel-btn").addEventListener("click", closeEggVisionReview);
+document.getElementById("egg-vision-confirm-box-cancel-btn").addEventListener("click", closeEggVisionReview);
 eggVisionBackdrop.addEventListener("click", (e) => {
   if (e.target === eggVisionBackdrop) closeEggVisionReview();
 });
@@ -841,8 +977,158 @@ eggVisionUseBtn.addEventListener("click", () => {
   if (!eggVisionState) return;
   document.getElementById("count-value").textContent = eggVisionState.eggs.length;
   sheetForm.dataset.eggSizes = eggVisionState.eggs.map((e) => e.size).join(",");
+  if (window.EGG_VISION.trainingEnabled) {
+    pendingEggVisionSample = buildEggVisionSamplePayload();
+  }
   closeEggVisionReview();
 });
+
+document.getElementById("egg-vision-box-candidates").addEventListener("click", async (e) => {
+  const btn = e.target.closest(".egg-vision-box-candidate");
+  if (!btn) return;
+  await analyzeEggVisionPhoto({ boxId: Number(btn.dataset.boxId) });
+});
+
+// --- Nesting-box setup wizard ---
+//
+// Registers a box's known inside width, then loops guided photo capture
+// + correction (reusing the review UI above in "wizard mode") until the
+// freshly-retrained model gets EGG_VISION_WIZARD_STREAK_TARGET photos in
+// a row exactly right — proving it's reliably correct, not lucky once —
+// or EGG_VISION_WIZARD_MAX_ATTEMPTS is reached. See ARCHITECTURE.md §20
+// addendum.
+
+const boxSetupBackdrop = document.getElementById("box-setup-backdrop");
+
+function openBoxSetup() {
+  document.getElementById("box-setup-name").value = "";
+  document.getElementById("box-setup-width").value = "";
+  document.getElementById("box-setup-error").textContent = "";
+  boxSetupBackdrop.classList.add("open");
+}
+
+function closeBoxSetup() {
+  boxSetupBackdrop.classList.remove("open");
+}
+
+document.getElementById("egg-vision-setup-box-btn").addEventListener("click", () => {
+  eggVisionBackdrop.classList.remove("open");
+  openBoxSetup();
+});
+document.getElementById("egg-vision-new-box-btn").addEventListener("click", () => {
+  eggVisionBackdrop.classList.remove("open");
+  openBoxSetup();
+});
+document.getElementById("box-setup-cancel-btn").addEventListener("click", closeBoxSetup);
+boxSetupBackdrop.addEventListener("click", (e) => {
+  if (e.target === boxSetupBackdrop) closeBoxSetup();
+});
+
+document.getElementById("box-setup-continue-btn").addEventListener("click", async () => {
+  const name = document.getElementById("box-setup-name").value.trim();
+  const widthCm = parseFloat(document.getElementById("box-setup-width").value);
+  const errorEl = document.getElementById("box-setup-error");
+  if (!name) {
+    errorEl.textContent = "Enter a name for this box.";
+    return;
+  }
+  if (!widthCm || widthCm <= 0) {
+    errorEl.textContent = "Enter a valid width.";
+    return;
+  }
+  try {
+    const res = await fetch("api/nesting-boxes", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, width_mm: widthCm * 10 }),
+    });
+    const body = await res.json();
+    if (!res.ok) {
+      errorEl.textContent = body.error || "Couldn't add that box.";
+      return;
+    }
+    closeBoxSetup();
+    startEggVisionWizard(body.id, body.name);
+    if (typeof loadNestingBoxes === "function") loadNestingBoxes();
+  } catch (err) {
+    errorEl.textContent = "Couldn't reach the server — check your connection.";
+  }
+});
+
+function eggVisionPickPhotoForWizard() {
+  const input = document.createElement("input");
+  input.type = "file";
+  input.accept = "image/*";
+  input.capture = "environment";
+  input.addEventListener("change", async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    await startEggVisionReview(file, { boxId: eggVisionWizard.boxId });
+  });
+  input.click();
+}
+
+function startEggVisionWizard(boxId, boxName) {
+  eggVisionWizard = { boxId, boxName, streak: 0, attempts: 0 };
+  eggVisionBackdrop.classList.add("open");
+  eggVisionShowPanel("review");
+  eggVisionPickPhotoForWizard();
+}
+
+function updateWizardProgress() {
+  if (!eggVisionWizard) return;
+  const { streak, attempts, boxName } = eggVisionWizard;
+  const ready = streak >= EGG_VISION_WIZARD_STREAK_TARGET;
+  eggVisionWizardProgress.textContent = ready
+    ? `✓ "${boxName}" looks reliable (${streak} correct in a row) — Finish, or keep going.`
+    : `${streak}/${EGG_VISION_WIZARD_STREAK_TARGET} correct in a row · attempt ${attempts + 1}/${EGG_VISION_WIZARD_MAX_ATTEMPTS}`;
+}
+
+async function submitWizardSample() {
+  if (!eggVisionState) return;
+  eggVisionWizard.attempts += 1;
+  eggVisionWizard.streak = eggVisionTouched ? 0 : eggVisionWizard.streak + 1;
+  try {
+    await fetch("api/vision/eggs/sample", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(buildEggVisionSamplePayload("wizard")),
+    });
+    await fetch("api/vision/train", { method: "POST" });
+  } catch (err) {
+    // Best-effort — the wizard still progresses even if a single
+    // submit/retrain round trip fails; the next photo just won't
+    // benefit from this one yet.
+  }
+}
+
+eggVisionWizardNextBtn.addEventListener("click", async () => {
+  eggVisionWizardNextBtn.disabled = true;
+  eggVisionWizardNextBtn.textContent = "Updating…";
+  await submitWizardSample();
+  eggVisionWizardNextBtn.disabled = false;
+  eggVisionWizardNextBtn.textContent = "Take another photo";
+  if (eggVisionWizard.attempts >= EGG_VISION_WIZARD_MAX_ATTEMPTS) {
+    finishEggVisionWizard();
+    return;
+  }
+  eggVisionPickPhotoForWizard();
+});
+
+eggVisionWizardFinishBtn.addEventListener("click", async () => {
+  eggVisionWizardFinishBtn.disabled = true;
+  await submitWizardSample();
+  eggVisionWizardFinishBtn.disabled = false;
+  finishEggVisionWizard();
+});
+
+function finishEggVisionWizard() {
+  const boxName = eggVisionWizard ? eggVisionWizard.boxName : "";
+  closeEggVisionReview();
+  alert(
+    `"${boxName}" is ready to use. Turn on egg-vision training in the ⚙️ settings if you also want ongoing day-to-day corrections captured.`
+  );
+}
 
 historyList.addEventListener("click", async (e) => {
   const deleteBtn = e.target.closest(".delete-btn");
@@ -896,10 +1182,109 @@ const backupCloseBtn = document.getElementById("backup-close-btn");
 const restoreBtn = document.getElementById("restore-btn");
 const restoreFile = document.getElementById("restore-file");
 
-backupOpenBtn.addEventListener("click", () => backupBackdrop.classList.add("open"));
+backupOpenBtn.addEventListener("click", () => {
+  backupBackdrop.classList.add("open");
+  loadNestingBoxes();
+  loadTrainingStatus();
+});
 backupCloseBtn.addEventListener("click", () => backupBackdrop.classList.remove("open"));
 backupBackdrop.addEventListener("click", (e) => {
   if (e.target === backupBackdrop) backupBackdrop.classList.remove("open");
+});
+
+async function loadNestingBoxes() {
+  const list = document.getElementById("nesting-boxes-list");
+  list.innerHTML = '<li class="notify-services-empty">Loading…</li>';
+  try {
+    const res = await fetch("api/nesting-boxes");
+    const boxes = await res.json();
+    list.innerHTML = boxes.length
+      ? boxes
+          .map(
+            (b) => `
+              <li>
+                ${escapeHtml(b.name)} — ${(b.width_mm / 10).toFixed(1)}cm
+                <button type="button" class="link-btn nesting-box-delete" data-id="${b.id}" aria-label="Delete ${escapeHtml(b.name)}">✕</button>
+              </li>
+            `
+          )
+          .join("")
+      : '<li class="notify-services-empty">No nesting boxes set up yet.</li>';
+  } catch (e) {
+    list.innerHTML = '<li class="notify-services-empty">Could not reach the server.</li>';
+  }
+}
+
+document.getElementById("nesting-boxes-list").addEventListener("click", async (e) => {
+  const btn = e.target.closest(".nesting-box-delete");
+  if (!btn) return;
+  if (!confirm("Delete this nesting box? Already-collected training photos are kept.")) return;
+  try {
+    await fetch(`api/nesting-boxes/${btn.dataset.id}`, { method: "DELETE" });
+    loadNestingBoxes();
+  } catch (err) {
+    alert("Couldn't reach the server — check your connection and try again.");
+  }
+});
+
+document.getElementById("nesting-boxes-add-btn").addEventListener("click", () => {
+  backupBackdrop.classList.remove("open");
+  openBoxSetup();
+});
+
+async function loadTrainingStatus() {
+  try {
+    const res = await fetch("api/vision/train/status");
+    const body = await res.json();
+    document.getElementById("training-enabled-value").textContent = body.training_enabled ? "On" : "Off";
+    document.getElementById("training-sample-count").textContent = `${body.sample_count} / ${body.retention_count}`;
+    const trainBtn = document.getElementById("training-train-btn");
+    trainBtn.disabled = body.sample_count < body.min_samples_required;
+    trainBtn.textContent =
+      body.sample_count < body.min_samples_required
+        ? `Train now (need ${body.min_samples_required - body.sample_count} more)`
+        : "Train now";
+  } catch (e) {
+    document.getElementById("training-enabled-value").textContent = "–";
+    document.getElementById("training-sample-count").textContent = "–";
+  }
+}
+
+document.getElementById("training-train-btn").addEventListener("click", async () => {
+  const btn = document.getElementById("training-train-btn");
+  const resultEl = document.getElementById("training-train-result");
+  btn.disabled = true;
+  resultEl.textContent = "Training…";
+  try {
+    const res = await fetch("api/vision/train", { method: "POST" });
+    const body = await res.json();
+    if (body.status === "trained") {
+      resultEl.textContent =
+        `Counting model: ${body.classifier_trained ? `trained on ${body.classifier_positive_count}/${body.classifier_negative_count} examples` : "not enough data yet"}. ` +
+        `Sizing model: ${body.size_model_trained ? `trained on ${body.size_model_sample_count} examples` : "not enough data yet"}.` +
+        (body.box_classifier_trained ? ` Box recognition: trained on ${body.box_classifier_sample_count} examples.` : "");
+    } else if (body.status === "insufficient_samples") {
+      resultEl.textContent = `Need at least ${body.min_required} samples (have ${body.sample_count}).`;
+    } else {
+      resultEl.textContent = body.error || "Training isn't available right now.";
+    }
+  } catch (err) {
+    resultEl.textContent = "Couldn't reach the server — check your connection.";
+  }
+  loadTrainingStatus();
+});
+
+document.getElementById("training-clear-btn").addEventListener("click", async () => {
+  const status = await fetch("api/vision/train/status").then((r) => r.json()).catch(() => null);
+  const count = status ? status.sample_count : "all";
+  if (!confirm(`This will permanently delete ${count} stored training photos. Continue?`)) return;
+  try {
+    await fetch("api/vision/train/clear", { method: "POST" });
+    document.getElementById("training-train-result").textContent = "Training photos cleared.";
+  } catch (err) {
+    alert("Couldn't reach the server — check your connection and try again.");
+  }
+  loadTrainingStatus();
 });
 
 restoreBtn.addEventListener("click", async () => {

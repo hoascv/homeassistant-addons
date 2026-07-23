@@ -64,80 +64,141 @@ def test_egg_size_code_boundaries():
     assert coopapp._egg_size_code(l_xl + 0.1) == "XL"
 
 
-# --- Real CV pipeline (skipped if opencv isn't installed) ---
+def test_no_boxes_registered_blocks_analysis(client, set_options):
+    set_options(egg_vision_enabled=True)
+    res = client.post("/api/vision/eggs", json={"photo": _tiny_data_uri()})
+    assert res.get_json()["status"] == "no_boxes_registered"
 
-pytestmark_cv = pytest.mark.skipif(not coopapp.OPENCV_AVAILABLE, reason="opencv not installed")
+
+# --- Nesting box CRUD (unconditional — no opencv required) ---
 
 
-def _synthetic_photo(width=1200, height=900, coin=None, eggs=()):
+def test_add_and_list_nesting_boxes(client):
+    res = client.post("/api/nesting-boxes", json={"name": "Coop A", "width_mm": 320})
+    assert res.status_code == 201
+    body = res.get_json()
+    assert body["name"] == "Coop A"
+    assert body["width_mm"] == 320
+
+    boxes = client.get("/api/nesting-boxes").get_json()
+    assert len(boxes) == 1
+    assert boxes[0]["name"] == "Coop A"
+
+
+def test_add_nesting_box_requires_name(client):
+    res = client.post("/api/nesting-boxes", json={"width_mm": 320})
+    assert res.status_code == 400
+
+
+def test_add_nesting_box_rejects_non_positive_width(client):
+    res = client.post("/api/nesting-boxes", json={"name": "Coop A", "width_mm": 0})
+    assert res.status_code == 400
+
+
+def test_add_nesting_box_rejects_duplicate_name(client):
+    client.post("/api/nesting-boxes", json={"name": "Coop A", "width_mm": 320})
+    res = client.post("/api/nesting-boxes", json={"name": "coop a", "width_mm": 300})
+    assert res.status_code == 400
+
+
+def test_delete_nesting_box_unlinks_rather_than_cascades(client, conn):
+    box_id = client.post("/api/nesting-boxes", json={"name": "Coop A", "width_mm": 320}).get_json()["id"]
+    conn.execute(
+        "INSERT INTO egg_vision_samples (created_at, photo, image_width, image_height, box_id, "
+        "original_detection, corrected_result) VALUES ('2024-01-01', ?, 100, 100, ?, '{}', '{}')",
+        (b"fake", box_id),
+    )
+    conn.commit()
+
+    res = client.delete(f"/api/nesting-boxes/{box_id}")
+    assert res.status_code == 204
+    assert client.get("/api/nesting-boxes").get_json() == []
+
+    row = conn.execute("SELECT box_id FROM egg_vision_samples").fetchone()
+    assert row["box_id"] is None
+
+
+# --- Real CV pipeline (skipped if opencv/sklearn isn't installed) ---
+
+pytestmark_cv = pytest.mark.skipif(
+    not (coopapp.OPENCV_AVAILABLE and coopapp.SKLEARN_AVAILABLE), reason="opencv/sklearn not installed"
+)
+
+
+def _synthetic_box_photo(width=1200, height=900, box=None, eggs=()):
     """Builds a synthetic test photo with cv2 primitives: a light
-    background, an optional gray coin circle, and dark egg-shaped
-    ellipses. Returns a data URI, the same shape the real upload flow
-    produces. `eggs` is a list of (cx, cy, semi_x, semi_y, angle)."""
+    background, an optional medium-gray box rectangle, and dark
+    egg-shaped ellipses. Returns a data URI, the same shape the real
+    upload flow produces. `box` is (left, top, right, bottom); `eggs` is
+    a list of (cx, cy, semi_x, semi_y, angle)."""
     import cv2
     import numpy as np
 
     img = np.full((height, width, 3), 230, np.uint8)
-    if coin:
-        cx, cy, r = coin
-        cv2.circle(img, (cx, cy), r, (140, 140, 140), -1)
+    if box:
+        left, top, right, bottom = box
+        cv2.rectangle(img, (left, top), (right, bottom), (170, 170, 170), -1)
     for cx, cy, semi_x, semi_y, angle in eggs:
         cv2.ellipse(img, (cx, cy), (semi_x, semi_y), angle, 0, 360, (90, 70, 60), -1)
     ok, buf = cv2.imencode(".jpg", img)
     return "data:image/jpeg;base64," + base64.b64encode(buf.tobytes()).decode()
 
 
+@pytest.fixture
+def nesting_box(client):
+    return client.post("/api/nesting-boxes", json={"name": "Coop A", "width_mm": 320}).get_json()
+
+
 @pytestmark_cv
 class TestEggVisionRealDetection:
-    def test_counts_well_separated_eggs_and_finds_coin(self, client, set_options):
-        set_options(egg_vision_enabled=True, egg_vision_coin_diameter_mm=24.5)
-        photo = _synthetic_photo(
-            coin=(1080, 100, 40),
+    def test_counts_well_separated_eggs_and_finds_box(self, client, set_options, nesting_box):
+        set_options(egg_vision_enabled=True)
+        photo = _synthetic_box_photo(
+            box=(80, 40, 1120, 860),
             eggs=[(200, 200, 60, 80, 10), (450, 300, 55, 75, -15), (700, 250, 65, 85, 5)],
         )
         res = client.post("/api/vision/eggs", json={"photo": photo})
         body = res.get_json()
         assert body["status"] == "ok"
         assert len(body["eggs"]) == 3
-        assert body["coin"] is not None
+        assert body["box_walls"] is not None
         assert all(e["size"] in coopapp.EGG_SIZE_CODES for e in body["eggs"])
 
-    def test_coin_not_found_when_no_coin_drawn(self, client, set_options):
+    def test_walls_not_found_when_no_box_drawn(self, client, set_options, nesting_box):
         set_options(egg_vision_enabled=True)
-        photo = _synthetic_photo(coin=None, eggs=[(200, 200, 60, 80, 10)])
+        photo = _synthetic_box_photo(box=None, eggs=[(200, 200, 60, 80, 10)])
         body = client.post("/api/vision/eggs", json={"photo": photo}).get_json()
-        assert body["status"] == "coin_not_found"
-        assert body["coin"] is None
+        assert body["status"] == "walls_not_found"
         assert len(body["eggs"]) == 1
         assert "size" not in body["eggs"][0]
 
-    def test_no_eggs_found_on_coin_only_photo(self, client, set_options):
+    def test_no_eggs_found_on_box_only_photo(self, client, set_options, nesting_box):
         set_options(egg_vision_enabled=True)
-        photo = _synthetic_photo(coin=(1080, 100, 40), eggs=[])
+        photo = _synthetic_box_photo(box=(80, 40, 1120, 860), eggs=[])
         body = client.post("/api/vision/eggs", json={"photo": photo}).get_json()
         assert body["status"] == "no_eggs_found"
         assert body["eggs"] == []
 
-    def test_size_classification_matches_known_geometry(self, client, set_options):
-        # coin r=40px, diameter_mm=24.5 -> px_per_mm = 80/24.5 = 3.265.
-        # An egg width of 145px -> ~44.4mm, inside the M|L..L|XL band ("L").
-        set_options(egg_vision_enabled=True, egg_vision_coin_diameter_mm=24.5)
-        photo = _synthetic_photo(coin=(1080, 100, 40), eggs=[(400, 300, 72, 95, 0)])
+    def test_size_classification_matches_known_geometry(self, client, set_options, nesting_box):
+        # Box drawn 1000px wide (80 to 1080), width_mm=320 -> px_per_mm=3.125.
+        # An egg width of 140px -> 44.8mm, inside the M|L..L|XL band ("L").
+        set_options(egg_vision_enabled=True)
+        photo = _synthetic_box_photo(box=(80, 40, 1080, 860), eggs=[(400, 300, 70, 95, 0)])
         body = client.post("/api/vision/eggs", json={"photo": photo}).get_json()
         assert body["status"] == "ok"
         egg = body["eggs"][0]
-        px_per_mm = (2 * body["coin"]["r"]) / body["coin_diameter_mm"]
+        px_per_mm = (body["box_walls"]["right"] - body["box_walls"]["left"]) / nesting_box["width_mm"]
         width_mm = egg["width_px"] / px_per_mm
         assert egg["size"] == coopapp._egg_size_code(width_mm)
 
-    def test_excludes_near_touching_merged_egg_blob(self, client, set_options):
+    def test_excludes_near_touching_merged_egg_blob(self, client, set_options, nesting_box):
         # Two eggs placed close enough to merge into one contour (centers
         # 119px apart, each ~120px wide) produce an elongated blob that
         # must be excluded rather than counted as one oddly-sized egg —
         # only the separate third egg should come through.
         set_options(egg_vision_enabled=True)
-        photo = _synthetic_photo(
-            coin=(1080, 100, 40),
+        photo = _synthetic_box_photo(
+            box=(80, 40, 1120, 860),
             eggs=[(240, 300, 60, 80, 0), (359, 300, 60, 80, 0), (700, 300, 60, 80, 0)],
         )
         body = client.post("/api/vision/eggs", json={"photo": photo}).get_json()
@@ -145,7 +206,7 @@ class TestEggVisionRealDetection:
         assert len(body["eggs"]) == 1
         assert body["eggs"][0]["cx"] == pytest.approx(700, abs=5)
 
-    def test_undecodable_photo_reports_error(self, client, set_options):
+    def test_undecodable_photo_reports_error(self, client, set_options, nesting_box):
         # Valid base64, valid data-URI shape, but not actually image bytes
         # — passes _decode_photo_data_uri, fails at cv2.imdecode.
         set_options(egg_vision_enabled=True)
@@ -156,7 +217,7 @@ class TestEggVisionRealDetection:
         assert body["status"] == "error"
         assert "decode" in body["error"]
 
-    def test_excludes_tiny_noise_blob(self, client, set_options):
+    def test_excludes_tiny_noise_blob(self, client, set_options, nesting_box):
         # A speck that survives morphological cleanup as its own contour
         # (radius 18px, area ~970px²) but still falls under
         # EGG_MIN_AREA_FRACTION*photo_area (1620px²) — exercises the area
@@ -165,7 +226,7 @@ class TestEggVisionRealDetection:
         import numpy as np
 
         img = np.full((900, 1200, 3), 230, np.uint8)
-        cv2.circle(img, (1080, 100), 40, (140, 140, 140), -1)
+        cv2.rectangle(img, (80, 40), (1120, 860), (170, 170, 170), -1)
         cv2.ellipse(img, (400, 300), (60, 80), 0, 0, 360, (90, 70, 60), -1)
         cv2.circle(img, (200, 200), 18, (90, 70, 60), -1)  # noise speck
         ok, buf = cv2.imencode(".jpg", img)
@@ -176,7 +237,7 @@ class TestEggVisionRealDetection:
         assert body["status"] == "ok"
         assert len(body["eggs"]) == 1
 
-    def test_analysis_exception_degrades_to_error_status(self, client, set_options, monkeypatch):
+    def test_analysis_exception_degrades_to_error_status(self, client, set_options, monkeypatch, nesting_box):
         def _boom(*a, **k):
             raise RuntimeError("simulated cv2 failure")
 
@@ -187,3 +248,19 @@ class TestEggVisionRealDetection:
         body = res.get_json()
         assert body["status"] == "error"
         assert body["error"] == "simulated cv2 failure"
+
+    def test_explicit_box_id_is_used_over_auto_resolution(self, client, set_options, nesting_box):
+        second_box = client.post("/api/nesting-boxes", json={"name": "Coop B", "width_mm": 400}).get_json()
+        set_options(egg_vision_enabled=True)
+        photo = _synthetic_box_photo(box=(80, 40, 1080, 860), eggs=[])
+        body = client.post("/api/vision/eggs", json={"photo": photo, "box_id": second_box["id"]}).get_json()
+        assert body["status"] == "no_eggs_found"
+        assert body["box"]["id"] == second_box["id"]
+
+    def test_confirm_box_when_multiple_boxes_and_no_id_or_model(self, client, set_options, nesting_box):
+        client.post("/api/nesting-boxes", json={"name": "Coop B", "width_mm": 400})
+        set_options(egg_vision_enabled=True)
+        photo = _synthetic_box_photo(box=(80, 40, 1080, 860), eggs=[])
+        body = client.post("/api/vision/eggs", json={"photo": photo}).get_json()
+        assert body["status"] == "confirm_box"
+        assert len(body["box_candidates"]) == 2

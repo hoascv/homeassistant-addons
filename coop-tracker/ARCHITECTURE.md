@@ -1106,3 +1106,142 @@ labels (see §17). The same formula is mirrored in `app.js`
 egg's size instantly, with no extra round trip to the server — the
 backend response already includes each egg's raw pixel measurements, not
 just a size code, specifically so the frontend can do this.
+
+### 20.1 Addendum: nesting-box calibration and a trainable model (v1.31.0)
+
+Two changes on top of the above, developed together: the coin is dropped
+entirely in favor of measuring against a registered nesting box's known
+inside width, and the previously-fixed thresholds (`EGG_MAX_ASPECT`,
+`EGG_SIZE_MM_BOUNDS`) can now be replaced by models trained on this
+install's own corrections. Both are reconciled with the original design's
+stated philosophy below, not abandonments of it.
+
+**Why the coin was dropped, not kept as a fallback.** The coin design
+assumed a physical object the user places in every shot. In practice the
+camera is handheld (not fixed), and the thing that's *always* in every
+photo already — because you're photographing eggs inside it — is the
+nesting box itself. Once the box's own edges are usable as the scale
+reference, a coin adds a physical-object dependency for no remaining
+benefit, so it was removed rather than kept as a second code path.
+
+**Why width-only, not a full 4-corner perspective correction.** A box's
+two facing side walls give one linear scale factor
+(`pixels_per_mm = (right_wall_x − left_wall_x) / box.width_mm`), the same
+shape of math the coin's diameter gave — deliberately chosen over a full
+`cv2.getPerspectiveTransform` 4-corner homography (which would also
+correct for a tilted/angled photo) because it's simpler to detect, drag,
+and reason about, at the honest cost of no tilt correction — stated in
+DOCS.md. `_detect_box_walls` (`app.py`) finds this via the largest
+sufficiently-large, non-degenerate contour's bounding rectangle, trying
+both polarities of the Otsu split and rejecting near-full-frame results
+(almost always the image border itself, not the box) — unlike a coin,
+which is always a small minority-area blob, a box typically *dominates*
+the frame, so the "smaller class is the object of interest" assumption
+`_extract_egg_candidates` relies on doesn't hold for box detection itself.
+
+**Why egg detection crops to the box interior first
+(`_crop_to_box`).** With three brightness levels in one photo
+(background / box / eggs), a single global Otsu split can lump the box
+and eggs into the same class against a much smaller background class,
+breaking the coin-era assumption that eggs are reliably the minority-area
+dark class. Cropping to the detected box bounds before running
+`_extract_egg_candidates` restores a clean two-class (box floor vs. egg)
+scene — and is the semantically correct thing to do anyway, since there's
+no reason to look for eggs outside the box.
+
+**Why a trainable model now, despite §20's "no model weights, explainable"
+reasoning above — and why scikit-learn, not a CNN.** The original
+reasoning holds for the *default*: the shipped, versioned code is still
+100% deterministic classical CV, and nothing changes for any install
+unless a user opts in (`egg_vision_training_enabled`), collects samples,
+and explicitly trains. What a trained model adds is personalization a
+fixed global formula can't: `EGG_MAX_ASPECT` and `EGG_SIZE_MM_BOUNDS` are
+one-size-fits-all constants, while a model fit on *this* install's own
+corrected photos can adapt to this flock's actual eggs and this camera's
+quirks. A full CNN was considered and rejected — not for hardware reasons
+in this case (the add-on may run on capable x86_64 hardware), but because
+there's no benefit to one here: the input features are already a handful
+of interpretable numbers (`area_fraction`, `aspect_ratio`, `extent`,
+`solidity`, `width_mm`) extracted by the existing classical CV pass, not
+raw pixels — a linear/logistic model over hand-crafted features is not a
+capability-limited stand-in for a CNN, it's the appropriately-sized tool
+for a low-dimensional, small-dataset (a few hundred rows) classification
+problem. scikit-learn (`LogisticRegression`) was chosen over hand-rolling
+gradient descent in numpy purely for implementation simplicity — numpy
+was already a transitive dependency either way, so this was a
+build-vs-buy call, not a capability one. Models are trained on-demand
+(`POST /api/vision/train`), each gated independently on having enough
+labeled examples (`EGG_VISION_MIN_CLASSIFIER_POS/NEG`,
+`EGG_VISION_MIN_SIZE_SAMPLES`), and stored as pickled blobs in
+`egg_vision_models` (at most one row — training does `DELETE` then
+`INSERT`). Pickling a scikit-learn model is a step back from the
+original "plain floats, no opaque blobs" ethos — accepted here since the
+blob is entirely internally generated and read back by this same app,
+never loaded from an untrusted source, and the `EGG_MAX_AREA_FRACTION`
+hard ceiling still always applies regardless of any trained model, as an
+explicit guard against extrapolating past the training distribution.
+
+**Why training re-extracts candidates from the stored photo rather than
+trusting the stored detection.** `_train_egg_vision_models` re-runs
+`_extract_egg_candidates` against each sample's photo and matches the
+result to the user's corrected eggs (`_match_candidate`, nearest-center
+within a size-scaled tolerance) — a matched candidate becomes a positive
+example, an unmatched one becomes a negative. This is how *both* the old
+fixed heuristic's rejections *and* the user's explicit chip-✕ removals
+surface as classifier negatives the same way, deterministically (Otsu and
+contours have no randomness), guaranteeing the model trains on exactly
+the feature distribution it's later applied against — never a drift risk
+between "what was logged" and "what the CV pass would produce today".
+Eggs the user placed via **+ Add egg** (no matching contour — a genuinely
+missed detection) still teach the size model from the placed ellipse
+geometry directly, but are excluded from the egg/not-egg classifier:
+there's no real contour shape signal (`extent`/`solidity`) to trust for a
+blob the CV pass never actually detected.
+
+**Why box identification is a color-histogram classifier, not a coin- or
+box-corner–style geometric detector.** Telling two visually-similar boxes
+apart isn't a "find this shape" problem the way a coin or a box's own
+walls are — it's "which of N known appearances does this most resemble",
+so `_box_id_features` extracts a coarse 48-number HSV color histogram
+(down-sampled to 64×64 first) and `_train_egg_vision_models` fits a
+multinomial `LogisticRegression` over `box_id` labels, once at least two
+boxes each have `EGG_VISION_BOX_ID_MIN_SAMPLES_PER_BOX` samples — with
+only one registered box there's nothing to disambiguate, so no classifier
+is trained or needed at all (`_resolve_egg_vision_box` short-circuits).
+`predict_proba`'s max confidence is checked against
+`EGG_VISION_BOX_ID_CONFIDENCE_THRESHOLD` before trusting a guess; below
+that, `POST /api/vision/eggs` returns `status: "confirm_box"` with
+candidate boxes for the user to pick from (or register a new one) rather
+than silently miscalibrating against the wrong box's width — the same
+"never authoritative, always correctable" posture the coin's auto-detected
+position always had.
+
+**Why the setup wizard's stopping rule is "N correct in a row", not a
+fixed photo count.** A fixed count (e.g. "take 5 photos") proves nothing
+about whether the model has actually converged — it could get lucky once
+or need many more attempts on a harder box. Requiring
+`EGG_VISION_WIZARD_STREAK_TARGET` (3) consecutive photos that need *zero*
+corrections, with the model retrained after every single photo
+(`app.js`'s `submitWizardSample`), demonstrates the model is reliably
+right under its own steam, not just agreeable by chance — capped at
+`EGG_VISION_WIZARD_MAX_ATTEMPTS` (30) so a box that never converges
+(e.g. genuinely poor lighting) still ends the loop rather than trapping
+the user. These are client-side UX pacing constants only, mirrored (not
+shared) between `app.py` and `app.js` — the server doesn't enforce a
+streak itself, it just answers "what would the current model say about
+this photo" each time, same as any other analysis request.
+
+**Judgment calls worth revisiting if they feel wrong in practice:** the
+box-ID classifier and the egg classifier/size model are trained together
+in one `POST /api/vision/train` call rather than on independent triggers
+— simpler, at the cost of retraining components that didn't need it;
+`egg_vision_models` stores one global egg classifier/size model shared
+across all boxes (its features are already box-agnostic by the time
+`width_mm` is computed, so splitting per box would fragment an
+already-small dataset for no accuracy benefit — but this hasn't been
+validated against a real multi-box, visually-different-egg-stock
+install); and "Clear training data" deletes stored photos but leaves an
+already-trained model intact (a trained model is a few hundred numbers,
+not privacy-sensitive or storage-heavy the way raw photos are — the same
+call the original `20.1` design made, restated here since it's genuinely
+a preference, not a forced consequence).

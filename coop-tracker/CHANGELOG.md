@@ -1,5 +1,32 @@
 # Changelog
 
+## 1.31.0
+
+- **Egg photo counting & sizing now measures against a nesting box
+  instead of a coin.** Set up a nesting box (name + inside width) from
+  the ⚙️ settings sheet or straight from the Log Eggs photo button, and
+  the add-on measures eggs against the box's own side walls — no more
+  placing a coin in every shot. Register more than one box and the app
+  tries to recognize which one is in each photo automatically, asking
+  you to confirm (or add a new box) only when it isn't confident.
+  Setting up a box walks you through a short guided round of photos so
+  it can learn to spot that box's edges reliably. As before, width-based
+  sizing is an approximation of real weight-based grading, and — new in
+  this release — measurement doesn't correct for a tilted/angled photo,
+  so aim for roughly square-on shots. `egg_vision_coin_diameter_mm` is
+  removed; existing coin-calibrated installs will need to set up a box
+  the next time they use this feature.
+- New **optional trainable model** for egg counting & sizing (off by
+  default — enable with **egg_vision_training_enabled**): when on, each
+  reviewed photo and your corrections are stored on-device, and a
+  **Train now** button (in the ⚙️ settings sheet, once ~25 corrections
+  are collected) fits small models — replacing the fixed detection
+  cutoff and size-bucket formula with ones learned from your own flock,
+  camera, and lighting. Nothing changes until you opt in and train;
+  storage is capped (**egg_vision_training_retention_count**, default
+  200) and clearable at any time. Enabling this increases the size of
+  Backup & Restore's `.db` file, since stored photos travel with it.
+
 ## 1.30.1
 
 - No user-facing changes. Added diagnostic logging around Supervisor

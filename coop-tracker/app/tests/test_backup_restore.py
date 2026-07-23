@@ -51,6 +51,40 @@ def test_restore_round_trip_preserves_entries(client, tmp_path, monkeypatch):
     assert entries[0]["notes"] == "before restore"
 
 
+def test_restore_round_trip_preserves_nesting_boxes_and_training_samples(client, tmp_path, monkeypatch, conn):
+    box_id = client.post("/api/nesting-boxes", json={"name": "Coop A", "width_mm": 320}).get_json()["id"]
+    conn.execute(
+        "INSERT INTO egg_vision_samples (created_at, photo, image_width, image_height, box_id, "
+        "original_detection, corrected_result) VALUES ('2024-01-01', ?, 100, 100, ?, '{}', '{}')",
+        (b"fake-jpeg-bytes", box_id),
+    )
+    conn.commit()
+    backup_bytes = client.get("/api/backup").data
+
+    fresh_db = str(tmp_path / "fresh.db")
+    monkeypatch.setattr(coopapp, "DB_PATH", fresh_db)
+    coopapp.init_db()
+
+    res = client.post(
+        "/api/restore",
+        data={"file": (io.BytesIO(backup_bytes), "backup.db")},
+        content_type="multipart/form-data",
+    )
+    assert res.status_code == 200
+
+    boxes = client.get("/api/nesting-boxes").get_json()
+    assert len(boxes) == 1
+    assert boxes[0]["name"] == "Coop A"
+
+    restored_conn = coopapp._db_connect_standalone()
+    try:
+        row = restored_conn.execute("SELECT photo, box_id FROM egg_vision_samples").fetchone()
+        assert row["photo"] == b"fake-jpeg-bytes"
+        assert row["box_id"] == box_id
+    finally:
+        restored_conn.close()
+
+
 def test_restore_backfills_columns_from_older_schema(client, tmp_path):
     # Simulate a backup taken before price/cost/category existed (pre-1.3.0).
     old_backup = tmp_path / "old.db"

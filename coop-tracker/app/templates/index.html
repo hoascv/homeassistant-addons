@@ -231,19 +231,71 @@
 
 <div class="sheet-backdrop" id="egg-vision-backdrop">
   <div class="sheet">
-    <h2>Count &amp; size from a photo</h2>
-    <div class="egg-vision-canvas-wrap" id="egg-vision-canvas-wrap" hidden>
-      <img id="egg-vision-photo" alt="">
-      <canvas id="egg-vision-overlay"></canvas>
+    <h2 id="egg-vision-title">Count &amp; size from a photo</h2>
+
+    <div id="egg-vision-no-box">
+      <p class="sheet-subtext">
+        You haven't set up a nesting box yet. Set one up once — the app
+        learns to spot its edges instead of needing a coin in every photo.
+      </p>
+      <button type="button" class="btn-primary sheet-link-btn" id="egg-vision-setup-box-btn">
+        Set up a nesting box
+      </button>
+      <div class="sheet-actions">
+        <button type="button" class="btn-secondary" id="egg-vision-no-box-cancel-btn">Cancel</button>
+      </div>
     </div>
-    <p class="trends-forecast-caption" id="egg-vision-status-msg"></p>
-    <div class="egg-vision-chips" id="egg-vision-chips"></div>
-    <div class="sheet-actions">
-      <button type="button" class="link-btn" id="egg-vision-add-egg">+ Add egg</button>
+
+    <div id="egg-vision-confirm-box" hidden>
+      <p class="sheet-subtext" id="egg-vision-confirm-box-msg">Which nesting box is this?</p>
+      <ul class="notify-services-list" id="egg-vision-box-candidates"></ul>
+      <button type="button" class="link-btn" id="egg-vision-new-box-btn">It's a new box</button>
+      <div class="sheet-actions">
+        <button type="button" class="btn-secondary" id="egg-vision-confirm-box-cancel-btn">Cancel</button>
+      </div>
     </div>
+
+    <div id="egg-vision-review" hidden>
+      <p class="sheet-subtext" id="egg-vision-wizard-progress" hidden></p>
+      <div class="egg-vision-canvas-wrap" id="egg-vision-canvas-wrap" hidden>
+        <img id="egg-vision-photo" alt="">
+        <canvas id="egg-vision-overlay"></canvas>
+      </div>
+      <p class="trends-forecast-caption" id="egg-vision-status-msg"></p>
+      <div class="egg-vision-chips" id="egg-vision-chips"></div>
+      <div class="sheet-actions">
+        <button type="button" class="link-btn" id="egg-vision-add-egg">+ Add egg</button>
+      </div>
+      <div class="sheet-actions">
+        <button type="button" class="btn-secondary" id="egg-vision-cancel-btn">Cancel</button>
+        <button type="button" class="btn-primary" id="egg-vision-use-btn">Use these results</button>
+        <button type="button" class="btn-primary" id="egg-vision-wizard-next-btn" hidden>Take another photo</button>
+        <button type="button" class="btn-secondary" id="egg-vision-wizard-finish-btn" hidden>Finish</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="sheet-backdrop" id="box-setup-backdrop">
+  <div class="sheet">
+    <h2>Set up a nesting box</h2>
+    <p class="sheet-subtext">
+      Enter the box's inside width — the app measures eggs against this
+      instead of needing a coin placed in every photo. You'll then take a
+      few photos so it can learn to spot this box's edges reliably.
+    </p>
+    <div class="field">
+      <label>Box name</label>
+      <input type="text" id="box-setup-name" placeholder="e.g. Coop A">
+    </div>
+    <div class="field">
+      <label>Inside width (cm)</label>
+      <input type="number" id="box-setup-width" step="0.5" min="1" placeholder="e.g. 32">
+    </div>
+    <p class="sheet-subtext" id="box-setup-error"></p>
     <div class="sheet-actions">
-      <button type="button" class="btn-secondary" id="egg-vision-cancel-btn">Cancel</button>
-      <button type="button" class="btn-primary" id="egg-vision-use-btn">Use these results</button>
+      <button type="button" class="btn-secondary" id="box-setup-cancel-btn">Cancel</button>
+      <button type="button" class="btn-primary" id="box-setup-continue-btn">Continue</button>
     </div>
   </div>
 </div>
@@ -273,6 +325,35 @@
       <input type="file" id="restore-file" accept=".db">
     </div>
     <button type="button" class="btn-secondary sheet-link-btn" id="restore-btn">Restore</button>
+
+    <div class="field">
+      <label>Nesting boxes</label>
+      <ul class="notify-services-list" id="nesting-boxes-list"></ul>
+      <button type="button" class="link-btn" id="nesting-boxes-add-btn">+ Add a nesting box</button>
+    </div>
+
+    <div class="field">
+      <label>Egg-vision training (optional)</label>
+      <p class="sheet-subtext">
+        Off by default. When on, each photo you review and save also
+        stores that photo on-device so a "Train now" model can learn this
+        install's own corrections. See the app's documentation for what's
+        stored and how to clear it.
+      </p>
+      <div class="summary summary-secondary">
+        <div class="stat-small">
+          <span class="stat-small-label">Data collection</span>
+          <span class="stat-small-value" id="training-enabled-value">–</span>
+        </div>
+        <div class="stat-small">
+          <span class="stat-small-label">Samples collected</span>
+          <span class="stat-small-value" id="training-sample-count">–</span>
+        </div>
+      </div>
+      <button type="button" class="btn-secondary sheet-link-btn" id="training-train-btn">Train now</button>
+      <p class="sheet-subtext" id="training-train-result"></p>
+      <button type="button" class="btn-secondary sheet-link-btn" id="training-clear-btn">Clear training data</button>
+    </div>
 
     <div class="sheet-actions">
       <button type="button" class="btn-secondary" id="backup-close-btn">Close</button>
@@ -441,7 +522,7 @@
   window.EGG_VISION = {
     enabled: {{ egg_vision_enabled | tojson }},
     available: {{ egg_vision_available | tojson }},
-    coinDiameterMm: {{ egg_vision_coin_diameter_mm }}
+    trainingEnabled: {{ egg_vision_training_enabled | tojson }}
   };
 </script>
 <script src="static/app.js?v={{ app_version }}"></script>

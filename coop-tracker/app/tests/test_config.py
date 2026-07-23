@@ -58,11 +58,22 @@ def test_options_missing_file_returns_defaults(options_path):
 
 def test_egg_vision_config_defaults(options_path):
     cfg = coopapp.get_egg_vision_config()
-    assert cfg == {"enabled": False, "coin_diameter_mm": 24.5}
+    assert cfg == {"enabled": False}
 
 
 def test_egg_vision_config_overrides(set_options):
-    set_options(egg_vision_enabled=True, egg_vision_coin_diameter_mm=21.21)
+    set_options(egg_vision_enabled=True)
     cfg = coopapp.get_egg_vision_config()
     assert cfg["enabled"] is True
-    assert cfg["coin_diameter_mm"] == 21.21
+
+
+def test_egg_vision_training_config_defaults(options_path):
+    cfg = coopapp.get_egg_vision_training_config()
+    assert cfg == {"enabled": False, "retention_count": 200}
+
+
+def test_egg_vision_training_config_overrides(set_options):
+    set_options(egg_vision_training_enabled=True, egg_vision_training_retention_count=50)
+    cfg = coopapp.get_egg_vision_training_config()
+    assert cfg["enabled"] is True
+    assert cfg["retention_count"] == 50

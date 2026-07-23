@@ -52,11 +52,22 @@ def test_my_flock_opens_with_seeded_breeds(page, app_server):
 
 def test_log_egg_via_photo_smoke(page, app_server, app_server_options_path):
     debug = json.loads(urllib.request.urlopen(f"{app_server}/api/debug").read())
-    if not debug["opencv_available"]:
-        pytest.skip("opencv not installed in this environment")
+    if not debug["opencv_available"] or not debug["sklearn_available"]:
+        pytest.skip("opencv/sklearn not installed in this environment")
 
     with open(app_server_options_path, "w") as f:
-        json.dump({"egg_vision_enabled": True, "egg_vision_coin_diameter_mm": 24.5}, f)
+        json.dump({"egg_vision_enabled": True}, f)
+
+    # The fixture photo's box interior spans (80,40)-(1120,860) — the
+    # exact width_mm doesn't matter for this smoke test (only chip count
+    # and the final save are asserted), just that a box exists so
+    # analysis doesn't stop at "no_boxes_registered".
+    req = urllib.request.Request(
+        f"{app_server}/api/nesting-boxes",
+        data=json.dumps({"name": "Smoke Test Box", "width_mm": 320}).encode(),
+        headers={"Content-Type": "application/json"},
+    )
+    urllib.request.urlopen(req)
 
     page.goto(app_server)  # fresh nav: window.EGG_VISION is set at render time from options
     page.click('.action-btn[data-action="egg"]')
