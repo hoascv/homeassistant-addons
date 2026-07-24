@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<title>Gym Tracker</title>
+<link rel="stylesheet" href="static/style.css?v={{ app_version }}">
+</head>
+<body>
+<header class="topbar">
+  <span class="topbar-icon">💪</span>
+  <h1>Gym Tracker</h1>
+  <button type="button" class="ha-status-dot" id="ha-status-dot" aria-label="Home Assistant connection status"></button>
+  <button class="topbar-icon-btn" id="exercises-open-btn" aria-label="Exercises">🏋️</button>
+  <button class="topbar-icon-btn" id="reminders-open-btn" aria-label="Reminders">🔔</button>
+  <button class="topbar-icon-btn" id="settings-open-btn" aria-label="Settings">⚙️</button>
+</header>
+
+<main class="page">
+  <!-- Goal progress -->
+  <section class="card" id="goal-card">
+    <div class="card-head">
+      <h2>Goal</h2>
+      <span class="pill" id="goal-days">–</span>
+    </div>
+
+    <div class="progress-row">
+      <div class="progress-labels">
+        <span class="progress-name">Weight</span>
+        <span class="progress-value"><strong id="weight-current">–</strong> <span id="weight-target" class="muted"></span></span>
+      </div>
+      <div class="bar"><div class="bar-fill" id="weight-bar"></div></div>
+    </div>
+
+    <div class="progress-row">
+      <div class="progress-labels">
+        <span class="progress-name">Body fat</span>
+        <span class="progress-value"><strong id="bf-current">–</strong> <span id="bf-target" class="muted"></span></span>
+      </div>
+      <div class="bar"><div class="bar-fill bar-fill-alt" id="bf-bar"></div></div>
+    </div>
+
+    <div class="mini-stats">
+      <div class="mini-stat"><span class="mini-value" id="lean-mass">–</span><span class="mini-label">Lean mass</span></div>
+      <div class="mini-stat"><span class="mini-value" id="weight-remaining">–</span><span class="mini-label">To target</span></div>
+    </div>
+
+    <figure class="chart-figure" id="weight-chart-figure">
+      <figcaption>Weight over time <span class="muted" id="chart-target-note"></span></figcaption>
+      <div id="weight-chart" class="weight-chart"></div>
+    </figure>
+
+    <button type="button" class="btn-primary full" id="log-weight-btn">Log weight</button>
+  </section>
+
+  <!-- Daily challenge -->
+  <section class="card" id="challenge-card">
+    <div class="card-head">
+      <h2>Daily challenge</h2>
+      <span class="pill pill-streak" id="challenge-streak">🔥 0</span>
+    </div>
+    <ul class="challenge-list" id="challenge-list"></ul>
+    <div class="week-dots" id="challenge-week"></div>
+    <div class="card-actions">
+      <button type="button" class="link-btn" id="challenge-manage-btn">Edit items</button>
+    </div>
+  </section>
+
+  <!-- Recent workouts -->
+  <section class="card" id="recent-card">
+    <div class="card-head">
+      <h2>Recent workouts</h2>
+      <button type="button" class="link-btn" id="log-workout-btn">Log a set</button>
+    </div>
+    <ul class="workout-list" id="recent-workout-list"></ul>
+    <p class="empty-state" id="recent-workout-empty" hidden>No workouts logged yet.</p>
+  </section>
+</main>
+
+<!-- Weight sheet -->
+<div class="sheet-backdrop" id="weight-backdrop">
+  <div class="sheet sheet-full">
+    <h2>Weight history</h2>
+    <form id="weight-form" class="inline-form">
+      <input type="hidden" id="weight-form-id">
+      <div class="field-row">
+        <label>Weight (kg)<input type="number" step="0.1" id="weight-form-kg" required></label>
+        <label>Body fat (%)<input type="number" step="0.1" id="weight-form-bf" placeholder="optional"></label>
+      </div>
+      <div class="field-row">
+        <label>Date<input type="date" id="weight-form-date"></label>
+        <label>Note<input type="text" id="weight-form-notes" placeholder="optional"></label>
+      </div>
+      <div class="form-actions">
+        <button type="button" class="btn-secondary" id="weight-form-cancel" hidden>Cancel edit</button>
+        <button type="submit" class="btn-primary" id="weight-form-save">Add</button>
+      </div>
+    </form>
+    <ul class="history-list" id="weight-history"></ul>
+    <div class="sheet-actions">
+      <button type="button" class="btn-secondary" id="weight-close-btn">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- Exercises sheet -->
+<div class="sheet-backdrop" id="exercises-backdrop">
+  <div class="sheet sheet-full">
+    <h2>Exercises</h2>
+    <p class="sheet-subtext">Your home exercise library, grouped by equipment. Add your own as you get new gear, and tap an exercise to log a set.</p>
+    <form id="exercise-form" class="inline-form">
+      <div class="field-row">
+        <label>New exercise<input type="text" id="exercise-form-name" placeholder="e.g. Kettlebell swing"></label>
+        <label>Equipment<input type="text" id="exercise-form-equipment" placeholder="e.g. Kettlebell" list="equipment-list"></label>
+      </div>
+      <datalist id="equipment-list"></datalist>
+      <div class="form-actions">
+        <button type="submit" class="btn-primary">Add exercise</button>
+      </div>
+    </form>
+    <div id="exercises-groups"></div>
+    <div class="sheet-actions">
+      <button type="button" class="btn-secondary" id="exercises-close-btn">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- Log-set sheet -->
+<div class="sheet-backdrop" id="workout-backdrop">
+  <div class="sheet">
+    <h2 id="workout-title">Log a set</h2>
+    <form id="workout-form" class="inline-form">
+      <label class="full-label">Exercise
+        <select id="workout-form-exercise"></select>
+      </label>
+      <div class="field-row">
+        <label>Sets<input type="number" id="workout-form-sets" min="0" placeholder="3"></label>
+        <label>Reps<input type="number" id="workout-form-reps" min="0" placeholder="40"></label>
+      </div>
+      <div class="field-row">
+        <label>Weight (kg)<input type="number" step="0.5" id="workout-form-weight" placeholder="optional"></label>
+        <label>Duration (s)<input type="number" id="workout-form-duration" placeholder="optional"></label>
+      </div>
+      <label class="full-label">Note<input type="text" id="workout-form-notes" placeholder="optional"></label>
+      <div class="form-actions">
+        <button type="button" class="btn-secondary" id="workout-form-cancel">Cancel</button>
+        <button type="submit" class="btn-primary">Save set</button>
+      </div>
+    </form>
+    <h3 class="subhead">Recent history</h3>
+    <ul class="workout-list" id="workout-history"></ul>
+  </div>
+</div>
+
+<!-- Challenge-items management sheet -->
+<div class="sheet-backdrop" id="challenge-items-backdrop">
+  <div class="sheet">
+    <h2>Challenge items</h2>
+    <p class="sheet-subtext">Edit the checklist you complete each day. Removing an item keeps your past streak intact.</p>
+    <ul class="items-list" id="challenge-items-list"></ul>
+    <form id="challenge-item-form" class="inline-form">
+      <div class="field-row">
+        <label class="grow">Add item<input type="text" id="challenge-item-input" placeholder="e.g. 10 min stretch"></label>
+        <button type="submit" class="btn-primary">Add</button>
+      </div>
+    </form>
+    <div class="sheet-actions">
+      <button type="button" class="btn-secondary" id="challenge-items-close-btn">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- Reminders sheet -->
+<div class="sheet-backdrop" id="reminders-backdrop">
+  <div class="sheet">
+    <h2>Reminders</h2>
+    <p class="sheet-subtext">
+      Gym Tracker can nudge you through a Home Assistant notify service. Turn each
+      reminder on and set its time on the add-on's <strong>Configuration</strong> tab;
+      this screen shows their current status and lets you send a test.
+    </p>
+    <div class="reminder-status" id="reminder-status"></div>
+    <label class="full-label">Notify service
+      <select id="notify-service-select"></select>
+    </label>
+    <p class="sheet-subtext" id="notify-hint"></p>
+    <div class="form-actions">
+      <button type="button" class="btn-primary" id="notify-test-btn">Send test notification</button>
+    </div>
+    <p class="result-line" id="notify-test-result"></p>
+    <div class="sheet-actions">
+      <button type="button" class="btn-secondary" id="reminders-close-btn">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- Settings sheet -->
+<div class="sheet-backdrop" id="settings-backdrop">
+  <div class="sheet sheet-full">
+    <h2>Settings</h2>
+
+    <h3 class="subhead">Goal</h3>
+    <form id="goal-form" class="inline-form">
+      <div class="field-row">
+        <label>Target weight (kg)<input type="number" step="0.1" id="goal-form-weight" required></label>
+        <label>Target body fat (%)<input type="number" step="0.1" id="goal-form-bf" required></label>
+      </div>
+      <div class="field-row">
+        <label>Target date<input type="date" id="goal-form-date" required></label>
+        <label>Start weight (kg)<input type="number" step="0.1" id="goal-form-start-weight"></label>
+      </div>
+      <div class="form-actions">
+        <button type="submit" class="btn-primary">Save goal</button>
+      </div>
+      <p class="result-line" id="goal-form-result"></p>
+    </form>
+
+    <h3 class="subhead">Backup &amp; restore</h3>
+    <p class="sheet-subtext">Download the whole database as a file, or restore one you saved earlier.</p>
+    <div class="form-actions">
+      <a class="btn-secondary" id="backup-download-btn" href="api/backup">Download backup</a>
+      <label class="btn-secondary file-label">Restore…<input type="file" id="restore-input" accept=".db" hidden></label>
+    </div>
+    <p class="result-line" id="restore-result"></p>
+
+    <h3 class="subhead">Access</h3>
+    <p class="sheet-subtext">Your Home Assistant user ID (for the <code>restrict_to_user_ids</code> option):</p>
+    <p class="user-id" id="user-id">–</p>
+
+    <div class="sheet-actions">
+      <button type="button" class="btn-secondary" id="settings-close-btn">Close</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast" hidden></div>
+
+<script>
+  window.GYM = {
+    goal: {{ goal | tojson }},
+    challengeReminderEnabled: {{ challenge_reminder_enabled | tojson }},
+    weighinReminderEnabled: {{ weighin_reminder_enabled | tojson }}
+  };
+</script>
+<script src="static/app.js?v={{ app_version }}"></script>
+</body>
+</html>

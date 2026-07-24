@@ -7,6 +7,9 @@ Personal Home Assistant add-on repository.
 - **[Coop Tracker](coop-tracker/DOCS.md)** — log egg collection, coop
   cleaning, and feeding for your chickens from your phone.
   ([architecture](coop-tracker/ARCHITECTURE.md))
+- **[Gym Tracker](gym-tracker/DOCS.md)** — track a weight / body-fat goal,
+  home workouts, and a daily challenge, with reminders through a Home
+  Assistant notify service.
 
 ## Installing this repository
 
@@ -14,16 +17,17 @@ Personal Home Assistant add-on repository.
 2. Click the **⋮** menu (top right) → **Repositories**.
 3. Add the URL of this repository (once pushed to a Git host, e.g.
    `https://github.com/hoascv/homeassistant-addons`).
-4. Find **Coop Tracker** in the store and install it.
+4. Find **Coop Tracker** or **Gym Tracker** in the store and install it.
 
 ### Testing locally without Git
 
 If your Home Assistant host exposes a `/addons` share (e.g. via the Samba or
-SSH & Web Terminal add-on), copy the `coop-tracker` folder there directly:
+SSH & Web Terminal add-on), copy an add-on's folder there directly:
 
 ```
 /addons/coop-tracker/
+/addons/gym-tracker/
 ```
 
 Then go to **Settings → Add-ons → Add-on Store**, click **⋮ → Check for
-updates**, and **Coop Tracker** will appear under "Local add-ons".
+updates**, and the add-on will appear under "Local add-ons".

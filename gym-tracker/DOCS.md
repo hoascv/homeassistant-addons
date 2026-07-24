@@ -1,0 +1,106 @@
+# Gym Tracker
+
+Track a body-weight / body-fat goal, home workouts, and a daily challenge —
+from your phone, through Home Assistant's sidebar (ingress). Everything is
+stored locally in the add-on's own SQLite database; nothing leaves your
+Home Assistant instance.
+
+## The goal
+
+Set a **target weight**, **target body-fat %**, and a **target date** in the
+⚙️ settings sheet. The home screen then shows:
+
+- A **weight** progress bar from your starting point to the target.
+- A **body-fat** progress bar toward the target %.
+- Your **lean mass** (computed from weight and body-fat, when you log a
+  body-fat reading).
+- **Days remaining** until the target date.
+- A **weight chart** over time with a horizontal line marking the target.
+
+The add-on ships seeded for a bulk / recomposition goal — starting at
+**99.7 kg on 3 Jul 2026**, targeting **105 kg at 15 % body fat by
+28 Dec 2026** — so gaining weight and lowering body-fat both read as
+progress. Change any of it in settings.
+
+All weights are in **kilograms**.
+
+## Logging weight
+
+Tap **Log weight** on the home screen. Enter your weight and, optionally, a
+body-fat percentage and a note. The weight sheet lists every reading and
+lets you edit or delete past entries.
+
+## The daily challenge
+
+The challenge is a checklist you complete each day. It starts as:
+
+- Creatine 5 g
+- 40 push-ups
+- 40 squats
+
+Tick each item off as you do it. A **streak** counts the consecutive days
+on which you completed *every* active item. The items are fully editable —
+change the amounts, remove one, or add your own — in the challenge card.
+
+## Exercises and workouts
+
+The 🏋️ exercises sheet is a library of home exercises grouped by the
+equipment they need:
+
+- **Bodyweight** — push-up, squat, lunge, plank, glute bridge, and more.
+- **Pull-up bar** — pull-up, chin-up, hanging knee raise.
+- **Dumbbells** — curl, shoulder press, floor bench press, row, goblet
+  squat, Romanian deadlift, lateral raise.
+
+Add your own exercises as you buy new equipment. Tap an exercise to **log a
+set** (sets × reps, with optional weight or duration); each exercise keeps a
+short history of what you logged.
+
+## Reminders
+
+Gym Tracker can send two reminders through a Home Assistant **notify
+service** (e.g. a mobile-app notification). Both are **off by default** and
+configured on the add-on's **Configuration** tab:
+
+- **Challenge reminder** — a daily nudge at `challenge_reminder_time`. It
+  only fires if you haven't already completed the whole challenge that day.
+- **Weigh-in reminder** — fires weekly on `weighin_reminder_weekday` at
+  `weighin_reminder_time`, and is skipped if you already logged a weight
+  that day.
+
+Set **notify_service** to the service name to use (without the `notify.`
+prefix, e.g. `mobile_app_pixel`). The in-app 🔔 reminders sheet shows the
+current status, lets you pick from your available notify services, and can
+send a **test** notification.
+
+## Configuration
+
+- **notify_service**: the Home Assistant notify service used for reminders,
+  without the `notify.` prefix (e.g. `mobile_app_myphone`). Leave empty to
+  disable all notifications.
+- **challenge_reminder_enabled**: turn the daily challenge reminder on/off.
+- **challenge_reminder_time**: 24-hour `HH:MM` time for the challenge
+  reminder (default `18:00`).
+- **weighin_reminder_enabled**: turn the weekly weigh-in reminder on/off.
+- **weighin_reminder_weekday**: the day of the week the weigh-in reminder
+  fires (default `sunday`).
+- **weighin_reminder_time**: 24-hour `HH:MM` time for the weigh-in reminder
+  (default `08:00`).
+- **restrict_to_user_ids**: comma-separated Home Assistant user IDs allowed
+  to open the add-on. Empty (default) means any user who can see the
+  sidebar entry may use it. Find your own user ID in the ⚙️ settings sheet.
+
+## Backup & restore
+
+The ⚙️ settings sheet can **download a backup** of the whole database (a
+`.db` file) and **restore** one you previously downloaded. Home Assistant's
+own scheduled backups also include this add-on's data automatically.
+
+## Access control
+
+By default only Home Assistant **admin** users see the add-on in their
+sidebar. To restrict further to specific people, add their user IDs to
+**restrict_to_user_ids** (comma-separated). Everyone else gets an
+"access restricted" page. Add your own ID — shown in the settings sheet —
+before restricting, so you don't lock yourself out (recoverable by clearing
+the option on the Configuration tab).
