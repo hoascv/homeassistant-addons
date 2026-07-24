@@ -447,17 +447,28 @@ document.getElementById("challenge-items-list").addEventListener("change", async
 
 document.getElementById("challenge-history-btn").addEventListener("click", () => {
   openSheet("challenge-history-backdrop");
+  // Default to the last two weeks; the user widens "From" to backfill older.
+  const to = new Date();
+  const from = new Date();
+  from.setDate(from.getDate() - 13);
+  document.getElementById("history-to").value = to.toISOString().slice(0, 10);
+  document.getElementById("history-from").value = from.toISOString().slice(0, 10);
   loadChallengeHistory();
 });
 document.getElementById("challenge-history-close-btn").addEventListener("click", () => {
   closeSheet("challenge-history-backdrop");
   loadChallenge();
 });
+document.getElementById("history-from").addEventListener("change", loadChallengeHistory);
+document.getElementById("history-to").addEventListener("change", loadChallengeHistory);
 
 async function loadChallengeHistory() {
   const host = document.getElementById("history-grid");
+  const from = document.getElementById("history-from").value;
+  const to = document.getElementById("history-to").value;
+  const qs = from && to ? `from=${from}&to=${to}` : "days=14";
   let data;
-  try { data = await fetchJSON("api/challenge/history?days=14"); } catch (e) { return; }
+  try { data = await fetchJSON(`api/challenge/history?${qs}`); } catch (e) { return; }
   const items = data.items || [];
   host.innerHTML = data.days
     .map((d) => {

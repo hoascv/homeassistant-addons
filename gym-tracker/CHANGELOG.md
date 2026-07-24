@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.2.1
+
+- **Backfill any past day.** The challenge **History** view now has
+  **From**/**To** date pickers, so you can look back past the default two
+  weeks and tick off older days — handy for importing records you kept
+  elsewhere. Range is capped at about a year at a time.
+
 ## 1.2.0
 
 - **Weight forecast.** The goal card now projects your weigh-in trend to the

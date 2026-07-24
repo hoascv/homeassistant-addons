@@ -223,7 +223,11 @@
 <div class="sheet-backdrop" id="challenge-history-backdrop">
   <div class="sheet sheet-full">
     <h2>Challenge history</h2>
-    <p class="sheet-subtext">Tap any dot to mark that day's item done or not — useful for backfilling or fixing your streak.</p>
+    <p class="sheet-subtext">Tap any dot to mark that day's item done or not. To backfill older records, set <strong>From</strong> back to when your data starts.</p>
+    <div class="field-row history-range">
+      <label>From<input type="date" id="history-from"></label>
+      <label>To<input type="date" id="history-to"></label>
+    </div>
     <div class="history-grid" id="history-grid"></div>
     <div class="sheet-actions">
       <button type="button" class="btn-secondary" id="challenge-history-close-btn">Close</button>

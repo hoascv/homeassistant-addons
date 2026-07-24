@@ -15,7 +15,7 @@ from datetime import date, datetime, time as dtime, timedelta
 
 from flask import Flask, Response, g, jsonify, render_template, request, send_file
 
-APP_VERSION = "1.2.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.2.1"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("GYM_DB_PATH", "/data/gym.db")
 OPTIONS_PATH = os.environ.get("GYM_OPTIONS_PATH", "/data/options.json")
@@ -1313,29 +1313,53 @@ def api_update_challenge_item(item_id):
 
 @app.route("/api/challenge/history")
 def api_challenge_history():
-    """A per-day completion matrix over the recent past, for backfilling or
-    correcting the streak. Newest day first."""
+    """A per-day completion matrix for backfilling or correcting the streak.
+    Accepts an explicit `from`/`to` date range (YYYY-MM-DD) for importing
+    older records, or falls back to the last `days` (default 14). Newest day
+    first; the span is capped at ~1 year to keep the payload sane."""
     db = get_db()
-    try:
-        days = max(1, min(60, int(request.args.get("days", 14))))
-    except (TypeError, ValueError):
-        days = 14
+    today = date.today()
+    MAX_SPAN = 370
+
+    def _parse(arg):
+        try:
+            return date.fromisoformat(request.args.get(arg))
+        except (ValueError, TypeError):
+            return None
+
+    to_date = _parse("to") or today
+    from_date = _parse("from")
+    if from_date is None:
+        try:
+            days = max(1, min(MAX_SPAN, int(request.args.get("days", 14))))
+        except (TypeError, ValueError):
+            days = 14
+        from_date = to_date - timedelta(days=days - 1)
+    if from_date > to_date:
+        from_date, to_date = to_date, from_date
+    # Clamp an over-wide range to the most recent MAX_SPAN days of it.
+    if (to_date - from_date).days > MAX_SPAN - 1:
+        from_date = to_date - timedelta(days=MAX_SPAN - 1)
+
     items = _active_challenge_items(db)
     active_ids = [i["id"] for i in items]
     by_day = _completions_by_day(db, active_ids)
-    today = date.today()
     history = []
-    for offset in range(days):
-        d = (today - timedelta(days=offset)).isoformat()
-        done = by_day.get(d, set())
+    d = to_date
+    while d >= from_date:
+        iso = d.isoformat()
+        done = by_day.get(iso, set())
         history.append(
             {
-                "day": d,
+                "day": iso,
                 "done": [i["id"] for i in items if i["id"] in done],
                 "complete": bool(active_ids) and set(active_ids) <= done,
             }
         )
-    return jsonify({"items": items, "days": history})
+        d -= timedelta(days=1)
+    return jsonify(
+        {"items": items, "days": history, "from": from_date.isoformat(), "to": to_date.isoformat()}
+    )
 
 
 @app.route("/api/challenge/items/<int:item_id>", methods=["DELETE"])

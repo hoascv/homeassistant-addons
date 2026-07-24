@@ -156,6 +156,34 @@ def test_challenge_history_matrix(client):
     assert item_id in refreshed["days"][3]["done"]
 
 
+def test_challenge_history_explicit_range(client):
+    data = client.get("/api/challenge/history?from=2026-06-01&to=2026-06-07").get_json()
+    assert data["from"] == "2026-06-01" and data["to"] == "2026-06-07"
+    days = [d["day"] for d in data["days"]]
+    assert len(days) == 7
+    assert days[0] == "2026-06-07"  # newest first
+    assert days[-1] == "2026-06-01"
+
+
+def test_challenge_history_backfill_old_day(client):
+    # Backfilling a day well outside the default 14-day window — the Excel
+    # import case: toggle every item complete on an old date, then read it
+    # back through an explicit range.
+    items = client.get("/api/challenge/items").get_json()
+    for it in items:
+        client.post("/api/challenge/toggle", json={"item_id": it["id"], "day": "2026-05-20"})
+    data = client.get("/api/challenge/history?from=2026-05-18&to=2026-05-22").get_json()
+    may20 = next(d for d in data["days"] if d["day"] == "2026-05-20")
+    assert may20["complete"] is True
+
+
+def test_challenge_history_span_is_capped(client):
+    # An over-wide range is clamped rather than returning thousands of rows.
+    data = client.get("/api/challenge/history?from=2000-01-01&to=2026-07-24").get_json()
+    assert len(data["days"]) <= 370
+    assert data["to"] == "2026-07-24"
+
+
 def test_archived_item_not_required_for_streak(client, conn):
     """Archiving an item removes it from the 'all items done' bar, so a day
     where the remaining items are done still counts."""

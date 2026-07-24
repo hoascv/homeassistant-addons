@@ -85,9 +85,11 @@ items don't create workouts.
 
 ### Editing history
 
-**History** on the challenge card opens a day-by-day grid of the last two
-weeks. Tap any dot to mark that day's item done or not — useful for
-backfilling a day you forgot to log, or correcting your streak. In an
+**History** on the challenge card opens a day-by-day grid. Tap any dot to
+mark that day's item done or not — useful for backfilling a day you forgot
+to log, or correcting your streak. It defaults to the last two weeks; use
+the **From**/**To** date pickers to go further back and import older records
+you kept elsewhere (up to about a year at a time). In an
 exercise's or the workout log's history, tap **Edit** on any manually
 logged workout to change its sets, reps, weight, or date. (Workouts created
 by the challenge check-off are managed by the challenge and marked

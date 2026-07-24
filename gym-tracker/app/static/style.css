@@ -308,6 +308,7 @@ input:focus, select:focus { outline: 2px solid var(--accent-soft); border-color:
 .tag { font-size: 0.7rem; padding: 0.1rem 0.45rem; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--border); }
 
 /* Challenge history grid */
+.history-range { margin-bottom: 0.7rem; }
 .history-grid { display: flex; flex-direction: column; gap: 0.35rem; margin: 0.5rem 0 1rem; }
 .history-row {
   display: flex; align-items: center; gap: 0.6rem;
