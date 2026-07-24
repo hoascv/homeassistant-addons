@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.3.0
+
+- **Richer supplements.** A supplement now has a structured **dosage**
+  (amount + unit, e.g. 500 mg), a **quantity per serving** (e.g. 2
+  capsules), a **timing** tag (morning, pre-workout, …), and a **brand /
+  notes** field — instead of a single free-text dose. The dose shown in the
+  challenge is built from these (e.g. "2× 500 mg"). Editing a supplement now
+  uses a proper form rather than pop-up prompts.
+- Existing supplements upgrade automatically: the old free-text dose is
+  parsed into amount + unit where possible.
+- Fixed hidden "Cancel" buttons showing when they shouldn't in some forms.
+
 ## 1.2.1
 
 - **Backfill any past day.** The challenge **History** view now has

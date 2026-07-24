@@ -36,6 +36,9 @@
 }
 
 * { box-sizing: border-box; }
+/* Author `display` rules (e.g. on buttons) otherwise beat the UA [hidden]
+   style, leaving hidden buttons visible. */
+[hidden] { display: none !important; }
 
 body {
   margin: 0;

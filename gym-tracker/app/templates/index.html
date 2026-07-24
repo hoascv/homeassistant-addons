@@ -136,12 +136,25 @@
 
     <section id="lib-supplements" hidden>
       <form id="supplement-form" class="inline-form">
+        <input type="hidden" id="supplement-form-id">
+        <label class="full-label">Name<input type="text" id="supplement-form-name" placeholder="e.g. Omega-3"></label>
         <div class="field-row">
-          <label>New supplement<input type="text" id="supplement-form-name" placeholder="e.g. Omega-3"></label>
-          <label>Dose<input type="text" id="supplement-form-dose" placeholder="e.g. 2 g"></label>
+          <label>Amount<input type="number" step="any" min="0" id="supplement-form-amount" placeholder="500"></label>
+          <label>Unit<input type="text" id="supplement-form-unit" placeholder="mg" list="unit-list"></label>
+          <label>Qty/serving<input type="number" step="any" min="0" id="supplement-form-qty" placeholder="2"></label>
+        </div>
+        <datalist id="unit-list">
+          <option value="g"><option value="mg"><option value="mcg"><option value="ml">
+          <option value="IU"><option value="capsule"><option value="tablet"><option value="scoop">
+          <option value="drop"><option value="serving">
+        </datalist>
+        <div class="field-row">
+          <label>Timing<select id="supplement-form-timing"></select></label>
+          <label>Brand / notes<input type="text" id="supplement-form-brand" placeholder="optional"></label>
         </div>
         <div class="form-actions">
-          <button type="submit" class="btn-primary">Add supplement</button>
+          <button type="button" class="btn-secondary" id="supplement-form-cancel" hidden>Cancel</button>
+          <button type="submit" class="btn-primary" id="supplement-form-save">Add supplement</button>
         </div>
       </form>
       <ul class="items-list" id="supplements-list"></ul>

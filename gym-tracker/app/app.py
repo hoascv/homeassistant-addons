@@ -2,6 +2,7 @@ import html
 import importlib.metadata
 import json
 import os
+import re
 import platform
 import signal
 import sqlite3
@@ -15,7 +16,7 @@ from datetime import date, datetime, time as dtime, timedelta
 
 from flask import Flask, Response, g, jsonify, render_template, request, send_file
 
-APP_VERSION = "1.2.1"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.3.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("GYM_DB_PATH", "/data/gym.db")
 OPTIONS_PATH = os.environ.get("GYM_OPTIONS_PATH", "/data/options.json")
@@ -38,11 +39,15 @@ SEED_GOAL = {
     "start_date": SEED_START_DATE,
     "start_weight_kg": SEED_START_WEIGHT,
 }
-# (name, default dose) — a small starter supplements library, editable.
+# (name, dose_amount, dose_unit, quantity, timing, brand) — a small starter
+# supplements library, editable. Quantity is units per serving (e.g. 2
+# capsules); dose amount/unit is the size of one unit.
 SEED_SUPPLEMENTS = [
-    ("Creatine", "5 g"),
-    ("Protein powder", "30 g"),
+    ("Creatine", 5, "g", 1, "Anytime", None),
+    ("Protein powder", 30, "g", 1, "Post-workout", None),
 ]
+# Suggested timing tags surfaced in the UI (free text still allowed).
+SUPPLEMENT_TIMINGS = ["Morning", "Midday", "Pre-workout", "Post-workout", "Evening", "With meal", "Anytime"]
 # The default daily challenge, now typed: each item references a library
 # entry (an exercise with a rep target, or a supplement with a dose) rather
 # than free text, so the data stays clean and links back to the libraries.
@@ -239,6 +244,11 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
             dose TEXT,
+            dose_amount REAL,
+            dose_unit TEXT,
+            quantity REAL,
+            timing TEXT,
+            brand TEXT,
             is_custom INTEGER NOT NULL DEFAULT 0,
             archived INTEGER NOT NULL DEFAULT 0
         )
@@ -325,6 +335,30 @@ def _migrate_columns(conn):
     if "challenge_item_id" not in workout_cols:
         conn.execute("ALTER TABLE workout_logs ADD COLUMN challenge_item_id INTEGER")
 
+    supplement_cols = {row[1] for row in conn.execute("PRAGMA table_info(supplements)")}
+    added_supplement_cols = False
+    for col, decl in (
+        ("dose_amount", "REAL"),
+        ("dose_unit", "TEXT"),
+        ("quantity", "REAL"),
+        ("timing", "TEXT"),
+        ("brand", "TEXT"),
+    ):
+        if col not in supplement_cols:
+            conn.execute(f"ALTER TABLE supplements ADD COLUMN {col} {decl}")
+            added_supplement_cols = True
+    if added_supplement_cols:
+        # Backfill structured dosage by parsing the old free-text `dose`
+        # (e.g. "5 g" -> amount 5, unit "g") for rows not yet migrated.
+        for row in conn.execute(
+            "SELECT id, dose FROM supplements WHERE dose_amount IS NULL AND dose IS NOT NULL"
+        ).fetchall():
+            amount, unit = _parse_dose_text(row["dose"])
+            conn.execute(
+                "UPDATE supplements SET dose_amount = ?, dose_unit = ? WHERE id = ?",
+                (amount, unit, row["id"]),
+            )
+
 
 def _seed_defaults(conn):
     """Populate a fresh database so it opens onto a usable state. Each seed
@@ -355,10 +389,11 @@ def _seed_defaults(conn):
                 (name, equipment, category),
             )
     if conn.execute("SELECT COUNT(*) FROM supplements").fetchone()[0] == 0:
-        for name, dose in SEED_SUPPLEMENTS:
+        for name, amount, unit, quantity, timing, brand in SEED_SUPPLEMENTS:
             conn.execute(
-                "INSERT INTO supplements (name, dose, is_custom, archived) VALUES (?, ?, 0, 0)",
-                (name, dose),
+                "INSERT INTO supplements (name, dose, dose_amount, dose_unit, quantity, timing, brand, "
+                "is_custom, archived) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0)",
+                (name, _supplement_dose_text(amount, unit, quantity), amount, unit, quantity, timing, brand),
             )
     _seed_typed_challenge(conn)
 
@@ -966,32 +1001,119 @@ def api_delete_exercise(exercise_id):
     return jsonify({"status": result})
 
 
+# --- Supplements ---
+
+
+def _fmt_num(n):
+    """Trim a whole-number float to an int for display (5.0 -> '5')."""
+    if n is None:
+        return None
+    if isinstance(n, float) and n.is_integer():
+        return str(int(n))
+    return str(n)
+
+
+def _parse_dose_text(text):
+    """Best-effort split of a free-text dose like '5 g' into (5.0, 'g')."""
+    if not text:
+        return None, None
+    m = re.match(r"^\s*([0-9]*\.?[0-9]+)\s*(.*)$", str(text))
+    if not m:
+        return None, (str(text).strip() or None)
+    return float(m.group(1)), (m.group(2).strip() or None)
+
+
+def _supplement_dose_text(amount, unit, quantity):
+    """Human-readable dose, e.g. '5 g', '2× 500 mg', '1 scoop'."""
+    amount_s = _fmt_num(amount)
+    unit = (unit or "").strip()
+    if amount_s and unit:
+        base = f"{amount_s} {unit}"
+    elif amount_s:
+        base = amount_s
+    elif unit:
+        base = unit
+    else:
+        base = None
+    if quantity not in (None, "", 1, 1.0):
+        q = _fmt_num(quantity)
+        return f"{q}× {base}" if base else q
+    return base
+
+
+def _supplement_view(r):
+    return {
+        "id": r["id"],
+        "name": r["name"],
+        "dose_amount": r["dose_amount"],
+        "dose_unit": r["dose_unit"],
+        "quantity": r["quantity"],
+        "timing": r["timing"],
+        "brand": r["brand"],
+        "dose": _supplement_dose_text(r["dose_amount"], r["dose_unit"], r["quantity"]),
+        "is_custom": r["is_custom"],
+    }
+
+
+def _supplement_fields_from_request(data):
+    """Parse + validate the structured supplement fields from a request
+    body. Returns (fields_dict, error_message)."""
+    name = (data.get("name") or "").strip()
+    if not name:
+        return None, "name is required"
+    try:
+        dose_amount = _opt_float(data, "dose_amount")
+        quantity = _opt_float(data, "quantity")
+    except ValueError as e:
+        return None, f"{e} must be a number"
+    if dose_amount is not None and dose_amount < 0:
+        return None, "dose_amount must be positive"
+    if quantity is not None and quantity < 0:
+        return None, "quantity must be positive"
+    return (
+        {
+            "name": name,
+            "dose_amount": dose_amount,
+            "dose_unit": (data.get("dose_unit") or "").strip() or None,
+            "quantity": quantity,
+            "timing": (data.get("timing") or "").strip() or None,
+            "brand": (data.get("brand") or "").strip() or None,
+        },
+        None,
+    )
+
+
 # --- Routes: supplements ---
 
 
 @app.route("/api/supplements")
 def api_supplements():
     db = get_db()
-    return jsonify(
-        [
-            dict(r)
-            for r in db.execute(
-                "SELECT id, name, dose, is_custom FROM supplements WHERE archived = 0 ORDER BY name ASC"
-            )
-        ]
+    rows = db.execute(
+        "SELECT id, name, dose, dose_amount, dose_unit, quantity, timing, brand, is_custom "
+        "FROM supplements WHERE archived = 0 ORDER BY name ASC"
     )
+    return jsonify([_supplement_view(r) for r in rows])
+
+
+@app.route("/api/supplement-timings")
+def api_supplement_timings():
+    return jsonify(SUPPLEMENT_TIMINGS)
 
 
 @app.route("/api/supplements", methods=["POST"])
 def api_add_supplement():
     data = request.get_json(force=True, silent=True) or {}
-    name = (data.get("name") or "").strip()
-    if not name:
-        return jsonify({"error": "name is required"}), 400
-    dose = (data.get("dose") or "").strip() or None
+    fields, err = _supplement_fields_from_request(data)
+    if err:
+        return jsonify({"error": err}), 400
+    dose = _supplement_dose_text(fields["dose_amount"], fields["dose_unit"], fields["quantity"])
     db = get_db()
     cur = db.execute(
-        "INSERT INTO supplements (name, dose, is_custom, archived) VALUES (?, ?, 1, 0)", (name, dose)
+        "INSERT INTO supplements (name, dose, dose_amount, dose_unit, quantity, timing, brand, "
+        "is_custom, archived) VALUES (?, ?, ?, ?, ?, ?, ?, 1, 0)",
+        (fields["name"], dose, fields["dose_amount"], fields["dose_unit"], fields["quantity"],
+         fields["timing"], fields["brand"]),
     )
     db.commit()
     return jsonify({"status": "created", "id": cur.lastrowid}), 201
@@ -1000,13 +1122,16 @@ def api_add_supplement():
 @app.route("/api/supplements/<int:supplement_id>", methods=["PUT"])
 def api_update_supplement(supplement_id):
     data = request.get_json(force=True, silent=True) or {}
-    name = (data.get("name") or "").strip()
-    if not name:
-        return jsonify({"error": "name is required"}), 400
-    dose = (data.get("dose") or "").strip() or None
+    fields, err = _supplement_fields_from_request(data)
+    if err:
+        return jsonify({"error": err}), 400
+    dose = _supplement_dose_text(fields["dose_amount"], fields["dose_unit"], fields["quantity"])
     db = get_db()
     cur = db.execute(
-        "UPDATE supplements SET name = ?, dose = ? WHERE id = ?", (name, dose, supplement_id)
+        "UPDATE supplements SET name = ?, dose = ?, dose_amount = ?, dose_unit = ?, quantity = ?, "
+        "timing = ?, brand = ? WHERE id = ?",
+        (fields["name"], dose, fields["dose_amount"], fields["dose_unit"], fields["quantity"],
+         fields["timing"], fields["brand"], supplement_id),
     )
     db.commit()
     if cur.rowcount == 0:

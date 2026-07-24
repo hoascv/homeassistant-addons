@@ -55,8 +55,11 @@ The 🏋️ button opens your **Library**, with two tabs:
   - **Pull-up bar** — pull-up, chin-up, hanging knee raise.
   - **Dumbbells** — curl, shoulder press, floor bench press, row, goblet
     squat, Romanian deadlift, lateral raise.
-- **Supplements** — things you take, each with a default dose (starts with
-  Creatine and protein powder).
+- **Supplements** — things you take, each with a **dosage** (amount +
+  unit, e.g. 500 mg), a **quantity per serving** (e.g. 2 capsules), an
+  optional **timing** (morning, pre-workout, …), and a **brand / notes**
+  field. Starts with Creatine and protein powder. When you add a supplement
+  to the challenge, its dose is filled in from these (e.g. "2× 500 mg").
 
 Add, **rename** (✎), or remove entries in either tab. Tap an exercise to
 **log a set** (sets × reps, with optional weight or duration); each exercise

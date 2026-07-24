@@ -706,37 +706,70 @@ document.getElementById("exercises-groups").addEventListener("click", async (e) 
 
 // Supplements
 let supplementsCache = [];
+let supplementTimingsLoaded = false;
+
+async function ensureTimingOptions() {
+  if (supplementTimingsLoaded) return;
+  let timings = [];
+  try { timings = await fetchJSON("api/supplement-timings"); } catch (e) { /* ignore */ }
+  document.getElementById("supplement-form-timing").innerHTML =
+    '<option value="">—</option>' + timings.map((t) => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join("");
+  supplementTimingsLoaded = true;
+}
+
+function resetSupplementForm() {
+  document.getElementById("supplement-form-id").value = "";
+  document.getElementById("supplement-form-name").value = "";
+  document.getElementById("supplement-form-amount").value = "";
+  document.getElementById("supplement-form-unit").value = "";
+  document.getElementById("supplement-form-qty").value = "";
+  document.getElementById("supplement-form-timing").value = "";
+  document.getElementById("supplement-form-brand").value = "";
+  document.getElementById("supplement-form-save").textContent = "Add supplement";
+  document.getElementById("supplement-form-cancel").hidden = true;
+}
 
 async function loadSupplements() {
+  await ensureTimingOptions();
   try { supplementsCache = await fetchJSON("api/supplements"); } catch (e) { return; }
   document.getElementById("supplements-list").innerHTML = supplementsCache.length
     ? supplementsCache
-        .map(
-          (s) => `
+        .map((s) => {
+          const meta = [s.timing, s.brand].filter(Boolean).map(escapeHtml).join(" · ");
+          return `
         <li data-id="${s.id}">
           <span class="ci-icon">💊</span>
-          <span class="ci-name">${escapeHtml(s.name)}${s.dose ? ` <span class="muted">· ${escapeHtml(s.dose)}</span>` : ""}</span>
+          <span class="ci-name">${escapeHtml(s.name)}${s.dose ? ` <span class="muted">· ${escapeHtml(s.dose)}</span>` : ""}
+            ${meta ? `<br><span class="list-sub">${meta}</span>` : ""}</span>
           <button type="button" class="link-btn sup-edit" data-id="${s.id}" aria-label="Edit">✎</button>
           <button type="button" class="list-del sup-del" data-id="${s.id}" aria-label="Remove">✕</button>
-        </li>`
-        )
+        </li>`;
+        })
         .join("")
     : '<li class="empty-state">No supplements yet.</li>';
 }
 
+document.getElementById("supplement-form-cancel").addEventListener("click", resetSupplementForm);
+
 document.getElementById("supplement-form").addEventListener("submit", async (e) => {
   e.preventDefault();
-  const name = document.getElementById("supplement-form-name").value.trim();
-  const dose = document.getElementById("supplement-form-dose").value.trim();
-  if (!name) return;
+  const id = document.getElementById("supplement-form-id").value;
+  const payload = {
+    name: document.getElementById("supplement-form-name").value.trim(),
+    dose_amount: document.getElementById("supplement-form-amount").value,
+    dose_unit: document.getElementById("supplement-form-unit").value.trim(),
+    quantity: document.getElementById("supplement-form-qty").value,
+    timing: document.getElementById("supplement-form-timing").value,
+    brand: document.getElementById("supplement-form-brand").value.trim(),
+  };
+  if (!payload.name) return;
   try {
-    await fetchJSON("api/supplements", {
-      method: "POST",
+    await fetchJSON(id ? `api/supplements/${id}` : "api/supplements", {
+      method: id ? "PUT" : "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, dose }),
+      body: JSON.stringify(payload),
     });
-    document.getElementById("supplement-form-name").value = "";
-    document.getElementById("supplement-form-dose").value = "";
+    resetSupplementForm();
     loadSupplements();
   } catch (err) { toast(err.message); }
 });
@@ -753,18 +786,16 @@ document.getElementById("supplements-list").addEventListener("click", async (e) 
   if (edit) {
     const s = supplementsCache.find((x) => String(x.id) === edit.dataset.id);
     if (!s) return;
-    const name = prompt("Supplement name:", s.name);
-    if (name == null) return;
-    const dose = prompt("Default dose:", s.dose || "");
-    if (dose == null) return;
-    try {
-      await fetchJSON(`api/supplements/${s.id}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: name.trim(), dose: dose.trim() }),
-      });
-      loadSupplements();
-    } catch (err) { toast(err.message); }
+    document.getElementById("supplement-form-id").value = s.id;
+    document.getElementById("supplement-form-name").value = s.name;
+    document.getElementById("supplement-form-amount").value = s.dose_amount != null ? s.dose_amount : "";
+    document.getElementById("supplement-form-unit").value = s.dose_unit || "";
+    document.getElementById("supplement-form-qty").value = s.quantity != null ? s.quantity : "";
+    document.getElementById("supplement-form-timing").value = s.timing || "";
+    document.getElementById("supplement-form-brand").value = s.brand || "";
+    document.getElementById("supplement-form-save").textContent = "Save supplement";
+    document.getElementById("supplement-form-cancel").hidden = false;
+    document.getElementById("supplement-form-name").focus();
   }
 });
 
