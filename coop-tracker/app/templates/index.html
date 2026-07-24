@@ -305,9 +305,13 @@
     <h2>Training photos</h2>
     <p class="sheet-subtext">
       Every photo the model learns from. Tap <strong>Edit</strong> to
-      re-correct one, or <strong>Remove</strong> to exclude it from
-      training. Changes take effect the next time you train.
+      re-correct one, or <strong>Exclude</strong> to pull it out of
+      training without deleting it — <strong>Include</strong> puts it back.
     </p>
+    <div class="training-nudge" id="training-nudge" hidden>
+      <span>Training data changed. Retrain to apply your edits.</span>
+      <button type="button" class="btn-secondary" id="training-nudge-retrain-btn">Retrain now</button>
+    </div>
     <div class="training-gallery" id="training-gallery-list"></div>
     <div class="sheet-actions">
       <button type="button" class="btn-secondary" id="training-gallery-close-btn">Close</button>
@@ -546,6 +550,11 @@
       <button type="button" class="btn-secondary" id="flock-close-btn">Close</button>
     </div>
   </div>
+</div>
+
+<div class="photo-lightbox" id="photo-lightbox" hidden>
+  <img id="photo-lightbox-img" alt="">
+  <span class="photo-lightbox-caption" id="photo-lightbox-caption"></span>
 </div>
 
 <script>

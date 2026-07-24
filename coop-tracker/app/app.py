@@ -538,6 +538,13 @@ def init_db():
         )
         """
     )
+    # Soft-exclude flag: a sample the user has pulled out of training from
+    # the gallery. It stays stored (and can be re-included) but is skipped
+    # by _train_egg_vision_models and by the sample counts that gate/label
+    # training — hard deletion is a separate, explicit action.
+    sample_columns = {row[1] for row in conn.execute("PRAGMA table_info(egg_vision_samples)")}
+    if "excluded" not in sample_columns:
+        conn.execute("ALTER TABLE egg_vision_samples ADD COLUMN excluded INTEGER NOT NULL DEFAULT 0")
 
     # At most one row: training does DELETE then INSERT (see
     # _save_egg_vision_model) so inference is always a trivial SELECT with
@@ -2388,11 +2395,14 @@ def api_vision_eggs_sample():
 def api_vision_train_status():
     training_cfg = get_egg_vision_training_config()
     db = get_db()
-    sample_count = db.execute("SELECT COUNT(*) FROM egg_vision_samples").fetchone()[0]
+    # Excluded samples are still stored but never trained on, so they must
+    # not count toward the "enough to train" gate or the per-box tallies.
+    sample_count = db.execute("SELECT COUNT(*) FROM egg_vision_samples WHERE excluded = 0").fetchone()[0]
     samples_per_box = {
         row["box_id"]: row["n"]
         for row in db.execute(
-            "SELECT box_id, COUNT(*) as n FROM egg_vision_samples WHERE box_id IS NOT NULL GROUP BY box_id"
+            "SELECT box_id, COUNT(*) as n FROM egg_vision_samples "
+            "WHERE box_id IS NOT NULL AND excluded = 0 GROUP BY box_id"
         )
     }
     row = db.execute("SELECT * FROM egg_vision_models").fetchone()
@@ -2428,7 +2438,7 @@ def api_vision_train():
     if not OPENCV_AVAILABLE:
         return jsonify({"status": "libs_unavailable", "error": OPENCV_ERROR})
     db = get_db()
-    sample_count = db.execute("SELECT COUNT(*) FROM egg_vision_samples").fetchone()[0]
+    sample_count = db.execute("SELECT COUNT(*) FROM egg_vision_samples WHERE excluded = 0").fetchone()[0]
     # Only "no samples at all" blocks training outright — each sub-model
     # gates itself on its own minimum inside _train_egg_vision_models.
     # A single total-count gate here (25, as pre-1.32) silently prevented
@@ -2439,7 +2449,9 @@ def api_vision_train():
         return jsonify(
             {"status": "insufficient_samples", "sample_count": sample_count, "min_required": EGG_VISION_MIN_TRAINING_SAMPLES}
         )
-    samples = db.execute("SELECT box_id, photo, corrected_result FROM egg_vision_samples").fetchall()
+    samples = db.execute(
+        "SELECT box_id, photo, corrected_result FROM egg_vision_samples WHERE excluded = 0"
+    ).fetchall()
     try:
         result = _train_egg_vision_models(samples)
     except Exception as e:  # noqa: BLE001 - training failure degrades, never 500s
@@ -2493,6 +2505,7 @@ def _sample_summary(row):
         "image_height": row["image_height"],
         "egg_count": len(eggs),
         "sizes": [e.get("size") for e in eggs],
+        "excluded": bool(row["excluded"]),
     }
 
 
@@ -2500,7 +2513,7 @@ def _sample_summary(row):
 def api_vision_samples():
     db = get_db()
     rows = db.execute(
-        "SELECT id, created_at, box_id, image_width, image_height, corrected_result "
+        "SELECT id, created_at, box_id, image_width, image_height, corrected_result, excluded "
         "FROM egg_vision_samples ORDER BY id DESC"
     ).fetchall()
     return jsonify([_sample_summary(row) for row in rows])
@@ -2514,7 +2527,7 @@ def api_vision_sample(sample_id):
     photo endpoint below."""
     db = get_db()
     row = db.execute(
-        "SELECT id, created_at, box_id, image_width, image_height, corrected_result "
+        "SELECT id, created_at, box_id, image_width, image_height, corrected_result, excluded "
         "FROM egg_vision_samples WHERE id = ?",
         (sample_id,),
     ).fetchone()
@@ -2560,11 +2573,31 @@ def api_vision_update_sample(sample_id):
     return jsonify({"status": "updated"})
 
 
+@app.route("/api/vision/samples/<int:sample_id>/excluded", methods=["POST"])
+def api_vision_set_sample_excluded(sample_id):
+    """Soft-exclude (or re-include) a stored sample. Unlike DELETE this
+    keeps the photo — the flag just takes it out of training until the
+    user reverses it, so a suspected-bad sample can be pulled, retrained
+    without, and put back if that didn't help."""
+    data = request.get_json(force=True, silent=True) or {}
+    excluded = 1 if data.get("excluded") else 0
+    db = get_db()
+    cur = db.execute(
+        "UPDATE egg_vision_samples SET excluded = ? WHERE id = ?", (excluded, sample_id)
+    )
+    db.commit()
+    if cur.rowcount == 0:
+        return jsonify({"error": "no such sample"}), 404
+    return jsonify({"status": "updated", "excluded": bool(excluded)})
+
+
 @app.route("/api/vision/samples/<int:sample_id>", methods=["DELETE"])
 def api_vision_delete_sample(sample_id):
     db = get_db()
-    db.execute("DELETE FROM egg_vision_samples WHERE id = ?", (sample_id,))
+    cur = db.execute("DELETE FROM egg_vision_samples WHERE id = ?", (sample_id,))
     db.commit()
+    if cur.rowcount == 0:
+        return jsonify({"error": "no such sample"}), 404
     return "", 204
 
 

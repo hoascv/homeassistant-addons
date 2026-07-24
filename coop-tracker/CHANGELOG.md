@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.35.0
+
+- Training-photo gallery: **Remove** is now a reversible **Exclude**. An
+  excluded photo stays stored (greyed out, marked *Excluded*) and simply
+  drops out of training — tap **Include** to put it back, or **Delete** to
+  remove it for good. Lets you try pulling a suspect photo, retrain, and
+  restore it if that didn't help.
+- The gallery now shows a **Retrain now** banner as soon as you edit,
+  exclude, include or delete a photo — those changes only take effect when
+  you retrain, and the banner makes that one tap away instead of a silent
+  pending change.
+- Tap a chicken's photo in the flock list to see it **full-size**.
+
 ## 1.34.0
 
 - New **access control**: you can now limit the add-on to specific Home

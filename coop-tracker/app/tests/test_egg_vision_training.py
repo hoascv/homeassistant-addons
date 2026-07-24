@@ -239,6 +239,53 @@ def test_delete_sample(client, set_options, nesting_box):
     assert client.get("/api/vision/samples").get_json() == []
 
 
+def test_delete_sample_404_for_missing(client):
+    assert client.delete("/api/vision/samples/999").status_code == 404
+
+
+def test_exclude_sample_keeps_it_but_drops_from_counts(client, set_options, nesting_box):
+    set_options(egg_vision_enabled=True, egg_vision_training_enabled=True)
+    photo = _synthetic_box_photo(box=(80, 40, 1080, 860), eggs=[(400, 300, 60, 80, 0)])
+    client.post("/api/vision/eggs/sample", json=_sample_payload(photo, nesting_box, [_egg_correction()]))
+    sid = client.get("/api/vision/samples").get_json()[0]["id"]
+
+    res = client.post(f"/api/vision/samples/{sid}/excluded", json={"excluded": True})
+    assert res.status_code == 200
+    assert res.get_json()["excluded"] is True
+
+    # The sample is still listed (with its flag), but no longer counts
+    # toward the training gate or the per-box tallies.
+    listing = client.get("/api/vision/samples").get_json()
+    assert len(listing) == 1
+    assert listing[0]["excluded"] is True
+    status = client.get("/api/vision/train/status").get_json()
+    assert status["sample_count"] == 0
+    assert status["samples_per_box"] == {}
+
+    # Re-including restores it to the counts.
+    client.post(f"/api/vision/samples/{sid}/excluded", json={"excluded": False})
+    assert client.get("/api/vision/samples").get_json()[0]["excluded"] is False
+    assert client.get("/api/vision/train/status").get_json()["sample_count"] == 1
+
+
+def test_excluded_sample_skipped_by_training(client, set_options, nesting_box, conn):
+    set_options(egg_vision_enabled=True, egg_vision_training_enabled=True)
+    photo = _synthetic_box_photo(box=(80, 40, 1080, 860), eggs=[(400, 300, 60, 80, 0)])
+    client.post("/api/vision/eggs/sample", json=_sample_payload(photo, nesting_box, [_egg_correction()]))
+    sid = client.get("/api/vision/samples").get_json()[0]["id"]
+    client.post(f"/api/vision/samples/{sid}/excluded", json={"excluded": True})
+
+    # The only sample is excluded, so training sees zero usable samples.
+    body = client.post("/api/vision/train").get_json()
+    assert body["status"] == "insufficient_samples"
+    assert body["sample_count"] == 0
+
+
+def test_exclude_sample_404_for_missing(client):
+    res = client.post("/api/vision/samples/999/excluded", json={"excluded": True})
+    assert res.status_code == 404
+
+
 # --- Wall geometry helpers (no opencv needed) ---
 
 

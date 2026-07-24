@@ -1019,6 +1019,7 @@ eggVisionUseBtn.addEventListener("click", async () => {
       eggVisionUseBtn.disabled = false;
       return;
     }
+    markTrainingDataDirty(); // edited labels only apply on the next retrain
     closeEggVisionReview(); // returns to the gallery + refreshes it
     return;
   }
@@ -1390,14 +1391,20 @@ async function loadTrainingGallery() {
         const sizes = (s.sizes || []).filter(Boolean).join(", ");
         const label = `${s.egg_count} egg${s.egg_count === 1 ? "" : "s"}${sizes ? ` · ${escapeHtml(sizes)}` : ""}`;
         const box = s.box_name ? escapeHtml(s.box_name) : "no box";
+        // Excluded samples stay visible but greyed, and swap their actions:
+        // Include puts them back, Delete removes them for good (a step that
+        // only appears once a photo is already out of training).
+        const actions = s.excluded
+          ? `<button type="button" class="link-btn training-photo-include" data-id="${s.id}">Include</button>
+             <button type="button" class="link-btn training-photo-delete" data-id="${s.id}">Delete</button>`
+          : `<button type="button" class="link-btn training-photo-edit" data-id="${s.id}">Edit</button>
+             <button type="button" class="link-btn training-photo-exclude" data-id="${s.id}">Exclude</button>`;
         return `
-          <figure class="training-photo" data-id="${s.id}">
+          <figure class="training-photo${s.excluded ? " excluded" : ""}" data-id="${s.id}">
             <img src="api/vision/samples/${s.id}/photo" alt="Training photo" loading="lazy">
+            ${s.excluded ? '<span class="training-photo-badge">Excluded</span>' : ""}
             <figcaption>${label}<br><span class="training-photo-meta">${box}</span></figcaption>
-            <div class="training-photo-actions">
-              <button type="button" class="link-btn training-photo-edit" data-id="${s.id}">Edit</button>
-              <button type="button" class="link-btn training-photo-remove" data-id="${s.id}">Remove</button>
-            </div>
+            <div class="training-photo-actions">${actions}</div>
           </figure>`;
       })
       .join("");
@@ -1409,6 +1416,7 @@ async function loadTrainingGallery() {
 document.getElementById("training-gallery-btn").addEventListener("click", () => {
   backupBackdrop.classList.remove("open");
   trainingGalleryBackdrop.classList.add("open");
+  document.getElementById("training-nudge").hidden = !trainingDataDirty;
   loadTrainingGallery();
 });
 document.getElementById("training-gallery-close-btn").addEventListener("click", () => {
@@ -1418,12 +1426,47 @@ trainingGalleryBackdrop.addEventListener("click", (e) => {
   if (e.target === trainingGalleryBackdrop) trainingGalleryBackdrop.classList.remove("open");
 });
 
+// Edits, exclude/include toggles and deletes only change what the NEXT
+// train run learns from — nothing is applied until the user retrains. This
+// flag drives the nudge bar so that's obvious instead of silently pending.
+let trainingDataDirty = false;
+
+function markTrainingDataDirty() {
+  trainingDataDirty = true;
+  document.getElementById("training-nudge").hidden = false;
+}
+
+async function setSampleExcluded(id, excluded) {
+  try {
+    await fetch(`api/vision/samples/${id}/excluded`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ excluded }),
+    });
+    markTrainingDataDirty();
+    loadTrainingGallery();
+  } catch (err) {
+    alert("Couldn't reach the server — check your connection and try again.");
+  }
+}
+
 trainingGalleryList.addEventListener("click", async (e) => {
-  const removeBtn = e.target.closest(".training-photo-remove");
-  if (removeBtn) {
-    if (!confirm("Remove this photo from training data? This can't be undone.")) return;
+  const excludeBtn = e.target.closest(".training-photo-exclude");
+  if (excludeBtn) {
+    setSampleExcluded(excludeBtn.dataset.id, true);
+    return;
+  }
+  const includeBtn = e.target.closest(".training-photo-include");
+  if (includeBtn) {
+    setSampleExcluded(includeBtn.dataset.id, false);
+    return;
+  }
+  const deleteBtn = e.target.closest(".training-photo-delete");
+  if (deleteBtn) {
+    if (!confirm("Permanently delete this photo? This can't be undone.")) return;
     try {
-      await fetch(`api/vision/samples/${removeBtn.dataset.id}`, { method: "DELETE" });
+      await fetch(`api/vision/samples/${deleteBtn.dataset.id}`, { method: "DELETE" });
+      markTrainingDataDirty();
       loadTrainingGallery();
     } catch (err) {
       alert("Couldn't reach the server — check your connection and try again.");
@@ -1432,6 +1475,30 @@ trainingGalleryList.addEventListener("click", async (e) => {
   }
   const editBtn = e.target.closest(".training-photo-edit");
   if (editBtn) editEggVisionSample(Number(editBtn.dataset.id));
+});
+
+document.getElementById("training-nudge-retrain-btn").addEventListener("click", async (e) => {
+  const btn = e.currentTarget;
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "Retraining…";
+  try {
+    const res = await fetch("api/vision/train", { method: "POST" });
+    const body = await res.json();
+    if (body.status === "trained") {
+      trainingDataDirty = false;
+      document.getElementById("training-nudge").hidden = true;
+      loadTrainingStatus();
+    } else if (body.status === "insufficient_samples") {
+      alert(`Need at least ${body.min_required} samples to train (have ${body.sample_count}).`);
+    } else {
+      alert(body.error || "Training isn't available right now.");
+    }
+  } catch (err) {
+    alert("Couldn't reach the server — check your connection and try again.");
+  }
+  btn.disabled = false;
+  btn.textContent = original;
 });
 
 async function editEggVisionSample(sampleId) {
@@ -2277,11 +2344,36 @@ document.getElementById("chicken-list").addEventListener("click", async (e) => {
     return;
   }
 
+  // Tapping the photo enlarges it instead of opening the edit form — only
+  // real photos (an <img>), never the emoji placeholder.
+  const avatar = e.target.closest("img.chicken-avatar");
+  if (avatar) {
+    e.stopPropagation();
+    const chicken = chickenCache[e.target.closest(".chicken-item").dataset.id];
+    if (chicken) openPhotoLightbox(`api/chickens/${chicken.id}/photo`, chicken.name);
+    return;
+  }
+
   const item = e.target.closest(".chicken-item");
   if (item) {
     const chicken = chickenCache[item.dataset.id];
     if (chicken) openChickenForm(chicken);
   }
+});
+
+// --- Photo lightbox (tap a chicken photo to see it full-size) ---
+
+function openPhotoLightbox(src, caption) {
+  const box = document.getElementById("photo-lightbox");
+  document.getElementById("photo-lightbox-img").src = src;
+  document.getElementById("photo-lightbox-caption").textContent = caption || "";
+  box.hidden = false;
+}
+
+document.getElementById("photo-lightbox").addEventListener("click", () => {
+  const box = document.getElementById("photo-lightbox");
+  box.hidden = true;
+  document.getElementById("photo-lightbox-img").src = "";
 });
 
 document.getElementById("breed-add-btn").addEventListener("click", async () => {

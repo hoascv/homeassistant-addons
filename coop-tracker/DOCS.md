@@ -175,11 +175,13 @@ produced by Backup & Restore, since the stored photos travel with it.
 
 **View training photos** (in the settings sheet) opens a gallery of every
 stored photo with what the model learned from each — its egg count and
-sizes. From there you can **Remove** a photo to exclude it from future
-training (e.g. a blurry shot or one you corrected wrongly), or **Edit**
-it to reopen the same review screen, re-correct the eggs/sizes/box edges,
-and save the fix back onto that photo. Changes take effect the next time
-you train.
+sizes. From there you can **Exclude** a photo (e.g. a blurry shot or one
+you corrected wrongly) to drop it from training without deleting it — it
+stays greyed out in the gallery, and **Include** puts it back, or
+**Delete** removes it for good. **Edit** reopens the same review screen so
+you can re-correct the eggs/sizes/box edges and save the fix back onto
+that photo. These changes take effect only when you train, so the gallery
+shows a **Retrain now** banner after any edit — one tap applies them.
 
 ## Configuration
 
@@ -313,7 +315,8 @@ date is optional; without it a bird is assumed to be in its prime laying
 years, the most forgiving default. A photo is optional too — tap
 **Choose File** in the chicken form to add one (resized automatically,
 so a normal phone photo won't bloat the database), and **Remove photo**
-to take it off again.
+to take it off again. In the flock list, tap a chicken's photo to see it
+full-size.
 
 Each chicken also has a **Health history**: open the chicken from the
 list and use **+ Add** under Health history to log a vet visit,
