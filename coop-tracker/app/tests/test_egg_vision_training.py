@@ -146,6 +146,99 @@ def test_train_clear_deletes_samples_not_model(client, set_options, nesting_box,
     assert conn.execute("SELECT COUNT(*) FROM egg_vision_models").fetchone()[0] == 1
 
 
+# --- Training-photo gallery (inspect / edit / exclude) ---
+
+
+def test_samples_list_and_summary(client, set_options, nesting_box):
+    set_options(egg_vision_enabled=True, egg_vision_training_enabled=True)
+    photo = _synthetic_box_photo(box=(80, 40, 1080, 860), eggs=[(400, 300, 60, 80, 0)])
+    eggs = [_egg_correction(), dict(_egg_correction(cx=600), size="L")]
+    client.post("/api/vision/eggs/sample", json=_sample_payload(photo, nesting_box, eggs))
+
+    listing = client.get("/api/vision/samples").get_json()
+    assert len(listing) == 1
+    s = listing[0]
+    assert s["box_name"] == "Coop A"
+    assert s["egg_count"] == 2
+    assert s["sizes"] == ["M", "L"]
+
+
+def test_sample_detail_includes_corrected(client, set_options, nesting_box):
+    set_options(egg_vision_enabled=True, egg_vision_training_enabled=True)
+    photo = _synthetic_box_photo(box=(80, 40, 1080, 860), eggs=[(400, 300, 60, 80, 0)])
+    client.post("/api/vision/eggs/sample", json=_sample_payload(photo, nesting_box, [_egg_correction()]))
+    sid = client.get("/api/vision/samples").get_json()[0]["id"]
+
+    detail = client.get(f"/api/vision/samples/{sid}").get_json()
+    assert detail["corrected"]["box_id"] == nesting_box["id"]
+    assert len(detail["corrected"]["eggs"]) == 1
+    assert "box_walls" in detail["corrected"]
+
+
+def test_sample_photo_served(client, set_options, nesting_box):
+    set_options(egg_vision_enabled=True, egg_vision_training_enabled=True)
+    photo = _synthetic_box_photo(box=(80, 40, 1080, 860), eggs=[(400, 300, 60, 80, 0)])
+    client.post("/api/vision/eggs/sample", json=_sample_payload(photo, nesting_box, [_egg_correction()]))
+    sid = client.get("/api/vision/samples").get_json()[0]["id"]
+
+    res = client.get(f"/api/vision/samples/{sid}/photo")
+    assert res.status_code == 200
+    assert res.data[:2] == b"\xff\xd8"  # JPEG magic
+    assert res.headers["Cache-Control"] == "no-store"
+
+
+def test_sample_photo_404_for_missing(client):
+    assert client.get("/api/vision/samples/999/photo").status_code == 404
+
+
+def test_update_sample_corrected(client, set_options, nesting_box, conn):
+    set_options(egg_vision_enabled=True, egg_vision_training_enabled=True)
+    photo = _synthetic_box_photo(box=(80, 40, 1080, 860), eggs=[(400, 300, 60, 80, 0)])
+    client.post("/api/vision/eggs/sample", json=_sample_payload(photo, nesting_box, [_egg_correction()]))
+    sid = client.get("/api/vision/samples").get_json()[0]["id"]
+
+    new_eggs = [dict(_egg_correction(), size="XL"), _egg_correction(cx=700)]
+    corrected = {
+        "box_id": nesting_box["id"],
+        "box_width_mm": nesting_box["width_mm"],
+        "box_walls": dict(TRAPEZOID_WALLS),
+        "eggs": new_eggs,
+    }
+    res = client.put(f"/api/vision/samples/{sid}", json={"corrected": corrected})
+    assert res.get_json()["status"] == "updated"
+
+    updated = client.get(f"/api/vision/samples/{sid}").get_json()
+    assert updated["egg_count"] == 2
+    assert updated["sizes"] == ["XL", "M"]
+
+
+def test_update_sample_rejects_invalid(client, set_options, nesting_box):
+    set_options(egg_vision_enabled=True, egg_vision_training_enabled=True)
+    photo = _synthetic_box_photo(box=(80, 40, 1080, 860), eggs=[(400, 300, 60, 80, 0)])
+    client.post("/api/vision/eggs/sample", json=_sample_payload(photo, nesting_box, [_egg_correction()]))
+    sid = client.get("/api/vision/samples").get_json()[0]["id"]
+    res = client.put(f"/api/vision/samples/{sid}", json={"corrected": {"eggs": "nope"}})
+    assert res.status_code == 400
+
+
+def test_update_sample_404_for_missing(client):
+    res = client.put(
+        "/api/vision/samples/999",
+        json={"corrected": {"box_id": 1, "eggs": []}},
+    )
+    assert res.status_code == 404
+
+
+def test_delete_sample(client, set_options, nesting_box):
+    set_options(egg_vision_enabled=True, egg_vision_training_enabled=True)
+    photo = _synthetic_box_photo(box=(80, 40, 1080, 860), eggs=[(400, 300, 60, 80, 0)])
+    client.post("/api/vision/eggs/sample", json=_sample_payload(photo, nesting_box, [_egg_correction()]))
+    sid = client.get("/api/vision/samples").get_json()[0]["id"]
+
+    assert client.delete(f"/api/vision/samples/{sid}").status_code == 204
+    assert client.get("/api/vision/samples").get_json() == []
+
+
 # --- Wall geometry helpers (no opencv needed) ---
 
 

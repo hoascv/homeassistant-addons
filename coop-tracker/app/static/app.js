@@ -619,6 +619,7 @@ let eggVisionPhotoDataUri = null; // cached exact bytes analysis was run against
 let eggVisionTouched = false; // did the user change anything from the auto-detected result?
 let eggVisionWizard = null; // null, or {boxId, boxName, streak, attempts}
 let pendingEggVisionSample = null; // built on "Use these results", submitted after a successful save
+let eggVisionEditSampleId = null; // set while re-correcting a stored training photo from the gallery
 
 function eggToSnakeCase(e) {
   return {
@@ -977,11 +978,19 @@ document.addEventListener("pointerup", () => {
 });
 
 function closeEggVisionReview() {
+  const wasEditing = eggVisionEditSampleId !== null;
   eggVisionBackdrop.classList.remove("open");
   eggVisionState = null;
   eggVisionOriginal = null;
   eggVisionDrag = null;
   eggVisionWizard = null;
+  eggVisionEditSampleId = null;
+  eggVisionUseBtn.textContent = "Use these results";
+  if (wasEditing) {
+    // Return to the gallery the edit was launched from, refreshed.
+    trainingGalleryBackdrop.classList.add("open");
+    loadTrainingGallery();
+  }
 }
 
 eggVisionCancelBtn.addEventListener("click", closeEggVisionReview);
@@ -991,8 +1000,28 @@ eggVisionBackdrop.addEventListener("click", (e) => {
   if (e.target === eggVisionBackdrop) closeEggVisionReview();
 });
 
-eggVisionUseBtn.addEventListener("click", () => {
+eggVisionUseBtn.addEventListener("click", async () => {
   if (!eggVisionState) return;
+  if (eggVisionEditSampleId !== null) {
+    // Editing a stored training photo — save the re-corrected labels
+    // back onto the sample rather than filling the Log Eggs sheet.
+    const id = eggVisionEditSampleId;
+    eggVisionUseBtn.disabled = true;
+    try {
+      const res = await fetch(`api/vision/samples/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ corrected: buildEggVisionSamplePayload().corrected }),
+      });
+      if (!res.ok) throw new Error(`server returned ${res.status}`);
+    } catch (err) {
+      alert("Couldn't save changes — check your connection and try again.");
+      eggVisionUseBtn.disabled = false;
+      return;
+    }
+    closeEggVisionReview(); // returns to the gallery + refreshes it
+    return;
+  }
   document.getElementById("count-value").textContent = eggVisionState.eggs.length;
   sheetForm.dataset.eggSizes = eggVisionState.eggs.map((e) => e.size).join(",");
   if (window.EGG_VISION.trainingEnabled) {
@@ -1330,6 +1359,131 @@ document.getElementById("training-clear-btn").addEventListener("click", async ()
   }
   loadTrainingStatus();
 });
+
+// --- Training-photo gallery (inspect / edit / exclude stored samples) ---
+
+const trainingGalleryBackdrop = document.getElementById("training-gallery-backdrop");
+const trainingGalleryList = document.getElementById("training-gallery-list");
+
+async function loadTrainingGallery() {
+  trainingGalleryList.innerHTML = '<p class="sheet-subtext">Loading…</p>';
+  try {
+    const samples = await fetch("api/vision/samples").then((r) => r.json());
+    if (!samples.length) {
+      trainingGalleryList.innerHTML = '<p class="sheet-subtext">No training photos stored yet.</p>';
+      return;
+    }
+    trainingGalleryList.innerHTML = samples
+      .map((s) => {
+        const sizes = (s.sizes || []).filter(Boolean).join(", ");
+        const label = `${s.egg_count} egg${s.egg_count === 1 ? "" : "s"}${sizes ? ` · ${escapeHtml(sizes)}` : ""}`;
+        const box = s.box_name ? escapeHtml(s.box_name) : "no box";
+        return `
+          <figure class="training-photo" data-id="${s.id}">
+            <img src="api/vision/samples/${s.id}/photo" alt="Training photo" loading="lazy">
+            <figcaption>${label}<br><span class="training-photo-meta">${box}</span></figcaption>
+            <div class="training-photo-actions">
+              <button type="button" class="link-btn training-photo-edit" data-id="${s.id}">Edit</button>
+              <button type="button" class="link-btn training-photo-remove" data-id="${s.id}">Remove</button>
+            </div>
+          </figure>`;
+      })
+      .join("");
+  } catch (err) {
+    trainingGalleryList.innerHTML = '<p class="sheet-subtext">Could not reach the server.</p>';
+  }
+}
+
+document.getElementById("training-gallery-btn").addEventListener("click", () => {
+  backupBackdrop.classList.remove("open");
+  trainingGalleryBackdrop.classList.add("open");
+  loadTrainingGallery();
+});
+document.getElementById("training-gallery-close-btn").addEventListener("click", () => {
+  trainingGalleryBackdrop.classList.remove("open");
+});
+trainingGalleryBackdrop.addEventListener("click", (e) => {
+  if (e.target === trainingGalleryBackdrop) trainingGalleryBackdrop.classList.remove("open");
+});
+
+trainingGalleryList.addEventListener("click", async (e) => {
+  const removeBtn = e.target.closest(".training-photo-remove");
+  if (removeBtn) {
+    if (!confirm("Remove this photo from training data? This can't be undone.")) return;
+    try {
+      await fetch(`api/vision/samples/${removeBtn.dataset.id}`, { method: "DELETE" });
+      loadTrainingGallery();
+    } catch (err) {
+      alert("Couldn't reach the server — check your connection and try again.");
+    }
+    return;
+  }
+  const editBtn = e.target.closest(".training-photo-edit");
+  if (editBtn) editEggVisionSample(Number(editBtn.dataset.id));
+});
+
+async function editEggVisionSample(sampleId) {
+  let sample;
+  try {
+    sample = await fetch(`api/vision/samples/${sampleId}`).then((r) => r.json());
+  } catch (err) {
+    alert("Couldn't load that photo — check your connection and try again.");
+    return;
+  }
+  const corrected = sample.corrected || {};
+  const walls = corrected.box_walls;
+  if (!walls) {
+    alert("This photo can't be edited (missing box calibration). You can Remove it instead.");
+    return;
+  }
+
+  eggVisionEditSampleId = sampleId;
+  eggVisionWizard = null;
+  eggVisionState = {
+    boxId: corrected.box_id,
+    boxWidthMm: corrected.box_width_mm,
+    imageWidth: sample.image_width,
+    imageHeight: sample.image_height,
+    boxWalls: { ...walls },
+    eggs: (corrected.eggs || []).map((e) => ({
+      cx: e.cx,
+      cy: e.cy,
+      widthPx: e.width_px,
+      heightPx: e.height_px,
+      angle: e.angle,
+      size: e.size || "M",
+      manuallySet: e.manually_set !== undefined ? e.manually_set : true,
+      added: !!e.added,
+    })),
+  };
+  eggVisionOriginal = corrected; // unchanged for an edit — the photo isn't re-analyzed
+  eggVisionTouched = false;
+
+  // Configure the review panel for edit mode (no wizard buttons; the
+  // primary button saves back to the sample — see the use-btn handler).
+  document.getElementById("egg-vision-title").textContent = "Edit training photo";
+  eggVisionUseBtn.hidden = false;
+  eggVisionUseBtn.disabled = false;
+  eggVisionUseBtn.textContent = "Save changes";
+  eggVisionCancelBtn.hidden = false;
+  eggVisionWizardNextBtn.hidden = true;
+  eggVisionWizardFinishBtn.hidden = true;
+  eggVisionWizardProgress.hidden = true;
+  eggVisionShowPanel("review");
+  eggVisionStatusMsg.textContent = "Drag a line if it isn't on the box's edge. Tap a size chip to correct it.";
+  eggVisionChips.innerHTML = "";
+  eggVisionCanvasWrap.hidden = true;
+
+  trainingGalleryBackdrop.classList.remove("open");
+  eggVisionBackdrop.classList.add("open");
+
+  eggVisionPhotoImg.onload = () => {
+    eggVisionCanvasWrap.hidden = false;
+    drawEggVisionOverlay();
+    renderEggVisionChips();
+  };
+  eggVisionPhotoImg.src = `api/vision/samples/${sampleId}/photo`;
+}
 
 restoreBtn.addEventListener("click", async () => {
   const file = restoreFile.files[0];

@@ -300,6 +300,21 @@
   </div>
 </div>
 
+<div class="sheet-backdrop" id="training-gallery-backdrop">
+  <div class="sheet sheet-full">
+    <h2>Training photos</h2>
+    <p class="sheet-subtext">
+      Every photo the model learns from. Tap <strong>Edit</strong> to
+      re-correct one, or <strong>Remove</strong> to exclude it from
+      training. Changes take effect the next time you train.
+    </p>
+    <div class="training-gallery" id="training-gallery-list"></div>
+    <div class="sheet-actions">
+      <button type="button" class="btn-secondary" id="training-gallery-close-btn">Close</button>
+    </div>
+  </div>
+</div>
+
 <div class="sheet-backdrop" id="backup-backdrop">
   <div class="sheet">
     <h2>Backup &amp; Restore</h2>
@@ -352,6 +367,7 @@
       </div>
       <button type="button" class="btn-secondary sheet-link-btn" id="training-train-btn">Train now</button>
       <p class="sheet-subtext" id="training-train-result"></p>
+      <button type="button" class="btn-secondary sheet-link-btn" id="training-gallery-btn">View training photos</button>
       <button type="button" class="btn-secondary sheet-link-btn" id="training-clear-btn">Clear training data</button>
     </div>
 

@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.33.0
+
+- New **View training photos** button in the egg-vision training settings.
+  Opens a gallery of every photo the model has learned from, each showing
+  its egg count and sizes. **Remove** any photo to exclude it from future
+  training (a blurry shot, or one that was corrected wrongly), or **Edit**
+  it to reopen the review screen, re-correct the eggs/sizes/box edges, and
+  save the fix back onto that photo. Changes take effect next time you
+  train.
+
 ## 1.32.2
 
 - **Touching eggs are now counted separately.** Two eggs resting against

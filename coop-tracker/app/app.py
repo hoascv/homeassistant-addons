@@ -63,7 +63,7 @@ except ImportError as e:
     SKLEARN_AVAILABLE = False
     SKLEARN_ERROR = str(e)
 
-APP_VERSION = "1.32.2"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.33.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("COOP_DB_PATH", "/data/coop.db")
 OPTIONS_PATH = os.environ.get("COOP_OPTIONS_PATH", "/data/options.json")
@@ -2418,6 +2418,101 @@ def api_vision_train_clear():
     db.execute("DELETE FROM egg_vision_samples")
     db.commit()
     return jsonify({"status": "cleared"})
+
+
+def _sample_summary(row):
+    """Light per-sample descriptor for the gallery list — the photo bytes
+    are served separately (api_vision_sample_photo), like chickens."""
+    try:
+        corrected = json.loads(row["corrected_result"])
+    except (TypeError, ValueError):
+        corrected = {}
+    eggs = corrected.get("eggs") or []
+    box_row = None
+    if row["box_id"] is not None:
+        box_row = get_db().execute("SELECT name FROM nesting_boxes WHERE id = ?", (row["box_id"],)).fetchone()
+    return {
+        "id": row["id"],
+        "created_at": row["created_at"],
+        "box_id": row["box_id"],
+        "box_name": box_row["name"] if box_row else None,
+        "image_width": row["image_width"],
+        "image_height": row["image_height"],
+        "egg_count": len(eggs),
+        "sizes": [e.get("size") for e in eggs],
+    }
+
+
+@app.route("/api/vision/samples")
+def api_vision_samples():
+    db = get_db()
+    rows = db.execute(
+        "SELECT id, created_at, box_id, image_width, image_height, corrected_result "
+        "FROM egg_vision_samples ORDER BY id DESC"
+    ).fetchall()
+    return jsonify([_sample_summary(row) for row in rows])
+
+
+@app.route("/api/vision/samples/<int:sample_id>")
+def api_vision_sample(sample_id):
+    """Full sample for the edit flow: the stored corrected result (box,
+    walls, eggs) so the review screen can be reopened populated with what
+    the model learned from this photo. The photo itself loads from the
+    photo endpoint below."""
+    db = get_db()
+    row = db.execute(
+        "SELECT id, created_at, box_id, image_width, image_height, corrected_result "
+        "FROM egg_vision_samples WHERE id = ?",
+        (sample_id,),
+    ).fetchone()
+    if row is None:
+        return jsonify({"error": "no such sample"}), 404
+    summary = _sample_summary(row)
+    try:
+        summary["corrected"] = json.loads(row["corrected_result"])
+    except (TypeError, ValueError):
+        summary["corrected"] = {}
+    return jsonify(summary)
+
+
+@app.route("/api/vision/samples/<int:sample_id>/photo")
+def api_vision_sample_photo(sample_id):
+    db = get_db()
+    row = db.execute("SELECT photo FROM egg_vision_samples WHERE id = ?", (sample_id,)).fetchone()
+    if row is None or row["photo"] is None:
+        return "", 404
+    response = Response(row["photo"], mimetype="image/jpeg")
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@app.route("/api/vision/samples/<int:sample_id>", methods=["PUT"])
+def api_vision_update_sample(sample_id):
+    """Save an edited correction back onto a stored sample (the photo is
+    unchanged — only the labels the model trains against). Body mirrors
+    the `corrected` object POST /api/vision/eggs/sample stores."""
+    data = request.get_json(force=True, silent=True) or {}
+    corrected = data.get("corrected") or {}
+    if not isinstance(corrected.get("eggs"), list) or corrected.get("box_id") is None:
+        return jsonify({"error": "invalid corrected result"}), 400
+    db = get_db()
+    row = db.execute("SELECT id FROM egg_vision_samples WHERE id = ?", (sample_id,)).fetchone()
+    if row is None:
+        return jsonify({"error": "no such sample"}), 404
+    db.execute(
+        "UPDATE egg_vision_samples SET box_id = ?, corrected_result = ? WHERE id = ?",
+        (corrected.get("box_id"), json.dumps(corrected), sample_id),
+    )
+    db.commit()
+    return jsonify({"status": "updated"})
+
+
+@app.route("/api/vision/samples/<int:sample_id>", methods=["DELETE"])
+def api_vision_delete_sample(sample_id):
+    db = get_db()
+    db.execute("DELETE FROM egg_vision_samples WHERE id = ?", (sample_id,))
+    db.commit()
+    return "", 204
 
 
 @app.route("/api/chickens")

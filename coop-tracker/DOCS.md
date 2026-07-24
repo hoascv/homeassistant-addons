@@ -173,6 +173,14 @@ numbers, not a photo — is kept; only the raw images are removed). Note
 that enabling this materially increases the size of the **.db** file
 produced by Backup & Restore, since the stored photos travel with it.
 
+**View training photos** (in the settings sheet) opens a gallery of every
+stored photo with what the model learned from each — its egg count and
+sizes. From there you can **Remove** a photo to exclude it from future
+training (e.g. a blurry shot or one you corrected wrongly), or **Edit**
+it to reopen the same review screen, re-correct the eggs/sizes/box edges,
+and save the fix back onto that photo. Changes take effect the next time
+you train.
+
 ## Configuration
 
 - **currency**: `DKK` (default), `USD`, `EUR`, `GBP`, `SEK`, `NOK`, `CHF`,
