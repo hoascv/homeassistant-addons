@@ -1399,3 +1399,45 @@ before building the feature dicts, and it's the same function training
 re-extracts through — so corrected touching-egg photos now yield two
 clean positive examples instead of one rejected blob, with no change to
 the training code.
+
+## 21. Access control (per-user allowlist, v1.34.0)
+
+The add-on is reached only through Home Assistant's authenticated ingress
+proxy, so there's never anonymous or internet-facing access — every
+request already belongs to a logged-in HA user. On top of that,
+`panel_admin: true` (config.yaml — the HA default, made explicit) means
+only admin-group users get the sidebar menu entry. Neither of those,
+though, is a *hard* per-user block: `panel_admin` only hides the menu (a
+direct ingress URL can slip past it), and "admin group" is coarser than
+"these specific people".
+
+**Why an allowlist of user IDs and not a real admin-role check.** The
+obvious design — "let only HA admins in" — isn't buildable from inside an
+add-on: Home Assistant passes the ingress user's **ID** in the
+`X-Remote-User-ID` header (verified against production add-ons like Music
+Assistant) but does **not** pass the user's admin/owner flag, and there's
+no add-on-accessible API to look it up (the user list is owner-scoped
+WebSocket territory the add-on's token can't reach). So the enforceable
+primitive is identity, not role. `restrict_to_user_ids` (a
+comma/space/newline-separated option) is that: `get_allowed_user_ids()`
+parses it, and a Flask `before_request` hook
+(`_enforce_user_allowlist`) blocks any request whose `X-Remote-User-ID`
+isn't in the set with a 403 page. This is actually *more* precise than an
+admin-role check — the owner names exactly who, not everyone in the admin
+group.
+
+**Safe-by-default and un-lock-out-able.** Empty (the default) means
+unrestricted, so the feature is entirely opt-in and existing installs are
+unaffected — the hook returns immediately when the set is empty. A
+missing header while a restriction is in force is treated as untrusted
+(blocked), since a request without it isn't coming through the ingress
+proxy. The allowlist is edited on HA's own Configuration tab, never from
+inside the add-on, so a mistaken value can always be cleared even after
+it would block the owner — there's no in-app state that can trap them.
+Discoverability closes the loop: the settings sheet's **Access control**
+section and `/api/debug` both surface the caller's own
+`X-Remote-User-ID` (so the owner can copy their ID in before restricting),
+and the 403 page shows a blocked user their ID (so they can ask to be
+added). The check runs per request, consistent with the app's
+already-uncached, read-options-every-request model (§8) — the cost is one
+options-file read, the same the app already does elsewhere.

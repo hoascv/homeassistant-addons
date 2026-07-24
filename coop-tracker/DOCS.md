@@ -213,6 +213,16 @@ you train.
   whichever **currency** you've set). Used only for the Finances
   section's "Est. savings" figures (see below) — adjust it to match what
   a single egg costs at your local supermarket for a meaningful number.
+- **restrict_to_user_ids**: empty by default (anyone who can open the
+  add-on may use it). To limit access to specific people, list their
+  Home Assistant user IDs here, comma-separated — everyone else gets an
+  "access restricted" page instead. Find your own ID in the ⚙️ settings
+  sheet under **Access control**, and **add it before you set this** so
+  you don't lock yourself out (if you do, just clear the value again from
+  the Configuration tab). Note this is on top of Home Assistant's own
+  rule that only admin-group users see the add-on in their sidebar — this
+  option makes that a hard block and lets you narrow it to particular
+  users rather than the whole admin group.
 
 Set these from the add-on's **Configuration** tab, then restart the
 add-on for changes to take effect.

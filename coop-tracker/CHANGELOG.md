@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.34.0
+
+- New **access control**: you can now limit the add-on to specific Home
+  Assistant users. Add their user IDs to the **restrict_to_user_ids**
+  option (comma-separated) and everyone else gets an "access restricted"
+  page — a hard block, on top of Home Assistant only showing the add-on
+  in admin users' sidebars. Empty by default (no change for existing
+  installs). Find your own user ID in the ⚙️ settings sheet under
+  **Access control**, and add it before restricting so you don't lock
+  yourself out (recoverable by clearing the option on the Configuration
+  tab if you do).
+
 ## 1.33.0
 
 - New **View training photos** button in the egg-vision training settings.

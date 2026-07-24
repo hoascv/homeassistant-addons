@@ -1,6 +1,7 @@
 import base64
 import binascii
 import csv
+import html
 import importlib.metadata
 import io
 import json
@@ -63,7 +64,7 @@ except ImportError as e:
     SKLEARN_AVAILABLE = False
     SKLEARN_ERROR = str(e)
 
-APP_VERSION = "1.33.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.34.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("COOP_DB_PATH", "/data/coop.db")
 OPTIONS_PATH = os.environ.get("COOP_OPTIONS_PATH", "/data/options.json")
@@ -290,6 +291,58 @@ def _read_options():
             return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
         return {}
+
+
+# Ingress passes the authenticated Home Assistant user's ID in this
+# header (verified against production add-ons). Home Assistant does NOT
+# expose the user's admin/owner flag to add-ons, so a per-user allowlist
+# is how "restrict who can use this" is actually enforced — the owner
+# lists the IDs allowed, everyone else is blocked. See ARCHITECTURE.md
+# §21 and DOCS.md.
+INGRESS_USER_ID_HEADER = "X-Remote-User-ID"
+
+
+def get_allowed_user_ids():
+    """Parsed set of Home Assistant user IDs permitted to use the add-on,
+    from the restrict_to_user_ids option (comma/space/newline separated).
+    Empty set means unrestricted — the default, so the whole feature is
+    opt-in and can't silently lock anyone out."""
+    raw = _read_options().get("restrict_to_user_ids", "") or ""
+    return {uid.strip() for uid in raw.replace("\n", ",").replace(" ", ",").split(",") if uid.strip()}
+
+
+@app.before_request
+def _enforce_user_allowlist():
+    allowed = get_allowed_user_ids()
+    if not allowed:
+        return None  # feature off — any authenticated ingress user may access
+    user_id = request.headers.get(INGRESS_USER_ID_HEADER)
+    # Require the header to be present: a request without it isn't coming
+    # through Home Assistant's ingress proxy at all, so it can't be
+    # trusted (same posture production add-ons take).
+    if user_id and user_id in allowed:
+        return None
+    return Response(_access_denied_html(user_id), status=403, mimetype="text/html")
+
+
+def _access_denied_html(user_id):
+    shown = html.escape(user_id) if user_id else "(unknown — not opened through Home Assistant)"
+    return (
+        "<!doctype html><html><head><meta charset='utf-8'>"
+        "<meta name='viewport' content='width=device-width, initial-scale=1'>"
+        "<title>Coop Tracker — access restricted</title>"
+        "<style>body{font-family:system-ui,sans-serif;background:#111;color:#eee;"
+        "display:flex;min-height:100vh;margin:0;align-items:center;justify-content:center;padding:1.5rem}"
+        ".card{max-width:26rem;text-align:center;line-height:1.5}"
+        "code{background:#222;padding:.15rem .4rem;border-radius:5px;word-break:break-all}</style>"
+        "</head><body><div class='card'><h1>🥚 Access restricted</h1>"
+        "<p>This Coop Tracker is limited to specific Home Assistant users. "
+        "Your account isn't on the list.</p>"
+        f"<p>Your user ID is:<br><code>{shown}</code></p>"
+        "<p>Ask whoever set up the add-on to add this ID to "
+        "<strong>restrict_to_user_ids</strong> on the add-on's Configuration tab.</p>"
+        "</div></body></html>"
+    )
 
 
 def get_currency():
@@ -2887,6 +2940,8 @@ def api_debug():
             "box_embedder_error": _box_embedder_status()["error"] if OPENCV_AVAILABLE else "opencv unavailable",
             "box_embedder_model_path": EGG_VISION_BOX_EMBED_MODEL_PATH,
             "egg_vision_enabled": get_egg_vision_config()["enabled"],
+            "ingress_user_id": request.headers.get(INGRESS_USER_ID_HEADER),
+            "access_restricted": bool(get_allowed_user_ids()),
         }
     )
 

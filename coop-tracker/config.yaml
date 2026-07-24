@@ -1,5 +1,5 @@
 name: "Coop Tracker"
-version: "1.33.0"
+version: "1.34.0"
 slug: "coop-tracker"
 description: "Log egg collection, coop cleaning, and feeding for your chickens"
 url: "https://github.com/hoascv/homeassistant-addons/tree/main/coop-tracker"
@@ -16,6 +16,10 @@ ingress: true
 ingress_port: 8099
 panel_icon: mdi:egg
 panel_title: "Coop Tracker"
+# Only Home Assistant admin-group users get the sidebar menu entry. This
+# is the default, but set explicitly to document intent — see also
+# restrict_to_user_ids below for a hard, per-user access block.
+panel_admin: true
 homeassistant_api: true
 options:
   currency: "DKK"
@@ -31,6 +35,7 @@ options:
   egg_vision_enabled: false
   egg_vision_training_enabled: false
   egg_vision_training_retention_count: 200
+  restrict_to_user_ids: ""
 schema:
   currency: "list(USD|EUR|GBP|DKK|SEK|NOK|CHF|CAD|AUD|JPY)"
   reminder_enabled: "bool"
@@ -45,3 +50,4 @@ schema:
   egg_vision_enabled: "bool"
   egg_vision_training_enabled: "bool"
   egg_vision_training_retention_count: "int(20,500)"
+  restrict_to_user_ids: "str?"

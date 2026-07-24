@@ -1242,7 +1242,19 @@ backupOpenBtn.addEventListener("click", () => {
   backupBackdrop.classList.add("open");
   loadNestingBoxes();
   loadTrainingStatus();
+  loadAccessInfo();
 });
+
+async function loadAccessInfo() {
+  try {
+    const d = await fetch("api/debug").then((r) => r.json());
+    document.getElementById("access-restricted-value").textContent = d.access_restricted ? "On" : "Off";
+    document.getElementById("access-user-id").textContent = d.ingress_user_id || "unavailable";
+  } catch (e) {
+    document.getElementById("access-restricted-value").textContent = "–";
+    document.getElementById("access-user-id").textContent = "–";
+  }
+}
 backupCloseBtn.addEventListener("click", () => backupBackdrop.classList.remove("open"));
 backupBackdrop.addEventListener("click", (e) => {
   if (e.target === backupBackdrop) backupBackdrop.classList.remove("open");

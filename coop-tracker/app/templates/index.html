@@ -371,6 +371,25 @@
       <button type="button" class="btn-secondary sheet-link-btn" id="training-clear-btn">Clear training data</button>
     </div>
 
+    <div class="field">
+      <label>Access control</label>
+      <p class="sheet-subtext">
+        To limit who can open this add-on, add Home Assistant user IDs to
+        <strong>restrict_to_user_ids</strong> on the Configuration tab
+        (comma-separated). While empty, anyone who can see the add-on can
+        use it. Your own ID is below — copy it in before restricting so you
+        don't lock yourself out.
+      </p>
+      <div class="summary summary-secondary">
+        <div class="stat-small">
+          <span class="stat-small-label">Restriction</span>
+          <span class="stat-small-value" id="access-restricted-value">–</span>
+        </div>
+      </div>
+      <p class="sheet-subtext">Your Home Assistant user ID:</p>
+      <p class="sheet-subtext"><code id="access-user-id">–</code></p>
+    </div>
+
     <div class="sheet-actions">
       <button type="button" class="btn-secondary" id="backup-close-btn">Close</button>
     </div>
