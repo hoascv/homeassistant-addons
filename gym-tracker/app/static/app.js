@@ -269,48 +269,96 @@ document.getElementById("challenge-list").addEventListener("click", async (e) =>
   }
 });
 
-// --- Challenge items management --------------------------------------------
+// --- Challenge items management (typed: exercise / supplement) --------------
 
 async function loadChallengeItems() {
   const list = document.getElementById("challenge-items-list");
   let items;
   try { items = await fetchJSON("api/challenge/items"); } catch (e) { return; }
   list.innerHTML = items
-    .map(
-      (it) => `
-      <li data-id="${it.id}">
-        <input type="text" value="${escapeHtml(it.label)}" data-id="${it.id}" class="item-edit">
-        <button type="button" class="list-del item-del" data-id="${it.id}" aria-label="Remove">✕</button>
-      </li>`
-    )
+    .map((it) => {
+      const icon = it.item_type === "supplement" ? "💊" : "🏋️";
+      // Editable target (exercise) or dose (supplement), inline.
+      const editField =
+        it.item_type === "supplement"
+          ? `<input type="text" class="ci-edit-dose" data-id="${it.id}" value="${escapeHtml(it.dose || "")}" placeholder="dose">`
+          : `<input type="number" class="ci-edit-reps" data-id="${it.id}" value="${it.target_reps != null ? it.target_reps : ""}" placeholder="reps" min="0">`;
+      return `
+        <li data-id="${it.id}">
+          <span class="ci-icon">${icon}</span>
+          <span class="ci-name">${escapeHtml(it.name)}</span>
+          ${editField}
+          <button type="button" class="list-del ci-del" data-id="${it.id}" aria-label="Remove">✕</button>
+        </li>`;
+    })
     .join("");
 }
 
-document.getElementById("challenge-manage-btn").addEventListener("click", () => {
+async function populateChallengeItemForm() {
+  // Fill the exercise + supplement dropdowns from the libraries.
+  let groups = [], sups = [];
+  try { groups = await fetchJSON("api/exercises"); } catch (e) { /* ignore */ }
+  try { sups = await fetchJSON("api/supplements"); } catch (e) { /* ignore */ }
+  document.getElementById("ci-exercise").innerHTML = groups
+    .map((g) => `<optgroup label="${escapeHtml(g.equipment)}">${g.exercises
+      .map((ex) => `<option value="${ex.id}">${escapeHtml(ex.name)}</option>`).join("")}</optgroup>`)
+    .join("");
+  document.getElementById("ci-supplement").innerHTML = sups
+    .map((s) => `<option value="${s.id}">${escapeHtml(s.name)}${s.dose ? " (" + escapeHtml(s.dose) + ")" : ""}</option>`)
+    .join("");
+}
+
+function syncChallengeItemFields() {
+  const isSupp = document.getElementById("ci-type").value === "supplement";
+  document.getElementById("ci-exercise-fields").hidden = isSupp;
+  document.getElementById("ci-supplement-fields").hidden = !isSupp;
+}
+document.getElementById("ci-type").addEventListener("change", syncChallengeItemFields);
+
+document.getElementById("challenge-manage-btn").addEventListener("click", async () => {
   openSheet("challenge-items-backdrop");
+  await populateChallengeItemForm();
+  syncChallengeItemFields();
   loadChallengeItems();
 });
 document.getElementById("challenge-items-close-btn").addEventListener("click", () => {
   closeSheet("challenge-items-backdrop");
   loadChallenge();
 });
+
 document.getElementById("challenge-item-form").addEventListener("submit", async (e) => {
   e.preventDefault();
-  const input = document.getElementById("challenge-item-input");
-  const label = input.value.trim();
-  if (!label) return;
+  const type = document.getElementById("ci-type").value;
+  let payload;
+  if (type === "supplement") {
+    const supplement_id = document.getElementById("ci-supplement").value;
+    if (!supplement_id) { toast("Add a supplement in the Library first."); return; }
+    payload = { item_type: "supplement", supplement_id, dose: document.getElementById("ci-dose").value };
+  } else {
+    const exercise_id = document.getElementById("ci-exercise").value;
+    if (!exercise_id) { toast("Add an exercise in the Library first."); return; }
+    payload = {
+      item_type: "exercise",
+      exercise_id,
+      target_sets: document.getElementById("ci-sets").value,
+      target_reps: document.getElementById("ci-reps").value,
+    };
+  }
   try {
     await fetchJSON("api/challenge/items", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ label }),
+      body: JSON.stringify(payload),
     });
-    input.value = "";
+    document.getElementById("ci-dose").value = "";
+    document.getElementById("ci-sets").value = "";
+    document.getElementById("ci-reps").value = "";
     loadChallengeItems();
   } catch (err) { toast(err.message); }
 });
+
 document.getElementById("challenge-items-list").addEventListener("click", async (e) => {
-  const del = e.target.closest(".item-del");
+  const del = e.target.closest(".ci-del");
   if (!del) return;
   if (!confirm("Remove this challenge item? Past streaks are kept.")) return;
   try {
@@ -319,16 +367,64 @@ document.getElementById("challenge-items-list").addEventListener("click", async 
   } catch (err) { toast(err.message); }
 });
 document.getElementById("challenge-items-list").addEventListener("change", async (e) => {
-  const input = e.target.closest(".item-edit");
-  if (!input) return;
-  const label = input.value.trim();
-  if (!label) return;
+  const reps = e.target.closest(".ci-edit-reps");
+  const dose = e.target.closest(".ci-edit-dose");
+  const field = reps || dose;
+  if (!field) return;
+  const payload = reps ? { target_reps: field.value } : { dose: field.value };
   try {
-    await fetchJSON(`api/challenge/items/${input.dataset.id}`, {
+    await fetchJSON(`api/challenge/items/${field.dataset.id}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ label }),
+      body: JSON.stringify(payload),
     });
+  } catch (err) { toast(err.message); }
+});
+
+// --- Challenge history (edit past days) ------------------------------------
+
+document.getElementById("challenge-history-btn").addEventListener("click", () => {
+  openSheet("challenge-history-backdrop");
+  loadChallengeHistory();
+});
+document.getElementById("challenge-history-close-btn").addEventListener("click", () => {
+  closeSheet("challenge-history-backdrop");
+  loadChallenge();
+});
+
+async function loadChallengeHistory() {
+  const host = document.getElementById("history-grid");
+  let data;
+  try { data = await fetchJSON("api/challenge/history?days=14"); } catch (e) { return; }
+  const items = data.items || [];
+  host.innerHTML = data.days
+    .map((d) => {
+      const done = new Set(d.done);
+      const cells = items
+        .map(
+          (it) => `<button type="button" class="history-cell ${done.has(it.id) ? "on" : ""}"
+            data-item="${it.id}" data-day="${d.day}" title="${escapeHtml(it.name)}">${it.item_type === "supplement" ? "💊" : "🏋️"}</button>`
+        )
+        .join("");
+      return `
+        <div class="history-row ${d.complete ? "complete" : ""}">
+          <span class="history-day">${escapeHtml(fmtDate(d.day))}</span>
+          <div class="history-cells">${cells}</div>
+        </div>`;
+    })
+    .join("");
+}
+
+document.getElementById("history-grid").addEventListener("click", async (e) => {
+  const cell = e.target.closest(".history-cell");
+  if (!cell) return;
+  try {
+    await fetchJSON("api/challenge/toggle", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ item_id: Number(cell.dataset.item), day: cell.dataset.day }),
+    });
+    loadChallengeHistory();
   } catch (err) { toast(err.message); }
 });
 
@@ -433,15 +529,27 @@ document.getElementById("weight-history").addEventListener("click", async (e) =>
   }
 });
 
-// --- Exercises + workouts --------------------------------------------------
+// --- Library: exercises + supplements --------------------------------------
 
 let exerciseGroups = [];
 
-document.getElementById("exercises-open-btn").addEventListener("click", () => {
-  openSheet("exercises-backdrop");
+document.getElementById("library-open-btn").addEventListener("click", () => {
+  openSheet("library-backdrop");
   loadExercises();
+  loadSupplements();
 });
-document.getElementById("exercises-close-btn").addEventListener("click", () => closeSheet("exercises-backdrop"));
+document.getElementById("library-close-btn").addEventListener("click", () => closeSheet("library-backdrop"));
+
+// Library tabs
+document.querySelectorAll(".lib-tab").forEach((tab) => {
+  tab.addEventListener("click", () => {
+    document.querySelectorAll(".lib-tab").forEach((t) => t.classList.remove("active"));
+    tab.classList.add("active");
+    const which = tab.dataset.tab;
+    document.getElementById("lib-exercises").hidden = which !== "exercises";
+    document.getElementById("lib-supplements").hidden = which !== "supplements";
+  });
+});
 
 async function loadExercises() {
   try { exerciseGroups = await fetchJSON("api/exercises"); } catch (e) { return; }
@@ -455,12 +563,13 @@ async function loadExercises() {
           .map(
             (ex) => `
           <div class="exercise-row" data-id="${ex.id}">
-            <div>
+            <div class="ex-main">
               <div class="ex-name">${escapeHtml(ex.name)}</div>
               ${ex.category ? `<div class="ex-cat">${escapeHtml(ex.category)}</div>` : ""}
             </div>
             <div class="exercise-actions">
               <button type="button" class="link-btn ex-log-btn" data-id="${ex.id}">Log</button>
+              <button type="button" class="link-btn ex-edit" data-id="${ex.id}" aria-label="Edit">✎</button>
               <button type="button" class="list-del ex-del" data-id="${ex.id}" aria-label="Remove">✕</button>
             </div>
           </div>`
@@ -470,7 +579,6 @@ async function loadExercises() {
     )
     .join("");
 
-  // Equipment datalist for the add form + workout exercise select.
   const equipment = [...new Set(exerciseGroups.map((g) => g.equipment))];
   document.getElementById("equipment-list").innerHTML = equipment
     .map((eq) => `<option value="${escapeHtml(eq)}">`).join("");
@@ -501,16 +609,113 @@ document.getElementById("exercises-groups").addEventListener("click", async (e) 
     catch (err) { toast(err.message); }
     return;
   }
+  const edit = e.target.closest(".ex-edit");
+  if (edit) {
+    const ex = exerciseGroups.flatMap((g) => g.exercises).find((x) => String(x.id) === edit.dataset.id);
+    if (!ex) return;
+    const name = prompt("Exercise name:", ex.name);
+    if (name == null) return;
+    const equipment = prompt("Equipment:", ex.equipment);
+    if (equipment == null) return;
+    try {
+      await fetchJSON(`api/exercises/${ex.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: name.trim(), equipment: equipment.trim() }),
+      });
+      loadExercises();
+    } catch (err) { toast(err.message); }
+    return;
+  }
   const log = e.target.closest(".ex-log-btn") || e.target.closest(".exercise-row");
   if (log) openWorkoutSheet(Number(log.dataset.id));
 });
 
+// Supplements
+let supplementsCache = [];
+
+async function loadSupplements() {
+  try { supplementsCache = await fetchJSON("api/supplements"); } catch (e) { return; }
+  document.getElementById("supplements-list").innerHTML = supplementsCache.length
+    ? supplementsCache
+        .map(
+          (s) => `
+        <li data-id="${s.id}">
+          <span class="ci-icon">💊</span>
+          <span class="ci-name">${escapeHtml(s.name)}${s.dose ? ` <span class="muted">· ${escapeHtml(s.dose)}</span>` : ""}</span>
+          <button type="button" class="link-btn sup-edit" data-id="${s.id}" aria-label="Edit">✎</button>
+          <button type="button" class="list-del sup-del" data-id="${s.id}" aria-label="Remove">✕</button>
+        </li>`
+        )
+        .join("")
+    : '<li class="empty-state">No supplements yet.</li>';
+}
+
+document.getElementById("supplement-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const name = document.getElementById("supplement-form-name").value.trim();
+  const dose = document.getElementById("supplement-form-dose").value.trim();
+  if (!name) return;
+  try {
+    await fetchJSON("api/supplements", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, dose }),
+    });
+    document.getElementById("supplement-form-name").value = "";
+    document.getElementById("supplement-form-dose").value = "";
+    loadSupplements();
+  } catch (err) { toast(err.message); }
+});
+
+document.getElementById("supplements-list").addEventListener("click", async (e) => {
+  const del = e.target.closest(".sup-del");
+  if (del) {
+    if (!confirm("Remove this supplement?")) return;
+    try { await fetchJSON(`api/supplements/${del.dataset.id}`, { method: "DELETE" }); loadSupplements(); }
+    catch (err) { toast(err.message); }
+    return;
+  }
+  const edit = e.target.closest(".sup-edit");
+  if (edit) {
+    const s = supplementsCache.find((x) => String(x.id) === edit.dataset.id);
+    if (!s) return;
+    const name = prompt("Supplement name:", s.name);
+    if (name == null) return;
+    const dose = prompt("Default dose:", s.dose || "");
+    if (dose == null) return;
+    try {
+      await fetchJSON(`api/supplements/${s.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: name.trim(), dose: dose.trim() }),
+      });
+      loadSupplements();
+    } catch (err) { toast(err.message); }
+  }
+});
+
 // Workout log sheet
+let workoutFilterExerciseId = null;
+let workoutHistoryCache = [];
+
 document.getElementById("log-workout-btn").addEventListener("click", () => openWorkoutSheet(null));
 document.getElementById("workout-form-cancel").addEventListener("click", () => {
   closeSheet("workout-backdrop");
   loadRecentWorkouts();
 });
+
+function resetWorkoutForm() {
+  document.getElementById("workout-form-id").value = "";
+  document.getElementById("workout-form-sets").value = "";
+  document.getElementById("workout-form-reps").value = "";
+  document.getElementById("workout-form-weight").value = "";
+  document.getElementById("workout-form-duration").value = "";
+  document.getElementById("workout-form-notes").value = "";
+  document.getElementById("workout-form-date").value = todayISO();
+  document.getElementById("workout-title").textContent = "Log a set";
+  document.getElementById("workout-form-save").textContent = "Save set";
+}
 
 async function openWorkoutSheet(exerciseId) {
   if (!exerciseGroups.length) {
@@ -524,18 +729,16 @@ async function openWorkoutSheet(exerciseId) {
         .join("")}</optgroup>`
     )
     .join("");
+  resetWorkoutForm();
   if (exerciseId) select.value = String(exerciseId);
-  document.getElementById("workout-form-sets").value = "";
-  document.getElementById("workout-form-reps").value = "";
-  document.getElementById("workout-form-weight").value = "";
-  document.getElementById("workout-form-duration").value = "";
-  document.getElementById("workout-form-notes").value = "";
+  workoutFilterExerciseId = exerciseId || null;
   openSheet("workout-backdrop");
   loadWorkoutHistory(exerciseId);
 }
 
 document.getElementById("workout-form").addEventListener("submit", async (e) => {
   e.preventDefault();
+  const id = document.getElementById("workout-form-id").value;
   const payload = {
     exercise_id: document.getElementById("workout-form-exercise").value,
     sets: document.getElementById("workout-form-sets").value,
@@ -543,18 +746,26 @@ document.getElementById("workout-form").addEventListener("submit", async (e) => 
     weight_kg: document.getElementById("workout-form-weight").value,
     duration_sec: document.getElementById("workout-form-duration").value,
     notes: document.getElementById("workout-form-notes").value,
+    date: document.getElementById("workout-form-date").value,
   };
   try {
-    await fetchJSON("api/workouts", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    toast("Set logged.");
-    document.getElementById("workout-form-sets").value = "";
-    document.getElementById("workout-form-reps").value = "";
-    document.getElementById("workout-form-notes").value = "";
-    loadWorkoutHistory(Number(payload.exercise_id));
+    if (id) {
+      await fetchJSON(`api/workouts/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      toast("Workout updated.");
+    } else {
+      await fetchJSON("api/workouts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      toast("Set logged.");
+    }
+    resetWorkoutForm();
+    loadWorkoutHistory(workoutFilterExerciseId);
     loadRecentWorkouts();
   } catch (err) { toast(err.message); }
 });
@@ -575,30 +786,56 @@ async function loadWorkoutHistory(exerciseId) {
   try {
     rows = await fetchJSON(exerciseId ? `api/workouts?exercise_id=${exerciseId}` : "api/workouts");
   } catch (e) { return; }
+  workoutHistoryCache = rows;
   list.innerHTML = rows.length
     ? rows
-        .map(
-          (w) => `
+        .map((w) => {
+          // Challenge-logged sets are managed by the challenge check-off, so
+          // they're marked and not directly editable/deletable here.
+          const fromChallenge = w.source === "challenge";
+          const actions = fromChallenge
+            ? '<span class="tag muted">from challenge</span>'
+            : `<button type="button" class="link-btn workout-edit" data-id="${w.id}">Edit</button>
+               <button type="button" class="list-del workout-del" data-id="${w.id}" aria-label="Delete">✕</button>`;
+          return `
       <li data-id="${w.id}">
         <div class="list-main">
           <div class="list-title">${escapeHtml(w.exercise_name)}</div>
           <div class="list-sub">${escapeHtml(fmtDate(w.ts))}${workoutSummary(w) ? " · " + escapeHtml(workoutSummary(w)) : ""}</div>
         </div>
-        <button type="button" class="list-del workout-del" data-id="${w.id}" aria-label="Delete">✕</button>
-      </li>`
-        )
+        <div class="row-actions">${actions}</div>
+      </li>`;
+        })
         .join("")
     : '<li class="empty-state">Nothing logged yet.</li>';
 }
 
 document.getElementById("workout-history").addEventListener("click", async (e) => {
   const del = e.target.closest(".workout-del");
-  if (!del) return;
-  try {
-    await fetchJSON(`api/workouts/${del.dataset.id}`, { method: "DELETE" });
-    loadWorkoutHistory(Number(document.getElementById("workout-form-exercise").value));
-    loadRecentWorkouts();
-  } catch (err) { toast(err.message); }
+  if (del) {
+    try {
+      await fetchJSON(`api/workouts/${del.dataset.id}`, { method: "DELETE" });
+      loadWorkoutHistory(workoutFilterExerciseId);
+      loadRecentWorkouts();
+    } catch (err) { toast(err.message); }
+    return;
+  }
+  const edit = e.target.closest(".workout-edit");
+  if (edit) {
+    const w = workoutHistoryCache.find((x) => String(x.id) === edit.dataset.id);
+    if (!w) return;
+    document.getElementById("workout-form-id").value = w.id;
+    document.getElementById("workout-form-exercise").value = String(w.exercise_id);
+    document.getElementById("workout-form-sets").value = w.sets != null ? w.sets : "";
+    document.getElementById("workout-form-reps").value = w.reps != null ? w.reps : "";
+    document.getElementById("workout-form-weight").value = w.weight_kg != null ? w.weight_kg : "";
+    document.getElementById("workout-form-duration").value = w.duration_sec != null ? w.duration_sec : "";
+    document.getElementById("workout-form-notes").value = w.notes || "";
+    document.getElementById("workout-form-date").value = w.ts.slice(0, 10);
+    document.getElementById("workout-title").textContent = "Edit workout";
+    document.getElementById("workout-form-save").textContent = "Update";
+    document.getElementById("workout-backdrop").querySelector(".sheet").scrollTop = 0;
+  }
 });
 
 async function loadRecentWorkouts() {

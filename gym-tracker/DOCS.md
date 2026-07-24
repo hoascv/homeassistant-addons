@@ -30,31 +30,52 @@ Tap **Log weight** on the home screen. Enter your weight and, optionally, a
 body-fat percentage and a note. The weight sheet lists every reading and
 lets you edit or delete past entries.
 
+## The library: exercises and supplements
+
+The 🏋️ button opens your **Library**, with two tabs:
+
+- **Exercises** — home exercises grouped by the equipment they need:
+  - **Bodyweight** — push-up, squat, lunge, plank, glute bridge, and more.
+  - **Pull-up bar** — pull-up, chin-up, hanging knee raise.
+  - **Dumbbells** — curl, shoulder press, floor bench press, row, goblet
+    squat, Romanian deadlift, lateral raise.
+- **Supplements** — things you take, each with a default dose (starts with
+  Creatine and protein powder).
+
+Add, **rename** (✎), or remove entries in either tab. Tap an exercise to
+**log a set** (sets × reps, with optional weight or duration); each exercise
+keeps a short history of what you logged.
+
 ## The daily challenge
 
-The challenge is a checklist you complete each day. It starts as:
+The challenge is a checklist you complete each day, **built from your
+library** — every item is either an exercise (with a rep/set target) or a
+supplement (with a dose), so there's no loose free text to keep tidy. It
+starts as:
 
-- Creatine 5 g
-- 40 push-ups
-- 40 squats
+- Creatine · 5 g
+- Push-up · 40 reps
+- Squat · 40 reps
 
 Tick each item off as you do it. A **streak** counts the consecutive days
-on which you completed *every* active item. The items are fully editable —
-change the amounts, remove one, or add your own — in the challenge card.
+on which you completed *every* active item. Use **Edit items** on the
+challenge card to add items (choose an exercise or supplement from your
+library), change a target or dose, or remove one — removing keeps your past
+streak intact.
 
-## Exercises and workouts
+Ticking off an **exercise** item also records a workout in your history
+using its target sets/reps; un-ticking removes that entry again. Supplement
+items don't create workouts.
 
-The 🏋️ exercises sheet is a library of home exercises grouped by the
-equipment they need:
+### Editing history
 
-- **Bodyweight** — push-up, squat, lunge, plank, glute bridge, and more.
-- **Pull-up bar** — pull-up, chin-up, hanging knee raise.
-- **Dumbbells** — curl, shoulder press, floor bench press, row, goblet
-  squat, Romanian deadlift, lateral raise.
-
-Add your own exercises as you buy new equipment. Tap an exercise to **log a
-set** (sets × reps, with optional weight or duration); each exercise keeps a
-short history of what you logged.
+**History** on the challenge card opens a day-by-day grid of the last two
+weeks. Tap any dot to mark that day's item done or not — useful for
+backfilling a day you forgot to log, or correcting your streak. In an
+exercise's or the workout log's history, tap **Edit** on any manually
+logged workout to change its sets, reps, weight, or date. (Workouts created
+by the challenge check-off are managed by the challenge and marked
+accordingly.)
 
 ## Reminders
 

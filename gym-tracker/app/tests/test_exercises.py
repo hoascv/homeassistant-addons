@@ -69,6 +69,33 @@ def test_workout_crud(client):
     assert client.get("/api/workouts").get_json() == []
 
 
+def test_workout_edit(client):
+    groups = client.get("/api/exercises").get_json()
+    ex_id = groups[0]["exercises"][0]["id"]
+    wid = client.post(
+        "/api/workouts", json={"exercise_id": ex_id, "sets": 3, "reps": 10, "date": "2026-07-20"}
+    ).get_json()["id"]
+
+    res = client.put(
+        f"/api/workouts/{wid}",
+        json={"sets": 4, "reps": 12, "weight_kg": 12.5, "date": "2026-07-21", "notes": "felt strong"},
+    )
+    assert res.status_code == 200
+    w = client.get("/api/workouts").get_json()[0]
+    assert w["sets"] == 4 and w["reps"] == 12 and w["weight_kg"] == 12.5
+    assert w["ts"].startswith("2026-07-21")
+    assert w["notes"] == "felt strong"
+    assert client.put("/api/workouts/999", json={"sets": 1}).status_code == 404
+
+
+def test_exercise_referenced_by_challenge_is_archived(client):
+    groups = client.get("/api/exercises").get_json()
+    ex_id = groups[0]["exercises"][0]["id"]
+    client.post("/api/challenge/items", json={"item_type": "exercise", "exercise_id": ex_id, "target_reps": 20})
+    # even with no workout history, a challenge reference protects it from hard delete
+    assert client.delete(f"/api/exercises/{ex_id}").get_json()["status"] == "archived"
+
+
 def test_workout_validation(client):
     assert client.post("/api/workouts", json={}).status_code == 400
     assert client.post("/api/workouts", json={"exercise_id": 999}).status_code == 400

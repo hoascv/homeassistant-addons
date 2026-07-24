@@ -15,7 +15,7 @@ from datetime import date, datetime, time as dtime, timedelta
 
 from flask import Flask, Response, g, jsonify, render_template, request, send_file
 
-APP_VERSION = "1.0.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.1.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("GYM_DB_PATH", "/data/gym.db")
 OPTIONS_PATH = os.environ.get("GYM_OPTIONS_PATH", "/data/options.json")
@@ -38,7 +38,19 @@ SEED_GOAL = {
     "start_date": SEED_START_DATE,
     "start_weight_kg": SEED_START_WEIGHT,
 }
-SEED_CHALLENGE_ITEMS = ["Creatine 5 g", "40 push-ups", "40 squats"]
+# (name, default dose) — a small starter supplements library, editable.
+SEED_SUPPLEMENTS = [
+    ("Creatine", "5 g"),
+    ("Protein powder", "30 g"),
+]
+# The default daily challenge, now typed: each item references a library
+# entry (an exercise with a rep target, or a supplement with a dose) rather
+# than free text, so the data stays clean and links back to the libraries.
+SEED_CHALLENGE = [
+    {"type": "supplement", "name": "Creatine", "dose": "5 g"},
+    {"type": "exercise", "name": "Push-up", "target_reps": 40},
+    {"type": "exercise", "name": "Squat", "target_reps": 40},
+]
 
 # (name, equipment, category) — a home-friendly starter library. The user
 # extends this as they buy equipment (POST /api/exercises).
@@ -184,6 +196,7 @@ def _set_app_state(conn, key, value):
 def init_db():
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row  # seeds use column-name access
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS weight_logs (
@@ -222,6 +235,17 @@ def init_db():
     )
     conn.execute(
         """
+        CREATE TABLE IF NOT EXISTS supplements (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            dose TEXT,
+            is_custom INTEGER NOT NULL DEFAULT 0,
+            archived INTEGER NOT NULL DEFAULT 0
+        )
+        """
+    )
+    conn.execute(
+        """
         CREATE TABLE IF NOT EXISTS workout_logs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             ts TEXT NOT NULL,
@@ -230,17 +254,28 @@ def init_db():
             reps INTEGER,
             weight_kg REAL,
             duration_sec INTEGER,
-            notes TEXT
+            notes TEXT,
+            source TEXT NOT NULL DEFAULT 'manual',
+            challenge_item_id INTEGER
         )
         """
     )
+    # Typed challenge items: each references either an exercise (with a
+    # sets/reps target) or a supplement (with a dose). `label` is a display
+    # fallback; the live name comes from the referenced library row.
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS challenge_items (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             label TEXT NOT NULL,
             sort_order INTEGER NOT NULL DEFAULT 0,
-            archived INTEGER NOT NULL DEFAULT 0
+            archived INTEGER NOT NULL DEFAULT 0,
+            item_type TEXT,
+            exercise_id INTEGER,
+            supplement_id INTEGER,
+            target_sets INTEGER,
+            target_reps INTEGER,
+            dose TEXT
         )
         """
     )
@@ -263,9 +298,32 @@ def init_db():
         """
     )
 
+    _migrate_columns(conn)
     _seed_defaults(conn)
     conn.commit()
     conn.close()
+
+
+def _migrate_columns(conn):
+    """Bring an older database (1.0.0's untyped challenge, no supplements)
+    up to the current schema. CREATE TABLE handles fresh installs; these
+    ALTERs handle in-place upgrades."""
+    challenge_cols = {row[1] for row in conn.execute("PRAGMA table_info(challenge_items)")}
+    for col, decl in (
+        ("item_type", "TEXT"),
+        ("exercise_id", "INTEGER"),
+        ("supplement_id", "INTEGER"),
+        ("target_sets", "INTEGER"),
+        ("target_reps", "INTEGER"),
+        ("dose", "TEXT"),
+    ):
+        if col not in challenge_cols:
+            conn.execute(f"ALTER TABLE challenge_items ADD COLUMN {col} {decl}")
+    workout_cols = {row[1] for row in conn.execute("PRAGMA table_info(workout_logs)")}
+    if "source" not in workout_cols:
+        conn.execute("ALTER TABLE workout_logs ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'")
+    if "challenge_item_id" not in workout_cols:
+        conn.execute("ALTER TABLE workout_logs ADD COLUMN challenge_item_id INTEGER")
 
 
 def _seed_defaults(conn):
@@ -289,18 +347,56 @@ def _seed_defaults(conn):
             "INSERT INTO weight_logs (ts, weight_kg, body_fat_pct, notes) VALUES (?, ?, NULL, ?)",
             (f"{SEED_START_DATE}T08:00:00", SEED_START_WEIGHT, "Starting weight"),
         )
-    if conn.execute("SELECT COUNT(*) FROM challenge_items").fetchone()[0] == 0:
-        for i, label in enumerate(SEED_CHALLENGE_ITEMS):
-            conn.execute(
-                "INSERT INTO challenge_items (label, sort_order, archived) VALUES (?, ?, 0)",
-                (label, i),
-            )
     if conn.execute("SELECT COUNT(*) FROM exercises").fetchone()[0] == 0:
         for name, equipment, category in PRESET_EXERCISES:
             conn.execute(
                 "INSERT INTO exercises (name, equipment, category, is_custom, archived) "
                 "VALUES (?, ?, ?, 0, 0)",
                 (name, equipment, category),
+            )
+    if conn.execute("SELECT COUNT(*) FROM supplements").fetchone()[0] == 0:
+        for name, dose in SEED_SUPPLEMENTS:
+            conn.execute(
+                "INSERT INTO supplements (name, dose, is_custom, archived) VALUES (?, ?, 0, 0)",
+                (name, dose),
+            )
+    _seed_typed_challenge(conn)
+
+
+def _seed_typed_challenge(conn):
+    """Seed the default typed challenge, once, referencing the seeded
+    library rows. Also converts a 1.0.0 database: any legacy free-text
+    (untyped) items are archived so only clean, typed items remain."""
+    typed = conn.execute(
+        "SELECT COUNT(*) FROM challenge_items WHERE item_type IS NOT NULL AND archived = 0"
+    ).fetchone()[0]
+    if typed:
+        return
+    conn.execute("UPDATE challenge_items SET archived = 1 WHERE item_type IS NULL")
+    for order, spec in enumerate(SEED_CHALLENGE):
+        if spec["type"] == "supplement":
+            row = conn.execute(
+                "SELECT id FROM supplements WHERE name = ? AND archived = 0", (spec["name"],)
+            ).fetchone()
+            if row is None:
+                continue
+            dose = spec.get("dose")
+            conn.execute(
+                "INSERT INTO challenge_items (label, sort_order, archived, item_type, supplement_id, dose) "
+                "VALUES (?, ?, 0, 'supplement', ?, ?)",
+                (f"{spec['name']}{' · ' + dose if dose else ''}", order, row["id"], dose),
+            )
+        else:
+            row = conn.execute(
+                "SELECT id FROM exercises WHERE name = ? AND archived = 0", (spec["name"],)
+            ).fetchone()
+            if row is None:
+                continue
+            reps = spec.get("target_reps")
+            conn.execute(
+                "INSERT INTO challenge_items (label, sort_order, archived, item_type, exercise_id, target_reps) "
+                "VALUES (?, ?, 0, 'exercise', ?, ?)",
+                (f"{spec['name']}{' × ' + str(reps) if reps else ''}", order, row["id"], reps),
             )
 
 
@@ -352,6 +448,40 @@ def _parse_hhmm(value):
         return dtime(int(hh), int(mm))
     except (ValueError, AttributeError, TypeError):
         return None
+
+
+def _opt_int(data, key):
+    """Optional integer field: None/'' -> None; bad value raises ValueError(key)."""
+    val = data.get(key)
+    if val is None or val == "":
+        return None
+    try:
+        return int(val)
+    except (TypeError, ValueError):
+        raise ValueError(key)
+
+
+def _opt_float(data, key):
+    val = data.get(key)
+    if val is None or val == "":
+        return None
+    try:
+        return float(val)
+    except (TypeError, ValueError):
+        raise ValueError(key)
+
+
+def _resolve_ts(day):
+    """Turn an optional YYYY-MM-DD into a stored timestamp. Returns
+    (ts, None) or (None, error-message)."""
+    day = (day or "").strip()
+    if not day:
+        return datetime.now().isoformat(timespec="seconds"), None
+    try:
+        date.fromisoformat(day)
+    except ValueError:
+        return None, "date must be YYYY-MM-DD"
+    return f"{day}T12:00:00", None
 
 
 # --- Domain helpers ---
@@ -418,13 +548,55 @@ def _weight_progress(conn):
 
 
 def _active_challenge_items(conn):
-    return [
-        dict(r)
-        for r in conn.execute(
-            "SELECT id, label, sort_order FROM challenge_items WHERE archived = 0 "
-            "ORDER BY sort_order ASC, id ASC"
-        )
-    ]
+    rows = conn.execute(
+        "SELECT ci.id, ci.sort_order, ci.item_type, ci.exercise_id, ci.supplement_id, "
+        "ci.target_sets, ci.target_reps, ci.dose, ci.label AS stored_label, "
+        "e.name AS exercise_name, s.name AS supplement_name "
+        "FROM challenge_items ci "
+        "LEFT JOIN exercises e ON e.id = ci.exercise_id "
+        "LEFT JOIN supplements s ON s.id = ci.supplement_id "
+        "WHERE ci.archived = 0 ORDER BY ci.sort_order ASC, ci.id ASC"
+    ).fetchall()
+    return [_challenge_item_view(r) for r in rows]
+
+
+def _exercise_target_text(sets, reps):
+    if sets and reps:
+        return f"{sets}×{reps}"
+    if reps:
+        return f"{reps} reps"
+    if sets:
+        return f"{sets} sets"
+    return None
+
+
+def _challenge_item_view(r):
+    """Present a challenge-item row for the API — the display label uses the
+    referenced library row's *live* name, so renaming an exercise or
+    supplement updates the challenge everywhere."""
+    item_type = r["item_type"]
+    if item_type == "exercise":
+        name = r["exercise_name"] or r["stored_label"]
+        target = _exercise_target_text(r["target_sets"], r["target_reps"])
+        label = f"{name}{' · ' + target if target else ''}"
+    elif item_type == "supplement":
+        name = r["supplement_name"] or r["stored_label"]
+        label = f"{name}{' · ' + r['dose'] if r['dose'] else ''}"
+    else:  # legacy/untyped fallback (should be archived, but stay safe)
+        name = r["stored_label"]
+        label = r["stored_label"]
+    return {
+        "id": r["id"],
+        "sort_order": r["sort_order"],
+        "item_type": item_type,
+        "exercise_id": r["exercise_id"],
+        "supplement_id": r["supplement_id"],
+        "target_sets": r["target_sets"],
+        "target_reps": r["target_reps"],
+        "dose": r["dose"],
+        "name": name,
+        "label": label,
+    }
 
 
 def _completions_by_day(conn, item_ids):
@@ -689,16 +861,86 @@ def api_delete_exercise(exercise_id):
     db = get_db()
     if db.execute("SELECT 1 FROM exercises WHERE id = ?", (exercise_id,)).fetchone() is None:
         return jsonify({"error": "no such exercise"}), 404
-    # Preserve workout history: archive an exercise that's been logged
-    # against, hard-delete one that's never been used.
+    # Preserve history and challenge links: archive an exercise that's been
+    # logged against or referenced by a challenge item; hard-delete an
+    # otherwise-unused one.
     used = db.execute(
         "SELECT 1 FROM workout_logs WHERE exercise_id = ? LIMIT 1", (exercise_id,)
+    ).fetchone() or db.execute(
+        "SELECT 1 FROM challenge_items WHERE exercise_id = ? AND archived = 0 LIMIT 1", (exercise_id,)
     ).fetchone()
     if used:
         db.execute("UPDATE exercises SET archived = 1 WHERE id = ?", (exercise_id,))
         result = "archived"
     else:
         db.execute("DELETE FROM exercises WHERE id = ?", (exercise_id,))
+        result = "deleted"
+    db.commit()
+    return jsonify({"status": result})
+
+
+# --- Routes: supplements ---
+
+
+@app.route("/api/supplements")
+def api_supplements():
+    db = get_db()
+    return jsonify(
+        [
+            dict(r)
+            for r in db.execute(
+                "SELECT id, name, dose, is_custom FROM supplements WHERE archived = 0 ORDER BY name ASC"
+            )
+        ]
+    )
+
+
+@app.route("/api/supplements", methods=["POST"])
+def api_add_supplement():
+    data = request.get_json(force=True, silent=True) or {}
+    name = (data.get("name") or "").strip()
+    if not name:
+        return jsonify({"error": "name is required"}), 400
+    dose = (data.get("dose") or "").strip() or None
+    db = get_db()
+    cur = db.execute(
+        "INSERT INTO supplements (name, dose, is_custom, archived) VALUES (?, ?, 1, 0)", (name, dose)
+    )
+    db.commit()
+    return jsonify({"status": "created", "id": cur.lastrowid}), 201
+
+
+@app.route("/api/supplements/<int:supplement_id>", methods=["PUT"])
+def api_update_supplement(supplement_id):
+    data = request.get_json(force=True, silent=True) or {}
+    name = (data.get("name") or "").strip()
+    if not name:
+        return jsonify({"error": "name is required"}), 400
+    dose = (data.get("dose") or "").strip() or None
+    db = get_db()
+    cur = db.execute(
+        "UPDATE supplements SET name = ?, dose = ? WHERE id = ?", (name, dose, supplement_id)
+    )
+    db.commit()
+    if cur.rowcount == 0:
+        return jsonify({"error": "no such supplement"}), 404
+    return jsonify({"status": "updated"})
+
+
+@app.route("/api/supplements/<int:supplement_id>", methods=["DELETE"])
+def api_delete_supplement(supplement_id):
+    db = get_db()
+    if db.execute("SELECT 1 FROM supplements WHERE id = ?", (supplement_id,)).fetchone() is None:
+        return jsonify({"error": "no such supplement"}), 404
+    # Archive if a challenge item references it, else hard-delete.
+    used = db.execute(
+        "SELECT 1 FROM challenge_items WHERE supplement_id = ? AND archived = 0 LIMIT 1", (supplement_id,)
+    ).fetchone()
+    if used:
+        db.execute("UPDATE supplements SET archived = 1 WHERE id = ?", (supplement_id,))
+        result = "archived"
+    else:
+        db.execute("DELETE FROM supplements WHERE id = ?", (supplement_id,))
         result = "deleted"
     db.commit()
     return jsonify({"status": result})
@@ -721,7 +963,7 @@ def api_workouts():
         dict(r)
         for r in db.execute(
             "SELECT w.id, w.ts, w.exercise_id, w.sets, w.reps, w.weight_kg, w.duration_sec, "
-            "w.notes, e.name AS exercise_name, e.equipment "
+            "w.notes, w.source, e.name AS exercise_name, e.equipment "
             f"FROM workout_logs w JOIN exercises e ON e.id = w.exercise_id {where} "
             "ORDER BY w.ts DESC, w.id DESC LIMIT 200",
             tuple(params),
@@ -741,48 +983,52 @@ def api_add_workout():
     if db.execute("SELECT 1 FROM exercises WHERE id = ?", (exercise_id,)).fetchone() is None:
         return jsonify({"error": "no such exercise"}), 400
 
-    def opt_int(key):
-        val = data.get(key)
-        if val is None or val == "":
-            return None
-        try:
-            return int(val)
-        except (TypeError, ValueError):
-            raise ValueError(key)
-
-    def opt_float(key):
-        val = data.get(key)
-        if val is None or val == "":
-            return None
-        try:
-            return float(val)
-        except (TypeError, ValueError):
-            raise ValueError(key)
-
     try:
-        sets, reps, duration = opt_int("sets"), opt_int("reps"), opt_int("duration_sec")
-        weight = opt_float("weight_kg")
+        sets, reps, duration = _opt_int(data, "sets"), _opt_int(data, "reps"), _opt_int(data, "duration_sec")
+        weight = _opt_float(data, "weight_kg")
     except ValueError as e:
         return jsonify({"error": f"{e} must be a number"}), 400
-
-    day = (data.get("date") or "").strip()
-    if day:
-        try:
-            date.fromisoformat(day)
-            ts = f"{day}T12:00:00"
-        except ValueError:
-            return jsonify({"error": "date must be YYYY-MM-DD"}), 400
-    else:
-        ts = datetime.now().isoformat(timespec="seconds")
+    ts, err = _resolve_ts(data.get("date"))
+    if err:
+        return jsonify({"error": err}), 400
     notes = (data.get("notes") or "").strip() or None
 
     cur = db.execute(
-        "INSERT INTO workout_logs (ts, exercise_id, sets, reps, weight_kg, duration_sec, notes) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO workout_logs (ts, exercise_id, sets, reps, weight_kg, duration_sec, notes, source) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, 'manual')",
         (ts, exercise_id, sets, reps, weight, duration, notes),
     )
     db.commit()
     return jsonify({"status": "created", "id": cur.lastrowid}), 201
+
+
+@app.route("/api/workouts/<int:workout_id>", methods=["PUT"])
+def api_update_workout(workout_id):
+    data = request.get_json(force=True, silent=True) or {}
+    db = get_db()
+    existing = db.execute("SELECT ts FROM workout_logs WHERE id = ?", (workout_id,)).fetchone()
+    if existing is None:
+        return jsonify({"error": "no such workout"}), 404
+    try:
+        sets, reps, duration = _opt_int(data, "sets"), _opt_int(data, "reps"), _opt_int(data, "duration_sec")
+        weight = _opt_float(data, "weight_kg")
+    except ValueError as e:
+        return jsonify({"error": f"{e} must be a number"}), 400
+    # Keep the existing timestamp when no date is supplied.
+    if (data.get("date") or "").strip():
+        ts, err = _resolve_ts(data.get("date"))
+        if err:
+            return jsonify({"error": err}), 400
+    else:
+        ts = existing["ts"]
+    notes = (data.get("notes") or "").strip() or None
+    db.execute(
+        "UPDATE workout_logs SET ts = ?, sets = ?, reps = ?, weight_kg = ?, duration_sec = ?, notes = ? "
+        "WHERE id = ?",
+        (ts, sets, reps, weight, duration, notes, workout_id),
+    )
+    db.commit()
+    return jsonify({"status": "updated"})
 
 
 @app.route("/api/workouts/<int:workout_id>", methods=["DELETE"])
@@ -835,9 +1081,12 @@ def api_challenge_toggle():
     except (TypeError, ValueError):
         return jsonify({"error": "item_id is required"}), 400
     db = get_db()
-    if db.execute(
-        "SELECT 1 FROM challenge_items WHERE id = ? AND archived = 0", (item_id,)
-    ).fetchone() is None:
+    item = db.execute(
+        "SELECT id, item_type, exercise_id, target_sets, target_reps "
+        "FROM challenge_items WHERE id = ? AND archived = 0",
+        (item_id,),
+    ).fetchone()
+    if item is None:
         return jsonify({"error": "no such challenge item"}), 404
     day = (data.get("day") or "").strip() or date.today().isoformat()
     try:
@@ -856,6 +1105,23 @@ def api_challenge_toggle():
             "INSERT INTO challenge_completions (item_id, day) VALUES (?, ?)", (item_id, day)
         )
         done = True
+
+    # An exercise item ticked off also lands in the workout log (source
+    # 'challenge'); un-ticking removes that auto-created entry so history
+    # stays in sync. Manual workout entries are never touched.
+    if item["item_type"] == "exercise" and item["exercise_id"]:
+        if done:
+            db.execute(
+                "INSERT INTO workout_logs (ts, exercise_id, sets, reps, source, challenge_item_id) "
+                "VALUES (?, ?, ?, ?, 'challenge', ?)",
+                (f"{day}T12:00:00", item["exercise_id"], item["target_sets"], item["target_reps"], item_id),
+            )
+        else:
+            db.execute(
+                "DELETE FROM workout_logs WHERE source = 'challenge' AND challenge_item_id = ? "
+                "AND substr(ts, 1, 10) = ?",
+                (item_id, day),
+            )
     db.commit()
     return jsonify({"status": "ok", "done": done, "streak": _challenge_streak(db)})
 
@@ -867,36 +1133,122 @@ def api_challenge_items():
 
 @app.route("/api/challenge/items", methods=["POST"])
 def api_add_challenge_item():
+    """Add a typed challenge item — a reference to an exercise (with a
+    sets/reps target) or a supplement (with a dose). Free text is not
+    accepted, so the challenge always links back to a clean library row."""
     data = request.get_json(force=True, silent=True) or {}
-    label = (data.get("label") or "").strip()
-    if not label:
-        return jsonify({"error": "label is required"}), 400
+    item_type = (data.get("item_type") or "").strip()
+    if item_type not in ("exercise", "supplement"):
+        return jsonify({"error": "item_type must be 'exercise' or 'supplement'"}), 400
     db = get_db()
+    try:
+        target_sets, target_reps = _opt_int(data, "target_sets"), _opt_int(data, "target_reps")
+    except ValueError as e:
+        return jsonify({"error": f"{e} must be a number"}), 400
     next_order = db.execute(
         "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM challenge_items"
     ).fetchone()[0]
-    cur = db.execute(
-        "INSERT INTO challenge_items (label, sort_order, archived) VALUES (?, ?, 0)",
-        (label, next_order),
-    )
+
+    if item_type == "exercise":
+        try:
+            exercise_id = int(data.get("exercise_id"))
+        except (TypeError, ValueError):
+            return jsonify({"error": "exercise_id is required"}), 400
+        ex = db.execute(
+            "SELECT name FROM exercises WHERE id = ? AND archived = 0", (exercise_id,)
+        ).fetchone()
+        if ex is None:
+            return jsonify({"error": "no such exercise"}), 400
+        label = f"{ex['name']}"
+        target = _exercise_target_text(target_sets, target_reps)
+        if target:
+            label += f" · {target}"
+        cur = db.execute(
+            "INSERT INTO challenge_items (label, sort_order, archived, item_type, exercise_id, "
+            "target_sets, target_reps) VALUES (?, ?, 0, 'exercise', ?, ?, ?)",
+            (label, next_order, exercise_id, target_sets, target_reps),
+        )
+    else:
+        try:
+            supplement_id = int(data.get("supplement_id"))
+        except (TypeError, ValueError):
+            return jsonify({"error": "supplement_id is required"}), 400
+        sup = db.execute(
+            "SELECT name, dose FROM supplements WHERE id = ? AND archived = 0", (supplement_id,)
+        ).fetchone()
+        if sup is None:
+            return jsonify({"error": "no such supplement"}), 400
+        dose = (data.get("dose") or "").strip() or sup["dose"]
+        label = f"{sup['name']}{' · ' + dose if dose else ''}"
+        cur = db.execute(
+            "INSERT INTO challenge_items (label, sort_order, archived, item_type, supplement_id, dose) "
+            "VALUES (?, ?, 0, 'supplement', ?, ?)",
+            (label, next_order, supplement_id, dose),
+        )
     db.commit()
     return jsonify({"status": "created", "id": cur.lastrowid}), 201
 
 
 @app.route("/api/challenge/items/<int:item_id>", methods=["PUT"])
 def api_update_challenge_item(item_id):
+    """Edit an item's target (exercise) or dose (supplement). The referenced
+    library row itself is changed in the exercises/supplements library."""
     data = request.get_json(force=True, silent=True) or {}
-    label = (data.get("label") or "").strip()
-    if not label:
-        return jsonify({"error": "label is required"}), 400
     db = get_db()
-    cur = db.execute(
-        "UPDATE challenge_items SET label = ? WHERE id = ? AND archived = 0", (label, item_id)
-    )
-    db.commit()
-    if cur.rowcount == 0:
+    item = db.execute(
+        "SELECT * FROM challenge_items WHERE id = ? AND archived = 0", (item_id,)
+    ).fetchone()
+    if item is None:
         return jsonify({"error": "no such challenge item"}), 404
+    try:
+        target_sets, target_reps = _opt_int(data, "target_sets"), _opt_int(data, "target_reps")
+    except ValueError as e:
+        return jsonify({"error": f"{e} must be a number"}), 400
+
+    if item["item_type"] == "exercise":
+        name = db.execute("SELECT name FROM exercises WHERE id = ?", (item["exercise_id"],)).fetchone()
+        target = _exercise_target_text(target_sets, target_reps)
+        label = f"{name['name'] if name else 'Exercise'}{' · ' + target if target else ''}"
+        db.execute(
+            "UPDATE challenge_items SET target_sets = ?, target_reps = ?, label = ? WHERE id = ?",
+            (target_sets, target_reps, label, item_id),
+        )
+    else:
+        name = db.execute("SELECT name FROM supplements WHERE id = ?", (item["supplement_id"],)).fetchone()
+        dose = (data.get("dose") or "").strip() or None
+        label = f"{name['name'] if name else 'Supplement'}{' · ' + dose if dose else ''}"
+        db.execute(
+            "UPDATE challenge_items SET dose = ?, label = ? WHERE id = ?", (dose, label, item_id)
+        )
+    db.commit()
     return jsonify({"status": "updated"})
+
+
+@app.route("/api/challenge/history")
+def api_challenge_history():
+    """A per-day completion matrix over the recent past, for backfilling or
+    correcting the streak. Newest day first."""
+    db = get_db()
+    try:
+        days = max(1, min(60, int(request.args.get("days", 14))))
+    except (TypeError, ValueError):
+        days = 14
+    items = _active_challenge_items(db)
+    active_ids = [i["id"] for i in items]
+    by_day = _completions_by_day(db, active_ids)
+    today = date.today()
+    history = []
+    for offset in range(days):
+        d = (today - timedelta(days=offset)).isoformat()
+        done = by_day.get(d, set())
+        history.append(
+            {
+                "day": d,
+                "done": [i["id"] for i in items if i["id"] in done],
+                "complete": bool(active_ids) and set(active_ids) <= done,
+            }
+        )
+    return jsonify({"items": items, "days": history})
 
 
 @app.route("/api/challenge/items/<int:item_id>", methods=["DELETE"])
