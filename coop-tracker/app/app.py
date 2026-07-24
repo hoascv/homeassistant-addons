@@ -63,7 +63,7 @@ except ImportError as e:
     SKLEARN_AVAILABLE = False
     SKLEARN_ERROR = str(e)
 
-APP_VERSION = "1.32.1"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.32.2"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("COOP_DB_PATH", "/data/coop.db")
 OPTIONS_PATH = os.environ.get("COOP_OPTIONS_PATH", "/data/options.json")
@@ -115,18 +115,29 @@ EGG_SIZE_MM_BOUNDS = (41.5, 44.0, 46.5)  # S|M, M|L, L|XL boundaries
 EGG_MIN_AREA_FRACTION = 0.0015
 EGG_MAX_AREA_FRACTION = 0.20
 
-# A single egg's major/minor axis ratio is typically ~1.3-1.5 (chicken eggs
-# aren't very elongated); horizontally-touching eggs merged into one
-# contour top out empirically around ~1.7-1.8 before fitEllipse's fit
-# naturally separates them into two contours again. 1.6 sits between the
-# two with modest margin on each side — imperfect (a genuinely elongated
-# single egg near this ratio could get wrongly excluded, and some merged
-# pairs at lower overlap won't reach it), but excluding is the safer
-# failure: a wrong exclusion costs one "+ Add egg" tap, a wrong inclusion
-# silently reports a bogus size for two eggs merged into one. This is the
-# fallback used whenever no trained classifier exists yet — see
-# EGG_VISION_MIN_TRAINING_SAMPLES below.
+# A single egg's major/minor axis ratio is typically ~1.3-1.5 (chicken
+# eggs aren't very elongated). Since v1.32.2, touching eggs are actively
+# split apart before this filter runs (see _split_egg_regions /
+# EGG_SPLIT_* below), so this is no longer the merged-egg guard it
+# originally was — it's just a light shape sanity check that rejects a
+# genuinely elongated stray blob (a straw stalk, a smeared stain) that
+# survived the split. A wrong exclusion costs one "+ Add egg" tap; a
+# wrong inclusion reports a bogus egg. This is the fallback used whenever
+# no trained classifier exists yet — see EGG_VISION_MIN_TRAINING_SAMPLES.
 EGG_MAX_ASPECT = 1.6
+
+# Touching-egg splitting (distance-transform peaks + nearest-centre
+# partition — see ARCHITECTURE.md §20.3). Within a single detected blob,
+# the distance transform peaks once per egg. A peak must clear
+# EGG_SPLIT_PEAK_RATIO of the blob's own max distance (a height floor,
+# scale-adaptive) and be separated from other peaks by
+# EGG_SPLIT_MIN_SEPARATION_RATIO of that max (≈ an egg radius), so two
+# egg centres resolve as two peaks while a single egg's secondary
+# ripples collapse into one. Heavier overlaps (one egg mostly hiding
+# another) have peaks too close to resolve and remain the documented
+# hard case — corrected by hand with "+ Add egg".
+EGG_SPLIT_PEAK_RATIO = 0.5
+EGG_SPLIT_MIN_SEPARATION_RATIO = 1.0
 
 MAX_EGG_VISION_PHOTO_BYTES = 8 * 1024 * 1024  # analysis photo, not the 3MB chicken-photo cap
 
@@ -1594,18 +1605,22 @@ def _extract_egg_candidates(img):
     thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
     thresh = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
 
-    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     photo_area = h * w
     candidates = []
-    for c in contours:
-        area = cv2.contourArea(c)
+    for region in _split_egg_regions(thresh):
+        area = int(cv2.countNonZero(region))
         if area < EGG_MIN_AREA_FRACTION * photo_area:
             continue
+        region_contours, _ = cv2.findContours(region, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not region_contours:
+            continue
+        c = max(region_contours, key=cv2.contourArea)
         if len(c) < 5:
             continue  # fitEllipse needs >= 5 points
         (ex, ey), (minor, major), angle = cv2.fitEllipse(c)
         if minor <= 0:
             continue
+        contour_area = cv2.contourArea(c)
         bx, by, bw, bh = cv2.boundingRect(c)
         hull_area = cv2.contourArea(cv2.convexHull(c))
         candidates.append(
@@ -1615,13 +1630,84 @@ def _extract_egg_candidates(img):
                 "width_px": float(minor),
                 "height_px": float(major),
                 "angle": float(angle),
-                "area_fraction": float(area / photo_area),
+                "area_fraction": float(contour_area / photo_area),
                 "aspect_ratio": float(major / minor),
-                "extent": float(area / (bw * bh)) if bw and bh else 0.0,
-                "solidity": float(area / hull_area) if hull_area > 0 else 0.0,
+                "extent": float(contour_area / (bw * bh)) if bw and bh else 0.0,
+                "solidity": float(contour_area / hull_area) if hull_area > 0 else 0.0,
             }
         )
     return candidates
+
+
+def _split_egg_regions(thresh):
+    """Given the binary egg mask, returns a list of single-egg binary
+    masks. Two (or more) touching eggs form one connected blob whose
+    distance transform peaks once per egg (each peak sits at an egg's
+    centre). The peaks are found as local maxima, then the blob is
+    partitioned by assigning every pixel to its nearest peak centre — a
+    Voronoi split masked to the blob. For touching convex eggs this cut
+    falls along the perpendicular bisector between the two centres, i.e.
+    exactly through the waist where they meet. A single egg (one peak)
+    passes through untouched. See ARCHITECTURE.md §20.3.
+
+    Nearest-centre partitioning is used instead of watershed flooding:
+    watershed's background basin proved to leak across the whole blob on
+    a flat binary mask, whereas the Voronoi cut is deterministic and
+    depends only on the (reliably-found) egg centres. This replaced the
+    old approach of *excluding* an elongated merged blob entirely —
+    splitting recovers the true count instead of dropping it, which is
+    the whole point of the feature. Peaks are suppressed within roughly
+    an egg's own radius so a bumpy single egg's minor ripples don't
+    over-segment it; the price is that two eggs overlapping more than
+    ~half their width have peaks too close to resolve and stay merged (a
+    documented hand-correction case)."""
+    num_labels, labels = cv2.connectedComponents(thresh)
+    regions = []
+    for label in range(1, num_labels):
+        blob = np.uint8(labels == label) * 255
+        if cv2.countNonZero(blob) == 0:
+            continue
+
+        dist = cv2.distanceTransform(blob, cv2.DIST_L2, 5)
+        peak = float(dist.max())
+        if peak <= 0:
+            continue
+
+        # Smooth the distance surface before peak-finding so a single
+        # egg's noise ripples (JPEG artefacts, ragged mask edges) don't
+        # each read as a peak — the sigma is tied to egg scale, small
+        # enough to leave two genuinely-separate egg peaks intact.
+        dist = cv2.GaussianBlur(dist, (0, 0), max(peak / 4.0, 1.0))
+        peak = float(dist.max())
+
+        # Local maxima, suppressed within ~one egg radius (peak ≈ an egg's
+        # half-min-axis), so a single egg's along-axis ripples collapse to
+        # one peak while two touching eggs — whose centres sit well over a
+        # radius apart — resolve as two. A pixel is a peak if it equals
+        # the max within that radius and clears the peak-height floor.
+        sep = max(int(peak * EGG_SPLIT_MIN_SEPARATION_RATIO), 3)
+        k = 2 * sep + 1
+        dilated = cv2.dilate(dist, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k)))
+        peaks = np.uint8((dist >= dilated - 1e-3) & (dist > EGG_SPLIT_PEAK_RATIO * peak)) * 255
+
+        n_seed_labels, _, _, centroids = cv2.connectedComponentsWithStats(peaks)
+        centres = [centroids[i] for i in range(1, n_seed_labels)]
+        if len(centres) <= 1:
+            regions.append(blob)
+            continue
+
+        ys, xs = np.where(blob > 0)
+        pts = np.stack([xs, ys], axis=1).astype(np.float32)
+        seed_xy = np.array(centres, np.float32)
+        nearest = np.argmin(((pts[:, None, :] - seed_xy[None, :, :]) ** 2).sum(axis=2), axis=1)
+        for kidx in range(len(centres)):
+            sel = nearest == kidx
+            if not sel.any():
+                continue
+            region = np.zeros(blob.shape, np.uint8)
+            region[ys[sel], xs[sel]] = 255
+            regions.append(region)
+    return regions
 
 
 # Box-ID embedder: a frozen, pretrained SqueezeNet 1.1 loaded once per

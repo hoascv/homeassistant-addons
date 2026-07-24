@@ -130,9 +130,11 @@ grading, not a substitute for a kitchen scale — always glance over the
 suggested sizes before saving. The tilted-wall measurement corrects for
 walls converging with depth, but not for every possible camera angle —
 a roughly box-aligned shot is still more accurate than a sharply
-rotated one. Eggs touching or overlapping in the photo may be missed or
-undercounted; use the review screen's **+ Add egg** and the ✕ on any chip
-to correct the count by hand. This feature also requires an **amd64** or
+rotated one. Eggs that touch are automatically separated and counted
+individually, but two eggs overlapping more than about half their width
+(one largely hidden behind the other) can still be counted as one — use
+the review screen's **+ Add egg** and the ✕ on any chip to correct the
+count by hand. This feature also requires an **amd64** or
 **aarch64** install (the same architecture requirement as the Advanced
 forecast feature below) — on other architectures the button explains it
 isn't available on that device.

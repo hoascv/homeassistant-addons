@@ -1352,3 +1352,50 @@ the ONNX file is missing or `cv2.dnn` can't load it, the embedder
 reports unavailable (`/api/debug`: `box_embedder_available/_error`) and
 box-ID degrades to manual confirm — the egg and size models are
 unaffected, since only the box head consumes embeddings.
+
+### 20.3 Addendum: splitting touching eggs (v1.32.2)
+
+The first real in-use photos showed two eggs touching (one resting
+against the other) counted as a single oversized "XL" — the classic
+"separate touching objects" problem. Until now the pipeline's only
+answer was `EGG_MAX_ASPECT`, which *excluded* an elongated merged blob
+rather than splitting it: better than reporting one giant egg, but it
+still lost the count. `_split_egg_regions` now actively separates them.
+
+**Why distance-transform peaks + nearest-centre partition, not
+watershed.** The textbook recipe for touching blobs is marker-controlled
+watershed on the distance transform, and that's what was tried first —
+but on a *flat binary* mask (no real image gradient inside the blob) the
+background basin leaked across the whole blob, leaving each egg a tiny
+sliver. The distance transform still reliably peaks once per egg (each
+peak at an egg's centre, a low-valued "waist" between them), so the peaks
+are kept as the seeds but the split itself is a **masked Voronoi
+partition**: every blob pixel is assigned to its nearest peak centre.
+For touching *convex* eggs of similar size the perpendicular bisector
+between two centres runs right through the waist, so this cut matches
+what watershed was supposed to produce — but it's deterministic and
+depends only on the (robustly found) centres, with no flooding
+topology to misbehave.
+
+**Why the two split constants are what they are.** Peak-finding is the
+whole game: too eager and a single egg's ripples split it in two, too
+shy and touching eggs stay merged. Three things keep it stable: (1) the
+distance surface is Gaussian-blurred (sigma ∝ egg scale) before
+peak-finding, killing JPEG/edge noise ripples that would otherwise each
+read as a peak — this was the direct cause of a single egg splitting in
+testing; (2) `EGG_SPLIT_MIN_SEPARATION_RATIO = 1.0` requires peaks to be
+at least ~one egg *radius* apart (peak ≈ an egg's half-min-axis), so a
+lone egg's along-axis bumps collapse to one peak while two touching
+eggs — centres well over a radius apart — resolve as two; (3)
+`EGG_SPLIT_PEAK_RATIO = 0.5` is a height floor that ignores shallow
+noise maxima. The accepted limit: eggs overlapping more than ~half their
+width have centres too close to resolve as two peaks and stay merged —
+the documented "+ Add egg" hand-correction case. `EGG_MAX_ASPECT` stays,
+demoted from merged-egg guard to a light shape sanity check on whatever
+survives the split.
+
+**Feeds training for free.** `_extract_egg_candidates` runs the splitter
+before building the feature dicts, and it's the same function training
+re-extracts through — so corrected touching-egg photos now yield two
+clean positive examples instead of one rejected blob, with no change to
+the training code.

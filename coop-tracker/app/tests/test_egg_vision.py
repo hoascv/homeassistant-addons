@@ -150,6 +150,42 @@ def nesting_box(client):
 
 
 @pytestmark_cv
+class TestSplitEggRegions:
+    """Direct unit tests for the touching-egg splitter (v1.32.2) — see
+    _split_egg_regions / ARCHITECTURE.md §20.3."""
+
+    @staticmethod
+    def _mask(eggs, w=1200, h=900):
+        import cv2
+        import numpy as np
+
+        mask = np.zeros((h, w), np.uint8)
+        for cx, cy, sx, sy, ang in eggs:
+            cv2.ellipse(mask, (cx, cy), (sx, sy), ang, 0, 360, 255, -1)
+        return mask
+
+    def test_splits_two_touching(self):
+        mask = self._mask([(400, 300, 60, 80, 0), (500, 300, 60, 80, 0)])
+        assert len(coopapp._split_egg_regions(mask)) == 2
+
+    def test_splits_three_touching(self):
+        mask = self._mask([(300, 300, 55, 75, 0), (400, 300, 55, 75, 0), (500, 300, 55, 75, 0)])
+        assert len(coopapp._split_egg_regions(mask)) == 3
+
+    def test_single_egg_not_split(self):
+        assert len(coopapp._split_egg_regions(self._mask([(400, 300, 60, 80, 0)]))) == 1
+
+    def test_single_elongated_egg_not_over_split(self):
+        # A lone elongated egg must stay one region, not split along its
+        # long axis into two — the over-segmentation failure mode.
+        assert len(coopapp._split_egg_regions(self._mask([(400, 300, 48, 92, 45)]))) == 1
+
+    def test_separated_eggs_pass_through(self):
+        mask = self._mask([(250, 300, 60, 80, 0), (800, 400, 60, 80, 0)])
+        assert len(coopapp._split_egg_regions(mask)) == 2
+
+
+@pytestmark_cv
 class TestEggVisionRealDetection:
     def test_counts_well_separated_eggs_and_finds_box(self, client, set_options, nesting_box):
         set_options(egg_vision_enabled=True)
@@ -193,11 +229,12 @@ class TestEggVisionRealDetection:
         width_mm = egg["width_px"] / px_per_mm
         assert egg["size"] == coopapp._egg_size_code(width_mm)
 
-    def test_excludes_near_touching_merged_egg_blob(self, client, set_options, nesting_box):
+    def test_splits_touching_eggs(self, client, set_options, nesting_box):
         # Two eggs placed close enough to merge into one contour (centers
-        # 119px apart, each ~120px wide) produce an elongated blob that
-        # must be excluded rather than counted as one oddly-sized egg —
-        # only the separate third egg should come through.
+        # 119px apart, each ~120px wide) must now be SPLIT back into two
+        # (v1.32.2, distance-transform peaks + nearest-centre partition —
+        # see ARCHITECTURE.md §20.3), not excluded or counted as one
+        # oversized egg. With the separate third egg, that's three total.
         set_options(egg_vision_enabled=True)
         photo = _synthetic_box_photo(
             box=(80, 40, 1120, 860),
@@ -205,8 +242,23 @@ class TestEggVisionRealDetection:
         )
         body = client.post("/api/vision/eggs", json={"photo": photo}).get_json()
         assert body["status"] == "ok"
-        assert len(body["eggs"]) == 1
-        assert body["eggs"][0]["cx"] == pytest.approx(700, abs=5)
+        assert len(body["eggs"]) == 3
+        xs = sorted(round(e["cx"]) for e in body["eggs"])
+        assert xs[0] == pytest.approx(240, abs=25)
+        assert xs[1] == pytest.approx(359, abs=25)
+        assert xs[2] == pytest.approx(700, abs=10)
+
+    def test_splits_vertically_stacked_eggs(self, client, set_options, nesting_box):
+        # The user's real photo: two brown eggs touching one above the
+        # other, which pre-1.32.2 read as a single "XL" blob.
+        set_options(egg_vision_enabled=True)
+        photo = _synthetic_box_photo(
+            box=(80, 40, 1120, 860),
+            eggs=[(500, 320, 60, 80, 0), (500, 450, 60, 80, 0)],
+        )
+        body = client.post("/api/vision/eggs", json={"photo": photo}).get_json()
+        assert body["status"] == "ok"
+        assert len(body["eggs"]) == 2
 
     def test_undecodable_photo_reports_error(self, client, set_options, nesting_box):
         # Valid base64, valid data-URI shape, but not actually image bytes

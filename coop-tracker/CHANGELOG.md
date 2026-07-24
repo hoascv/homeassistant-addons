@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.32.2
+
+- **Touching eggs are now counted separately.** Two eggs resting against
+  each other used to be detected as a single oversized egg (the "XL" you
+  may have seen); they're now automatically split apart and counted and
+  sized individually. Works for eggs side by side, stacked, or at an
+  angle. Two eggs overlapping so heavily that one is mostly hidden can
+  still read as one — correct those by hand with **+ Add egg** as before.
+  If you have training on, these corrections also improve detection over
+  time.
+
 ## 1.32.1
 
 - No user-facing behavior changes, but two real bugs fixed: several
