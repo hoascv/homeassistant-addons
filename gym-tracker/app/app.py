@@ -15,7 +15,7 @@ from datetime import date, datetime, time as dtime, timedelta
 
 from flask import Flask, Response, g, jsonify, render_template, request, send_file
 
-APP_VERSION = "1.1.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.2.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("GYM_DB_PATH", "/data/gym.db")
 OPTIONS_PATH = os.environ.get("GYM_OPTIONS_PATH", "/data/options.json")
@@ -543,7 +543,94 @@ def _weight_progress(conn):
         "weight_progress_pct": weight_progress,
         "body_fat_progress_pct": bf_progress,
         "days_remaining": days_remaining,
+        "forecast": _weight_forecast(logs, goal),
         "logs": logs,
+    }
+
+
+def _weight_forecast(logs, goal):
+    """Least-squares linear trend over the logged weights, projected to the
+    goal date — enough to answer 'am I on track?' without any heavy stats
+    dependency. Weekly weigh-ins are sparse and roughly linear over a few
+    months, so a straight line is the honest model here."""
+    target_weight = goal.get("target_weight_kg")
+    target_date_str = goal.get("target_date")
+    points = []
+    for l in logs:
+        try:
+            d = date.fromisoformat(l["ts"][:10])
+        except (ValueError, TypeError):
+            continue
+        points.append((d, l["weight_kg"]))
+    # Need at least two weigh-ins on different days to define a trend.
+    if len(points) < 2 or target_weight is None or not target_date_str:
+        return {"status": "insufficient", "available": False}
+    try:
+        target_date = date.fromisoformat(target_date_str)
+    except ValueError:
+        return {"status": "insufficient", "available": False}
+
+    d0 = points[0][0]
+    xs = [(d - d0).days for d, _ in points]
+    ys = [w for _, w in points]
+    n = len(xs)
+    xbar = sum(xs) / n
+    ybar = sum(ys) / n
+    sxx = sum((x - xbar) ** 2 for x in xs)
+    if sxx == 0:  # all weigh-ins on the same day
+        return {"status": "insufficient", "available": False}
+    slope = sum((x - xbar) * (y - ybar) for x, y in zip(xs, ys)) / sxx
+    intercept = ybar - slope * xbar
+
+    def fit(d):
+        return intercept + slope * (d - d0).days
+
+    current_weight = ys[-1]
+    start_weight = goal.get("start_weight_kg")
+    if start_weight is None:
+        start_weight = ys[0]
+    # Direction of improvement: bulking (target above start) vs cutting.
+    direction = 1.0 if target_weight >= start_weight else -1.0
+
+    projected = fit(target_date)
+    # How far the projection lands past the target, measured the "good" way.
+    signed_margin = (projected - target_weight) * direction
+
+    if slope * direction < 0:
+        status = "off_track"  # trending away from the target
+    elif signed_margin >= 0.3:
+        status = "ahead"
+    elif signed_margin <= -0.3:
+        status = "behind"
+    else:
+        status = "on_track"
+
+    # When the trend line reaches the target (if it does, in the future).
+    projected_date = None
+    if slope != 0:
+        cross_day = (target_weight - intercept) / slope
+        cross = d0 + timedelta(days=round(cross_day))
+        if (cross - date.today()).days >= 0 and slope * direction > 0:
+            projected_date = cross.isoformat()
+
+    today = date.today()
+    days_left = (target_date - today).days
+    required_per_week = None
+    if days_left > 0:
+        required_per_week = round((target_weight - current_weight) / (days_left / 7.0), 2)
+
+    return {
+        "available": True,
+        "status": status,
+        "slope_per_week": round(slope * 7, 2),
+        "required_per_week": required_per_week,
+        "projected_weight_kg": round(projected, 1),
+        "projected_date": projected_date,
+        # Two points for drawing the trend line across the chart.
+        "trend": [
+            {"ts": d0.isoformat(), "weight_kg": round(fit(d0), 1)},
+            {"ts": target_date.isoformat(), "weight_kg": round(projected, 1)},
+        ],
     }
 
 

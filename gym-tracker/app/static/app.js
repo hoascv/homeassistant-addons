@@ -75,7 +75,44 @@ async function loadHome() {
 
   document.getElementById("chart-target-note").textContent =
     goal.target_weight_kg != null ? `· target ${goal.target_weight_kg} kg` : "";
-  renderWeightChart(data.logs || [], goal);
+  renderForecast(data.forecast, goal);
+  renderWeightChart(data.logs || [], goal, data.forecast);
+}
+
+const FORECAST_STATUS = {
+  ahead: { cls: "good", badge: "Ahead" },
+  on_track: { cls: "good", badge: "On track" },
+  behind: { cls: "warn", badge: "Behind" },
+  off_track: { cls: "bad", badge: "Off track" },
+};
+
+function renderForecast(forecast, goal) {
+  const line = document.getElementById("forecast-line");
+  if (!forecast || !forecast.available) {
+    // Explain what's needed rather than showing nothing.
+    line.hidden = false;
+    document.getElementById("forecast-badge").textContent = "Forecast";
+    document.getElementById("forecast-badge").className = "forecast-badge muted-badge";
+    document.getElementById("forecast-text").textContent = "Log at least two weigh-ins to project your trend.";
+    return;
+  }
+  const meta = FORECAST_STATUS[forecast.status] || FORECAST_STATUS.on_track;
+  const badge = document.getElementById("forecast-badge");
+  badge.textContent = meta.badge;
+  badge.className = `forecast-badge forecast-${meta.cls}`;
+
+  const rate = forecast.slope_per_week;
+  const rateStr = `${rate > 0 ? "+" : ""}${rate} kg/wk`;
+  const parts = [`Trending ${rateStr}, projected ${forecast.projected_weight_kg} kg by target.`];
+  if (forecast.status === "behind" && forecast.required_per_week != null) {
+    parts.push(`Need ${forecast.required_per_week > 0 ? "+" : ""}${forecast.required_per_week} kg/wk to reach ${goal.target_weight_kg}.`);
+  } else if (forecast.status === "off_track" && forecast.required_per_week != null) {
+    parts.push(`You're moving the wrong way — need ${forecast.required_per_week > 0 ? "+" : ""}${forecast.required_per_week} kg/wk.`);
+  } else if ((forecast.status === "ahead" || forecast.status === "on_track") && forecast.projected_date) {
+    parts.push(`On this trend you hit ${goal.target_weight_kg} kg around ${fmtDate(forecast.projected_date)}.`);
+  }
+  document.getElementById("forecast-text").textContent = parts.join(" ");
+  line.hidden = false;
 }
 
 function setBar(id, pct) {
@@ -84,7 +121,7 @@ function setBar(id, pct) {
 
 // --- Weight chart (single-series line + target reference line) -------------
 
-function renderWeightChart(logs, goal) {
+function renderWeightChart(logs, goal, forecast) {
   const host = document.getElementById("weight-chart");
   host.innerHTML = "";
   const points = logs
@@ -155,6 +192,31 @@ function renderWeightChart(logs, goal) {
     tlbl.setAttribute("class", "chart-target-label");
     tlbl.textContent = `Target ${target}`;
     svg.appendChild(tlbl);
+  }
+
+  // Projected trend line (dashed) — drawn under the actual line. It may run
+  // past the plot vertically; the SVG clips it, which reads correctly as
+  // "trending off the top/bottom".
+  if (forecast && forecast.available && forecast.trend && forecast.trend.length === 2) {
+    const a = forecast.trend[0], b = forecast.trend[1];
+    const x1 = sx(new Date(a.ts).getTime()), y1 = sy(a.weight_kg);
+    const x2 = sx(new Date(b.ts).getTime()), y2 = sy(b.weight_kg);
+    const tr = document.createElementNS(NS, "line");
+    tr.setAttribute("x1", x1); tr.setAttribute("y1", y1);
+    tr.setAttribute("x2", x2); tr.setAttribute("y2", y2);
+    tr.setAttribute("class", "chart-trend");
+    svg.appendChild(tr);
+    // Label at the line's midpoint (kept inside the plot), so it never
+    // collides with the "Target" label pinned to the top-right.
+    const mx = (Math.max(padL, Math.min(W - padR, x1)) + Math.max(padL, Math.min(W - padR, x2))) / 2;
+    const my = Math.max(padT + 10, Math.min(padT + plotH - 4, (y1 + y2) / 2 - 5));
+    const plbl = document.createElementNS(NS, "text");
+    plbl.setAttribute("x", mx);
+    plbl.setAttribute("y", my);
+    plbl.setAttribute("text-anchor", "middle");
+    plbl.setAttribute("class", "chart-trend-label");
+    plbl.textContent = "Projected";
+    svg.appendChild(plbl);
   }
 
   // Weight line

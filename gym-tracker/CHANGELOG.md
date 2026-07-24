@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.2.0
+
+- **Weight forecast.** The goal card now projects your weigh-in trend to the
+  target date and tells you whether you're **on track** — a badge (On track
+  / Ahead / Behind / Off track) plus the weekly rate, the projected weight,
+  and, when you're heading the right way, roughly when you'll hit the
+  target. The chart draws a dashed **projection** line so you can see the
+  trend meet (or miss) your target line. Needs at least two weigh-ins.
+- Fixed the **Date** and **Note** fields overlapping in the *Log a set*
+  sheet on iPhone/Safari.
+
 ## 1.1.0
 
 - **Editable libraries.** The 🏋️ button now opens a **Library** with two

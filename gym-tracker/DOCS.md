@@ -24,6 +24,22 @@ progress. Change any of it in settings.
 
 All weights are in **kilograms**.
 
+### Are you on track? (forecast)
+
+Once you have **at least two weigh-ins**, the goal card fits a straight-line
+trend through your weights and projects it to your target date. You get:
+
+- A **badge** — *On track*, *Ahead*, *Behind*, or *Off track*.
+- Your current **weekly rate** and the **projected weight** at the target
+  date; when you're trending the right way, it also estimates roughly when
+  you'll reach the target.
+- A dashed **projection line** on the chart, so you can see your trend meet
+  (or miss) the target line.
+
+The forecast is a simple linear trend — good for spotting whether the last
+few weeks point at your goal, not a precise prediction. More weigh-ins make
+it steadier.
+
 ## Logging weight
 
 Tap **Log weight** on the home screen. Enter your weight and, optionally, a

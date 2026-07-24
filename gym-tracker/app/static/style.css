@@ -131,6 +131,8 @@ body {
 .chart-marker { fill: var(--surface); stroke: var(--accent); stroke-width: 2; }
 .chart-target { stroke: var(--accent-2); stroke-width: 2; stroke-dasharray: 4 4; fill: none; }
 .chart-target-label { fill: var(--accent-2); font-size: 10px; font-weight: 600; }
+.chart-trend { stroke: var(--text-muted); stroke-width: 1.5; stroke-dasharray: 2 3; fill: none; opacity: 0.85; }
+.chart-trend-label { fill: var(--text-muted); font-size: 10px; font-weight: 600; }
 .chart-crosshair { stroke: var(--text-muted); stroke-width: 1; stroke-dasharray: 3 3; }
 .chart-hit { fill: transparent; }
 .chart-tooltip {
@@ -141,6 +143,21 @@ body {
   font-size: 0.75rem; white-space: nowrap; transform: translate(-50%, -120%);
   opacity: 0; transition: opacity 0.1s;
 }
+
+/* Forecast status line */
+.forecast {
+  display: flex; align-items: flex-start; gap: 0.5rem;
+  margin: 0.2rem 0 0.7rem; font-size: 0.82rem; line-height: 1.4;
+}
+.forecast-badge {
+  flex-shrink: 0; font-size: 0.72rem; font-weight: 700;
+  padding: 0.15rem 0.5rem; border-radius: 999px; white-space: nowrap;
+}
+.forecast-good { background: rgba(22, 163, 74, 0.15); color: var(--success); }
+.forecast-warn { background: rgba(217, 119, 6, 0.16); color: #d97706; }
+.forecast-bad { background: rgba(220, 38, 38, 0.15); color: var(--danger); }
+.muted-badge { background: var(--surface-2); color: var(--text-muted); border: 1px solid var(--border); }
+.forecast-text { color: var(--text-muted); }
 
 /* Challenge */
 .challenge-list { list-style: none; margin: 0; padding: 0; }
@@ -204,13 +221,20 @@ body {
 .inline-form { margin-bottom: 0.75rem; }
 .field-row { display: flex; gap: 0.6rem; margin-bottom: 0.6rem; }
 .field-row .grow { flex: 1; }
-label { display: flex; flex-direction: column; font-size: 0.76rem; color: var(--text-muted); gap: 0.25rem; flex: 1; }
+/* min-width:0 lets flex items shrink below their content's intrinsic size —
+   without it iOS Safari won't shrink date inputs, so side-by-side fields
+   (e.g. Date + Note) overflow and overlap. */
+label { display: flex; flex-direction: column; font-size: 0.76rem; color: var(--text-muted); gap: 0.25rem; flex: 1 1 0; min-width: 0; }
 .full-label { display: block; margin-bottom: 0.6rem; }
 input, select {
   font: inherit; font-size: 0.95rem; color: var(--text);
   background: var(--surface-2); border: 1px solid var(--border);
   border-radius: 9px; padding: 0.5rem 0.6rem; width: 100%;
+  min-width: 0; max-width: 100%;
 }
+/* iOS renders date/time inputs with intrinsic sizing that ignores width:100%
+   unless the box model is normalized and the default inner alignment reset. */
+input[type="date"], input[type="time"] { -webkit-appearance: none; appearance: none; -webkit-min-logical-width: 0; }
 input:focus, select:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
 .form-actions { display: flex; gap: 0.6rem; justify-content: flex-end; align-items: center; }
 

@@ -49,3 +49,35 @@ def test_edit_and_delete_weight(client):
 def test_weight_404s(client):
     assert client.put("/api/weight/999", json={"weight_kg": 100}).status_code == 404
     assert client.delete("/api/weight/999").status_code == 404
+
+
+def test_forecast_needs_two_points(client):
+    # Only the seeded starting weight exists -> not enough to trend.
+    fc = client.get("/api/weight").get_json()["forecast"]
+    assert fc["available"] is False
+    assert fc["status"] == "insufficient"
+
+
+def test_forecast_on_track_for_steady_gain(client, conn):
+    # Seed weight is 99.7 on 2026-07-03; add a steady climb toward 105.
+    for day, w in [("2026-07-17", 100.6), ("2026-07-31", 101.5), ("2026-08-14", 102.4)]:
+        conn.execute("INSERT INTO weight_logs (ts, weight_kg) VALUES (?, ?)", (f"{day}T08:00:00", w))
+    conn.commit()
+    fc = client.get("/api/weight").get_json()["forecast"]
+    assert fc["available"] is True
+    assert fc["slope_per_week"] > 0
+    assert fc["status"] in ("on_track", "ahead")
+    # trend endpoints span the first log to the target date
+    assert fc["trend"][0]["ts"] == "2026-07-03"
+    assert fc["trend"][1]["ts"] == "2026-12-28"
+
+
+def test_forecast_off_track_when_moving_away(client, conn):
+    # Losing weight while the goal is to bulk to 105 -> off track.
+    for day, w in [("2026-07-17", 99.3), ("2026-07-31", 98.9), ("2026-08-14", 98.4)]:
+        conn.execute("INSERT INTO weight_logs (ts, weight_kg) VALUES (?, ?)", (f"{day}T08:00:00", w))
+    conn.commit()
+    fc = client.get("/api/weight").get_json()["forecast"]
+    assert fc["status"] == "off_track"
+    assert fc["slope_per_week"] < 0
+    assert fc["projected_date"] is None
