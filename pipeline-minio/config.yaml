@@ -1,5 +1,5 @@
 name: "Pipeline MinIO"
-version: "1.0.0"
+version: "1.0.1"
 slug: "pipeline-minio"
 description: "MinIO S3-compatible object storage for the data-pipeline stack"
 url: "https://github.com/hoascv/homeassistant-addons/tree/main/pipeline-minio"

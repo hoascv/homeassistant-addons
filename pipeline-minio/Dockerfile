@@ -1,5 +1,4 @@
-ARG BUILD_FROM
-FROM $BUILD_FROM
+FROM docker.io/library/alpine:3.20
 
 # MinIO server + client are static Go binaries, so they run fine on Alpine.
 # "latest" release is fetched at build time. bash/jq drive the entrypoint.

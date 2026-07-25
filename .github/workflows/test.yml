@@ -46,7 +46,7 @@ jobs:
         run: pip install yamllint
 
       - name: Lint add-on YAML
-        run: yamllint -d relaxed pipeline-*/config.yaml pipeline-*/build.yaml
+        run: yamllint -d relaxed pipeline-*/config.yaml
 
       - name: Lint Dockerfiles (hadolint)
         run: |

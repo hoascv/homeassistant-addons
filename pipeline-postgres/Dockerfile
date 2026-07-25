@@ -1,5 +1,4 @@
-ARG BUILD_FROM
-FROM $BUILD_FROM
+FROM docker.io/library/postgres:16
 
 # jq parses the add-on options file (/data/options.json) in run.sh.
 # hadolint ignore=DL3008

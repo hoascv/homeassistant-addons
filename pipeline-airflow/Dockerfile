@@ -1,5 +1,4 @@
-ARG BUILD_FROM
-FROM $BUILD_FROM
+FROM docker.io/apache/airflow:3.3.0
 
 USER root
 # Install providers into the system site (not user-site) so the add-on can run

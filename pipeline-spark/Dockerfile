@@ -1,5 +1,4 @@
-ARG BUILD_FROM
-FROM $BUILD_FROM
+FROM docker.io/apache/spark:4.2.0
 
 # HA runs add-ons as root; the upstream image defaults to the 'spark' user.
 USER root
