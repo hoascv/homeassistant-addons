@@ -1,0 +1,24 @@
+name: "Pipeline Postgres"
+version: "1.0.0"
+slug: "pipeline-postgres"
+description: "PostgreSQL 16 for the data-pipeline stack (also hosts Airflow's metadata database)"
+url: "https://github.com/hoascv/homeassistant-addons/tree/main/pipeline-postgres"
+arch:
+  - amd64
+startup: services
+boot: manual
+init: false
+ports:
+  5432/tcp: 5432
+ports_description:
+  5432/tcp: "PostgreSQL — connect pipeline clients and Airflow here"
+options:
+  postgres_user: "pipeline"
+  postgres_password: "changeme"
+  postgres_db: "pipeline"
+  airflow_db_password: "changeme"
+schema:
+  postgres_user: "str"
+  postgres_password: "password"
+  postgres_db: "str"
+  airflow_db_password: "password"

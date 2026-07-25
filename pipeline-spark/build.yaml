@@ -1,0 +1,2 @@
+build_from:
+  amd64: "docker.io/apache/spark:4.2.0"

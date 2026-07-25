@@ -1,0 +1,24 @@
+name: "Pipeline MinIO"
+version: "1.0.0"
+slug: "pipeline-minio"
+description: "MinIO S3-compatible object storage for the data-pipeline stack"
+url: "https://github.com/hoascv/homeassistant-addons/tree/main/pipeline-minio"
+arch:
+  - amd64
+startup: services
+boot: manual
+init: false
+ports:
+  9000/tcp: 9000
+  9001/tcp: 9001
+ports_description:
+  9000/tcp: "S3 API — point Spark/Airflow S3 clients here"
+  9001/tcp: "MinIO console (web UI)"
+options:
+  root_user: "minioadmin"
+  root_password: "changeme"
+  default_buckets: "raw,staging,curated"
+schema:
+  root_user: "str"
+  root_password: "password"
+  default_buckets: "str?"

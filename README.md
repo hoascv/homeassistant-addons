@@ -11,6 +11,22 @@ Personal Home Assistant add-on repository.
   home workouts, and a daily challenge, with reminders through a Home
   Assistant notify service.
 
+### Data pipeline (amd64 only)
+
+A pre-wired data-engineering stack, one service per add-on. Meant for an
+**amd64 host with 8–16 GB+ RAM** — not a Raspberry Pi. Install and **start them
+in this order**: `postgres → minio → spark → airflow`.
+
+- **[Pipeline Postgres](pipeline-postgres/DOCS.md)** — PostgreSQL 16 (pipeline DB
+  + Airflow metadata DB).
+- **[Pipeline MinIO](pipeline-minio/DOCS.md)** — MinIO S3-compatible object storage.
+- **[Pipeline Spark](pipeline-spark/DOCS.md)** — Apache Spark 4.2 single-node cluster.
+- **[Pipeline Airflow](pipeline-airflow/DOCS.md)** — Apache Airflow 3.3 orchestrator,
+  pre-wired to the above with an example end-to-end DAG.
+
+The add-ons reach each other over the host gateway (`172.30.32.1`) using each
+service's published port; every connection target is an overridable option.
+
 ## Installing this repository
 
 1. In Home Assistant: **Settings → Add-ons → Add-on Store**.

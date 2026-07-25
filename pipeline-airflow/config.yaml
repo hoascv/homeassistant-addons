@@ -1,0 +1,44 @@
+name: "Pipeline Airflow"
+version: "1.0.0"
+slug: "pipeline-airflow"
+description: "Apache Airflow 3.3 orchestrator for the data-pipeline stack (LocalExecutor)"
+url: "https://github.com/hoascv/homeassistant-addons/tree/main/pipeline-airflow"
+arch:
+  - amd64
+startup: application
+boot: manual
+init: false
+map:
+  - share:rw
+ports:
+  8080/tcp: 8085
+ports_description:
+  8080/tcp: "Airflow web UI"
+options:
+  admin_user: "admin"
+  admin_password: "changeme"
+  postgres_host: "172.30.32.1"
+  postgres_port: 5432
+  airflow_db_password: "changeme"
+  spark_master: "172.30.32.1"
+  spark_port: 7077
+  minio_endpoint: "http://172.30.32.1:9000"
+  minio_access_key: "minioadmin"
+  minio_secret_key: "changeme"
+  pipeline_pg_user: "pipeline"
+  pipeline_pg_password: "changeme"
+  pipeline_pg_db: "pipeline"
+schema:
+  admin_user: "str"
+  admin_password: "password"
+  postgres_host: "str"
+  postgres_port: "port"
+  airflow_db_password: "password"
+  spark_master: "str"
+  spark_port: "port"
+  minio_endpoint: "str"
+  minio_access_key: "str"
+  minio_secret_key: "password"
+  pipeline_pg_user: "str"
+  pipeline_pg_password: "password"
+  pipeline_pg_db: "str"

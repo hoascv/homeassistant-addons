@@ -1,0 +1,2 @@
+build_from:
+  amd64: "docker.io/library/alpine:3.20"

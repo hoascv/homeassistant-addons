@@ -1,0 +1,32 @@
+name: "Pipeline Spark"
+version: "1.0.0"
+slug: "pipeline-spark"
+description: "Apache Spark 4.2 single-node cluster (master + worker) for the data-pipeline stack"
+url: "https://github.com/hoascv/homeassistant-addons/tree/main/pipeline-spark"
+arch:
+  - amd64
+startup: services
+boot: manual
+init: false
+ports:
+  7077/tcp: 7077
+  6066/tcp: 6066
+  8080/tcp: 8082
+  8081/tcp: 8083
+ports_description:
+  7077/tcp: "Spark master RPC (spark://…:7077)"
+  6066/tcp: "Standalone REST submission API (used by Airflow, cluster mode)"
+  8080/tcp: "Spark master web UI"
+  8081/tcp: "Spark worker web UI"
+options:
+  worker_memory: "2G"
+  worker_cores: 2
+  minio_endpoint: "http://172.30.32.1:9000"
+  minio_access_key: "minioadmin"
+  minio_secret_key: "changeme"
+schema:
+  worker_memory: "str"
+  worker_cores: "int(1,64)"
+  minio_endpoint: "str"
+  minio_access_key: "str"
+  minio_secret_key: "password"

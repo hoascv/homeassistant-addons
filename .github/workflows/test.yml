@@ -31,6 +31,33 @@ jobs:
       - name: Run tests
         run: pytest
 
+  lint-pipeline:
+    # The data-pipeline add-ons wrap upstream images (no pytest). Lint their
+    # config/build YAML and Dockerfiles instead.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install yamllint
+        run: pip install yamllint
+
+      - name: Lint add-on YAML
+        run: yamllint -d relaxed pipeline-*/config.yaml pipeline-*/build.yaml
+
+      - name: Lint Dockerfiles (hadolint)
+        run: |
+          curl -fsSL -o /usr/local/bin/hadolint \
+            https://github.com/hadolint/hadolint/releases/latest/download/hadolint-Linux-x86_64
+          chmod +x /usr/local/bin/hadolint
+          hadolint --failure-threshold error pipeline-*/Dockerfile
+
+      - name: Compile Python (DAGs + jobs)
+        run: python -m py_compile pipeline-airflow/dags/*.py pipeline-spark/jobs/*.py
+
   e2e:
     runs-on: ubuntu-latest
     defaults:

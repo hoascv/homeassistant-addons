@@ -1,0 +1,2 @@
+build_from:
+  amd64: "docker.io/apache/airflow:3.3.0"
