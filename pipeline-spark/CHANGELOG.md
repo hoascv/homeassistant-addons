@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.2
+
+- Fixed a start-up crash loop: the base image has no writable
+  `$SPARK_HOME/conf`, so writing `spark-defaults.conf` there failed. The
+  config now lives in `/data/spark/conf` (via `SPARK_CONF_DIR`), alongside the
+  worker scratch dir and Ivy cache.
+
 ## 1.0.1
 
 - Set the base image directly in the Dockerfile and removed `build.yaml`

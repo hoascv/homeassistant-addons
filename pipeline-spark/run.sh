@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -e
+set -eo pipefail
 
 OPTIONS=/data/options.json
 : "${SPARK_HOME:=/opt/spark}"
@@ -10,17 +10,18 @@ MINIO_ENDPOINT="$(jq -r '.minio_endpoint // "http://172.30.32.1:9000"' "$OPTIONS
 MINIO_KEY="$(jq -r '.minio_access_key' "$OPTIONS")"
 MINIO_SECRET="$(jq -r '.minio_secret_key' "$OPTIONS")"
 
-# Persist the worker scratch dir and the Ivy cache (spark.jars.packages) so the
-# hadoop-aws download only happens once.
+# The image has no writable $SPARK_HOME/conf, so keep our config (and the
+# worker scratch dir + Ivy cache) under /data and point Spark at it.
+export SPARK_CONF_DIR=/data/spark/conf
 export SPARK_WORKER_DIR=/data/spark/work
 export HOME=/data/spark
-mkdir -p "$SPARK_WORKER_DIR" /data/spark/.ivy2
+mkdir -p "$SPARK_CONF_DIR" "$SPARK_WORKER_DIR" /data/spark/.ivy2
 # Bind on all interfaces so the host-published ports reach master/worker.
 export SPARK_LOCAL_IP=0.0.0.0
 
 # Compose spark-defaults: baked packages/REST settings + runtime S3A (MinIO).
-CONF="${SPARK_HOME}/conf/spark-defaults.conf"
-cat /opt/pipeline/base-defaults.conf > "$CONF"
+CONF="$SPARK_CONF_DIR/spark-defaults.conf"
+cp /opt/pipeline/base-defaults.conf "$CONF"
 cat >> "$CONF" <<EOF
 spark.jars.ivy /data/spark/.ivy2
 spark.hadoop.fs.s3a.endpoint ${MINIO_ENDPOINT}
@@ -31,6 +32,7 @@ spark.hadoop.fs.s3a.connection.ssl.enabled false
 spark.hadoop.fs.s3a.aws.credentials.provider org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider
 EOF
 
+echo "[Pipeline Spark] uid=$(id -u); wrote $CONF"
 echo "[Pipeline Spark] starting master (RPC :7077, REST :6066, UI :8080)"
 "${SPARK_HOME}/bin/spark-class" org.apache.spark.deploy.master.Master \
     --port 7077 --webui-port 8080 &
