@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -e
 
+# Airflow (and the providers) are installed in the airflow user's site under
+# /home/airflow/.local. We run as root so we can write /data and /share, so
+# point HOME there for Python's user-site to resolve those packages.
+export HOME=/home/airflow
+
 OPTIONS=/data/options.json
 opt() { jq -r "$1" "$OPTIONS"; }
 

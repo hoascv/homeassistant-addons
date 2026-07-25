@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.2
+
+- Fixed the image build failing with "You are running pip as root": provider
+  packages are now installed as the `airflow` user (as the base image
+  requires). The add-on still runs as root (to write `/data` and `/share`) and
+  sets `HOME=/home/airflow` so those packages resolve.
+
 ## 1.0.1
 
 - Set the base image directly in the Dockerfile and removed `build.yaml`
