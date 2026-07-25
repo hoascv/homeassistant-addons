@@ -37,6 +37,28 @@ Part of a four-add-on data pipeline: **Pipeline Postgres**, **Pipeline MinIO**,
 - **pipeline_pg_user** / **pipeline_pg_password** / **pipeline_pg_db**: the pipeline
   database the example writes results to (match Pipeline Postgres).
 
+## Opening Airflow from Home Assistant
+
+The add-on page has an **Open Web UI** button that opens Airflow (on host port
+8085) from within Home Assistant.
+
+To add it to the **sidebar** instead, use a `panel_iframe` in Home Assistant's
+`configuration.yaml`:
+
+```yaml
+panel_iframe:
+  airflow:
+    title: "Airflow"
+    icon: mdi:airplane-takeoff
+    url: "http://<home-assistant-host-ip>:8085"
+```
+
+Because Airflow requires a fixed base URL and Home Assistant's ingress path is
+dynamic, the add-on does **not** use ingress (an embedded sidebar panel with no
+extra port). The iframe above is the closest sidebar experience; note the iframe
+loads over HTTP, so a browser blocking mixed content on an HTTPS Home Assistant
+may open it in a new tab instead.
+
 ## Running the example
 
 1. Open the UI at `http://<home-assistant-host-ip>:8085` and log in.

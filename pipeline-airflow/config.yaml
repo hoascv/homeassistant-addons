@@ -1,5 +1,5 @@
 name: "Pipeline Airflow"
-version: "1.0.2"
+version: "1.0.3"
 slug: "pipeline-airflow"
 description: "Apache Airflow 3.3 orchestrator for the data-pipeline stack (LocalExecutor)"
 url: "https://github.com/hoascv/homeassistant-addons/tree/main/pipeline-airflow"
@@ -14,6 +14,9 @@ ports:
   8080/tcp: 8085
 ports_description:
   8080/tcp: "Airflow web UI"
+# Adds an "Open Web UI" button on the add-on page that opens Airflow on its
+# mapped host port from within Home Assistant.
+webui: "http://[HOST]:[PORT:8080]/"
 options:
   admin_user: "admin"
   admin_password: "changeme"

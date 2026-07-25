@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.3
+
+- Added an **Open Web UI** button on the add-on page, so Airflow can be opened
+  from within Home Assistant.
+
 ## 1.0.2
 
 - Fixed the image build failing with "You are running pip as root": provider
