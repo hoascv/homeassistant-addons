@@ -525,13 +525,19 @@ document.getElementById("challenge-history-close-btn").addEventListener("click",
 document.getElementById("history-from").addEventListener("change", loadChallengeHistory);
 document.getElementById("history-to").addEventListener("change", loadChallengeHistory);
 
+// Last /api/challenge/history payload — the source for optimistic cell toggles.
+let challengeHistoryData = null;
+
 async function loadChallengeHistory() {
-  const host = document.getElementById("history-grid");
   const from = document.getElementById("history-from").value;
   const to = document.getElementById("history-to").value;
   const qs = from && to ? `from=${from}&to=${to}` : "days=14";
-  let data;
-  try { data = await fetchJSON(`api/challenge/history?${qs}`); } catch (e) { return; }
+  try { challengeHistoryData = await fetchJSON(`api/challenge/history?${qs}`); } catch (e) { return; }
+  renderChallengeHistory(challengeHistoryData);
+}
+
+function renderChallengeHistory(data) {
+  const host = document.getElementById("history-grid");
   const items = data.items || [];
   host.innerHTML = data.days
     .map((d) => {
@@ -551,22 +557,48 @@ async function loadChallengeHistory() {
     .join("");
 }
 
-document.getElementById("history-grid").addEventListener("click", async (e) => {
+document.getElementById("history-grid").addEventListener("click", (e) => {
   const cell = e.target.closest(".history-cell");
-  if (!cell) return;
-  try {
-    await fetchJSON("api/challenge/toggle", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ item_id: Number(cell.dataset.item), day: cell.dataset.day }),
+  if (!cell || !challengeHistoryData) return;
+  const itemId = Number(cell.dataset.item);
+  const day = cell.dataset.day;
+  const dayEntry = (challengeHistoryData.days || []).find((d) => d.day === day);
+  if (!dayEntry) return;
+
+  // Optimistic update: flip this cell and the row's "complete" state from the
+  // cache now, so the grid reacts instantly. The POST reconciles against the
+  // server; on failure we flip it back and tell the user.
+  const wasDone = dayEntry.done.includes(itemId);
+  applyHistoryToggle(dayEntry, itemId, !wasDone);
+
+  fetchJSON("api/challenge/toggle", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ item_id: itemId, day }),
+  })
+    .then(() => {
+      // Server is the source of truth for the grid, and — since ticking an
+      // exercise on any day logs or removes a workout — the challenge card and
+      // workout lists underneath the sheet too.
+      loadChallengeHistory();
+      loadChallenge();
+      refreshWorkoutViews();
+    })
+    .catch(() => {
+      applyHistoryToggle(dayEntry, itemId, wasDone);
+      toast("Couldn't update — check your connection.");
     });
-    loadChallengeHistory();
-    // Ticking an exercise on a past day logs (or removes) a workout too, so
-    // keep the challenge card and the workout lists in step.
-    loadChallenge();
-    refreshWorkoutViews();
-  } catch (err) { toast(err.message); }
 });
+
+// Flip one day/item completion in the history cache, recompute that day's
+// "complete" flag (all active items done — matching the server), and re-render.
+function applyHistoryToggle(dayEntry, itemId, done) {
+  dayEntry.done = dayEntry.done.filter((id) => id !== itemId);
+  if (done) dayEntry.done.push(itemId);
+  const activeIds = (challengeHistoryData.items || []).map((it) => it.id);
+  dayEntry.complete = activeIds.length > 0 && activeIds.every((id) => dayEntry.done.includes(id));
+  renderChallengeHistory(challengeHistoryData);
+}
 
 // --- Weight sheet ----------------------------------------------------------
 
@@ -1033,6 +1065,7 @@ function renderRecentWorkouts(rows) {
         <div class="list-main">
           <div class="list-title">${escapeHtml(w.exercise_name)}</div>
           <div class="list-sub">${escapeHtml(fmtDate(w.ts))}${workoutSummary(w) ? " · " + escapeHtml(workoutSummary(w)) : ""}</div>
+          ${w.notes ? `<div class="list-note">${escapeHtml(w.notes)}</div>` : ""}
         </div>
       </li>`
     )

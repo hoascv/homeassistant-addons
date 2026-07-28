@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.3.2
+
+- **Instant, optimistic challenge check-off.** Ticking a challenge item now
+  updates the check, streak dots and **Recent workouts** the moment you tap —
+  before the server replies — then reconciles with the server (and rolls back
+  with a message if the request fails). The same applies to the **History**
+  grid when backfilling past days.
+- **Notes in Recent workouts.** Each entry in the **Recent workouts** card now
+  shows its notes when present.
+
 ## 1.3.1
 
 - **Recent workouts updates instantly.** Ticking off an exercise in the

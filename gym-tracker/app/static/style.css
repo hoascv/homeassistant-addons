@@ -198,6 +198,7 @@ body {
 .list-main { min-width: 0; }
 .list-title { font-weight: 600; }
 .list-sub { font-size: 0.76rem; color: var(--text-muted); }
+.list-note { font-size: 0.78rem; color: var(--text); margin-top: 0.15rem; font-style: italic; white-space: pre-wrap; overflow-wrap: anywhere; }
 .list-del {
   border: none; background: none; color: var(--danger);
   font-size: 1rem; cursor: pointer; padding: 0.25rem 0.4rem; flex-shrink: 0;
