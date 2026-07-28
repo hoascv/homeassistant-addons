@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.4.0
+
+- **Garmin Connect integration.** Connect your Garmin account (⌚ sheet) to
+  pull in **sleep**, **stress**, **Body Battery** and **activities**. Sign in
+  with email/password — including a **2-factor** code step when your account
+  needs it — and only the refreshing login token is stored locally under
+  `/data`; your password is never saved. Data syncs automatically in the
+  background (`garmin_sync_interval_hours`, default 6h) plus a **Sync now**
+  button, and a new home **Garmin** card shows your latest sleep/stress/Body
+  Battery and recent activities. Two new options: **garmin_auto_sync** and
+  **garmin_sync_interval_hours**. This is the only feature that contacts an
+  external service.
+
 ## 1.3.2
 
 - **Instant, optimistic challenge check-off.** Ticking a challenge item now

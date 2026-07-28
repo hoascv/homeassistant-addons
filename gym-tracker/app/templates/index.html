@@ -12,6 +12,7 @@
   <h1>Gym Tracker</h1>
   <button type="button" class="ha-status-dot" id="ha-status-dot" aria-label="Home Assistant connection status"></button>
   <button class="topbar-icon-btn" id="library-open-btn" aria-label="Library">🏋️</button>
+  <button class="topbar-icon-btn" id="garmin-open-btn" aria-label="Garmin Connect">⌚</button>
   <button class="topbar-icon-btn" id="reminders-open-btn" aria-label="Reminders">🔔</button>
   <button class="topbar-icon-btn" id="settings-open-btn" aria-label="Settings">⚙️</button>
 </header>
@@ -80,6 +81,21 @@
     </div>
     <ul class="workout-list" id="recent-workout-list"></ul>
     <p class="empty-state" id="recent-workout-empty" hidden>No workouts logged yet.</p>
+  </section>
+
+  <!-- Garmin health -->
+  <section class="card" id="garmin-card">
+    <div class="card-head">
+      <h2>Garmin</h2>
+      <button type="button" class="link-btn" id="garmin-card-btn">Connect</button>
+    </div>
+    <div class="garmin-tiles" id="garmin-tiles" hidden>
+      <div class="mini-stat"><span class="mini-value" id="garmin-sleep">–</span><span class="mini-label">Sleep</span></div>
+      <div class="mini-stat"><span class="mini-value" id="garmin-stress">–</span><span class="mini-label">Stress</span></div>
+      <div class="mini-stat"><span class="mini-value" id="garmin-battery">–</span><span class="mini-label">Body Battery</span></div>
+    </div>
+    <ul class="workout-list" id="garmin-activity-list"></ul>
+    <p class="empty-state" id="garmin-empty">Connect Garmin to see your sleep, stress, Body Battery and activities.</p>
   </section>
 </main>
 
@@ -268,6 +284,50 @@
     <p class="result-line" id="notify-test-result"></p>
     <div class="sheet-actions">
       <button type="button" class="btn-secondary" id="reminders-close-btn">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- Garmin Connect sheet -->
+<div class="sheet-backdrop" id="garmin-backdrop">
+  <div class="sheet">
+    <h2>Garmin Connect</h2>
+    <p class="sheet-subtext">
+      Pull your <strong>sleep</strong>, <strong>stress</strong>, <strong>Body Battery</strong>
+      and <strong>activities</strong> from Garmin. This is the one feature that talks to an
+      external service; only a login token is stored locally — never your password.
+    </p>
+
+    <div class="reminder-status" id="garmin-status"></div>
+
+    <!-- Shown when not connected -->
+    <form id="garmin-login-form" class="inline-form" hidden>
+      <label class="full-label">Email
+        <input type="email" id="garmin-email" autocomplete="username" required>
+      </label>
+      <label class="full-label">Password
+        <input type="password" id="garmin-password" autocomplete="current-password" required>
+      </label>
+      <label class="full-label" id="garmin-mfa-field" hidden>2-factor code
+        <input type="text" id="garmin-mfa-code" inputmode="numeric" autocomplete="one-time-code">
+      </label>
+      <div class="form-actions">
+        <button type="submit" class="btn-primary" id="garmin-login-btn">Connect</button>
+      </div>
+      <p class="result-line" id="garmin-login-result"></p>
+    </form>
+
+    <!-- Shown when connected -->
+    <div id="garmin-connected" hidden>
+      <div class="form-actions">
+        <button type="button" class="btn-primary" id="garmin-sync-btn">Sync now</button>
+        <button type="button" class="btn-secondary" id="garmin-disconnect-btn">Disconnect</button>
+      </div>
+      <p class="result-line" id="garmin-sync-result"></p>
+    </div>
+
+    <div class="sheet-actions">
+      <button type="button" class="btn-secondary" id="garmin-close-btn">Close</button>
     </div>
   </div>
 </div>

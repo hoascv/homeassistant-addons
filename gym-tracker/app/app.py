@@ -16,7 +16,9 @@ from datetime import date, datetime, time as dtime, timedelta
 
 from flask import Flask, Response, g, jsonify, render_template, request, send_file
 
-APP_VERSION = "1.3.1"  # keep in sync with the "version" field in config.yaml
+import garmin_client
+
+APP_VERSION = "1.4.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("GYM_DB_PATH", "/data/gym.db")
 OPTIONS_PATH = os.environ.get("GYM_OPTIONS_PATH", "/data/options.json")
@@ -156,6 +158,18 @@ def get_reminders_config():
         "weighin_enabled": bool(opts.get("weighin_reminder_enabled", False)),
         "weighin_weekday": (opts.get("weighin_reminder_weekday", "sunday") or "sunday").strip().lower(),
         "weighin_time": opts.get("weighin_reminder_time", "08:00"),
+    }
+
+
+def get_garmin_config():
+    opts = _read_options()
+    try:
+        interval = int(opts.get("garmin_sync_interval_hours", 6))
+    except (TypeError, ValueError):
+        interval = 6
+    return {
+        "auto_sync": bool(opts.get("garmin_auto_sync", True)),
+        "interval_hours": max(1, interval),
     }
 
 
@@ -304,6 +318,45 @@ def init_db():
         CREATE TABLE IF NOT EXISTS app_state (
             key TEXT PRIMARY KEY,
             value TEXT
+        )
+        """
+    )
+    # Garmin Connect: one wellness row per day (sleep / stress / Body Battery),
+    # keyed by day so a re-sync upserts rather than duplicating.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS garmin_daily (
+            day TEXT PRIMARY KEY,
+            sleep_seconds INTEGER,
+            sleep_deep_seconds INTEGER,
+            sleep_light_seconds INTEGER,
+            sleep_rem_seconds INTEGER,
+            sleep_awake_seconds INTEGER,
+            sleep_score INTEGER,
+            stress_avg INTEGER,
+            stress_max INTEGER,
+            body_battery_high INTEGER,
+            body_battery_low INTEGER,
+            body_battery_charged INTEGER,
+            body_battery_drained INTEGER,
+            synced_at TEXT
+        )
+        """
+    )
+    # Garmin activities, keyed by Garmin's own activity id (natural dedup key).
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS garmin_activities (
+            activity_id INTEGER PRIMARY KEY,
+            start_time TEXT,
+            activity_type TEXT,
+            name TEXT,
+            duration_sec INTEGER,
+            distance_m REAL,
+            calories INTEGER,
+            avg_hr INTEGER,
+            max_hr INTEGER,
+            synced_at TEXT
         )
         """
     )
@@ -517,6 +570,68 @@ def _resolve_ts(day):
     except ValueError:
         return None, "date must be YYYY-MM-DD"
     return f"{day}T12:00:00", None
+
+
+# --- Garmin Connect sync ---
+
+# How many trailing days each sync pulls. A rolling window (rather than "since
+# last sync") means transient gaps or late-arriving data self-heal.
+GARMIN_SYNC_DAYS = 7
+
+
+def _garmin_upsert_day(conn, day, fields):
+    if not fields:
+        return
+    cols = ["day", "synced_at"] + list(fields.keys())
+    vals = [day, datetime.now().isoformat(timespec="seconds")] + list(fields.values())
+    placeholders = ", ".join("?" for _ in cols)
+    updates = ", ".join(f"{c} = excluded.{c}" for c in cols if c != "day")
+    conn.execute(
+        f"INSERT INTO garmin_daily ({', '.join(cols)}) VALUES ({placeholders}) "
+        f"ON CONFLICT(day) DO UPDATE SET {updates}",
+        vals,
+    )
+
+
+def _garmin_upsert_activity(conn, a):
+    payload = {**a, "synced_at": datetime.now().isoformat(timespec="seconds")}
+    conn.execute(
+        "INSERT INTO garmin_activities "
+        "(activity_id, start_time, activity_type, name, duration_sec, distance_m, calories, avg_hr, max_hr, synced_at) "
+        "VALUES (:activity_id, :start_time, :activity_type, :name, :duration_sec, :distance_m, :calories, :avg_hr, :max_hr, :synced_at) "
+        "ON CONFLICT(activity_id) DO UPDATE SET "
+        "start_time = excluded.start_time, activity_type = excluded.activity_type, name = excluded.name, "
+        "duration_sec = excluded.duration_sec, distance_m = excluded.distance_m, calories = excluded.calories, "
+        "avg_hr = excluded.avg_hr, max_hr = excluded.max_hr, synced_at = excluded.synced_at",
+        payload,
+    )
+
+
+def _garmin_do_sync(conn):
+    """Pull the trailing GARMIN_SYNC_DAYS of wellness data + activities into the
+    DB (idempotent upserts). Returns {"days": n, "activities": m}. Records the
+    last-sync timestamp; on failure records the error and re-raises."""
+    try:
+        client = garmin_client.get_client()
+        today = date.today()
+        start = today - timedelta(days=GARMIN_SYNC_DAYS - 1)
+        days = 0
+        for offset in range(GARMIN_SYNC_DAYS):
+            d = (start + timedelta(days=offset)).isoformat()
+            fields = garmin_client.fetch_day(client, d)
+            if fields:
+                _garmin_upsert_day(conn, d, fields)
+                days += 1
+        activities = garmin_client.fetch_activities(client, start.isoformat(), today.isoformat())
+        for a in activities:
+            _garmin_upsert_activity(conn, a)
+        conn.commit()
+        _set_app_state(conn, "garmin_last_sync", datetime.now().isoformat(timespec="seconds"))
+        _set_app_state(conn, "garmin_last_error", "")
+        return {"days": days, "activities": len(activities)}
+    except Exception as e:  # noqa: BLE001 - surface the message, never crash the caller
+        _set_app_state(conn, "garmin_last_error", str(e))
+        raise
 
 
 # --- Domain helpers ---
@@ -1541,6 +1656,108 @@ def api_notify_test():
     return jsonify({"status": "failed", "error": err}), 502
 
 
+# --- Routes: Garmin Connect ---
+
+
+def _garmin_status_payload(db):
+    cfg = get_garmin_config()
+    return {
+        "connected": garmin_client.is_connected(),
+        "last_sync": _get_app_state(db, "garmin_last_sync"),
+        "last_error": _get_app_state(db, "garmin_last_error") or None,
+        "auto_sync": cfg["auto_sync"],
+        "interval_hours": cfg["interval_hours"],
+    }
+
+
+@app.route("/api/garmin/status")
+def api_garmin_status():
+    return jsonify(_garmin_status_payload(get_db()))
+
+
+@app.route("/api/garmin/connect", methods=["POST"])
+def api_garmin_connect():
+    data = request.get_json(force=True, silent=True) or {}
+    email = (data.get("email") or "").strip()
+    password = data.get("password") or ""
+    if not email or not password:
+        return jsonify({"error": "email and password are required"}), 400
+    try:
+        result = garmin_client.begin_login(email, password)
+    except Exception as e:  # noqa: BLE001 - report the login failure to the user
+        return jsonify({"error": f"Garmin login failed: {e}"}), 502
+    return jsonify(result)
+
+
+@app.route("/api/garmin/mfa", methods=["POST"])
+def api_garmin_mfa():
+    data = request.get_json(force=True, silent=True) or {}
+    code = (data.get("code") or "").strip()
+    if not code:
+        return jsonify({"error": "code is required"}), 400
+    try:
+        result = garmin_client.complete_mfa(code)
+    except Exception as e:  # noqa: BLE001
+        return jsonify({"error": f"2FA verification failed: {e}"}), 502
+    return jsonify(result)
+
+
+@app.route("/api/garmin/disconnect", methods=["POST"])
+def api_garmin_disconnect():
+    garmin_client.disconnect()
+    db = get_db()
+    _set_app_state(db, "garmin_last_sync", "")
+    _set_app_state(db, "garmin_last_error", "")
+    return jsonify({"status": "disconnected"})
+
+
+@app.route("/api/garmin/sync", methods=["POST"])
+def api_garmin_sync():
+    if not garmin_client.is_connected():
+        return jsonify({"error": "Garmin is not connected"}), 409
+    db = get_db()
+    try:
+        imported = _garmin_do_sync(db)
+    except Exception as e:  # noqa: BLE001
+        return jsonify({"status": "failed", "error": str(e)}), 502
+    return jsonify({"status": "ok", "imported": imported})
+
+
+@app.route("/api/garmin/summary")
+def api_garmin_summary():
+    db = get_db()
+    latest = db.execute(
+        "SELECT * FROM garmin_daily ORDER BY day DESC LIMIT 1"
+    ).fetchone()
+    activities = db.execute(
+        "SELECT * FROM garmin_activities ORDER BY start_time DESC LIMIT 10"
+    ).fetchall()
+    return jsonify(
+        {
+            "connected": garmin_client.is_connected(),
+            "latest": dict(latest) if latest else None,
+            "activities": [dict(a) for a in activities],
+        }
+    )
+
+
+@app.route("/api/garmin/daily")
+def api_garmin_daily():
+    db = get_db()
+    clauses, params = [], []
+    if request.args.get("from"):
+        clauses.append("day >= ?")
+        params.append(request.args["from"])
+    if request.args.get("to"):
+        clauses.append("day <= ?")
+        params.append(request.args["to"])
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    rows = db.execute(
+        f"SELECT * FROM garmin_daily {where} ORDER BY day DESC LIMIT 370", tuple(params)
+    ).fetchall()
+    return jsonify([dict(r) for r in rows])
+
+
 # --- Routes: backup / restore ---
 
 
@@ -1660,15 +1877,36 @@ def _weighin_reminder_tick(now, conn):
         )
 
 
+def _garmin_sync_tick(now, conn):
+    cfg = get_garmin_config()
+    if not (cfg["auto_sync"] and garmin_client.is_connected()):
+        return
+    last = _get_app_state(conn, "garmin_last_sync")
+    if last:
+        try:
+            if now - datetime.fromisoformat(last) < timedelta(hours=cfg["interval_hours"]):
+                return  # synced recently enough
+        except ValueError:
+            pass  # unparseable marker — sync now and overwrite it
+    try:
+        _garmin_do_sync(conn)
+    except Exception:  # noqa: BLE001 - error is recorded in app_state; keep looping
+        app.logger.exception("garmin sync failed")
+
+
 def _background_loop():
+    # SUPERVISOR_TOKEN is injected whenever the add-on runs under Home Assistant
+    # (homeassistant_api: true), so its absence means local/dev mode — where
+    # there's neither notify nor a reason to reach out to Garmin.
     if not SUPERVISOR_TOKEN:
-        _log("SUPERVISOR_TOKEN not set; reminders disabled (local/dev mode)")
+        _log("SUPERVISOR_TOKEN not set; background tasks disabled (local/dev mode)")
         return
     while True:
         try:
             conn = _db_connect_standalone()
             try:
                 now = datetime.now()
+                _garmin_sync_tick(now, conn)
                 _challenge_reminder_tick(now, conn)
                 _weighin_reminder_tick(now, conn)
             finally:

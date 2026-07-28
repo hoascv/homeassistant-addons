@@ -123,6 +123,10 @@ body {
 .mini-value { display: block; font-size: 1.15rem; font-weight: 700; }
 .mini-label { display: block; font-size: 0.72rem; color: var(--text-muted); margin-top: 0.1rem; }
 
+/* Garmin card: reuse the mini-stat tiles in a row */
+.garmin-tiles { display: flex; gap: 0.75rem; margin: 0.2rem 0 0.6rem; }
+.garmin-error { color: var(--danger); }
+
 /* Chart */
 .chart-figure { margin: 0.9rem 0 0.4rem; }
 .chart-figure figcaption { font-size: 0.8rem; color: var(--text-muted); margin-bottom: 0.3rem; }

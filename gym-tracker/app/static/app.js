@@ -39,6 +39,13 @@ function fmtDate(iso) {
   if (isNaN(d)) return iso;
   return `${MONTHS[d.getMonth()]} ${d.getDate()}`;
 }
+function fmtDateTime(iso) {
+  const d = new Date(iso);
+  if (isNaN(d)) return iso;
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mm = String(d.getMinutes()).padStart(2, "0");
+  return `${MONTHS[d.getMonth()]} ${d.getDate()}, ${hh}:${mm}`;
+}
 function todayISO() { return new Date().toISOString().slice(0, 10); }
 
 // --- Home: goal card -------------------------------------------------------
@@ -1182,6 +1189,176 @@ document.getElementById("restore-input").addEventListener("change", async (e) =>
   e.target.value = "";
 });
 
+// --- Garmin Connect --------------------------------------------------------
+
+function fmtDuration(sec) {
+  if (sec == null) return null;
+  const h = Math.floor(sec / 3600);
+  const m = Math.round((sec % 3600) / 60);
+  return h ? `${h}h ${m}m` : `${m}m`;
+}
+
+function garminActivitySummary(a) {
+  const bits = [];
+  if (a.duration_sec != null) bits.push(fmtDuration(a.duration_sec));
+  if (a.distance_m != null) bits.push(`${(a.distance_m / 1000).toFixed(2)} km`);
+  if (a.calories != null) bits.push(`${a.calories} kcal`);
+  if (a.avg_hr != null) bits.push(`♥ ${a.avg_hr}`);
+  return bits.join(" · ");
+}
+
+function prettyActivityType(t) {
+  if (!t) return "Activity";
+  return t.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+// Populate the home card from api/garmin/summary.
+async function loadGarminCard() {
+  const tiles = document.getElementById("garmin-tiles");
+  const list = document.getElementById("garmin-activity-list");
+  const empty = document.getElementById("garmin-empty");
+  const cardBtn = document.getElementById("garmin-card-btn");
+  let data;
+  try { data = await fetchJSON("api/garmin/summary"); } catch (e) { return; }
+
+  cardBtn.textContent = data.connected ? "Manage" : "Connect";
+  const d = data.latest;
+  const hasContent = data.connected && (d || (data.activities || []).length);
+
+  tiles.hidden = !d;
+  if (d) {
+    document.getElementById("garmin-sleep").textContent = fmtDuration(d.sleep_seconds) || "–";
+    document.getElementById("garmin-stress").textContent = d.stress_avg != null ? d.stress_avg : "–";
+    document.getElementById("garmin-battery").textContent =
+      d.body_battery_high != null ? `${d.body_battery_low != null ? d.body_battery_low + "–" : ""}${d.body_battery_high}` : "–";
+  }
+
+  list.innerHTML = (data.activities || [])
+    .slice(0, 5)
+    .map(
+      (a) => `
+      <li>
+        <div class="list-main">
+          <div class="list-title">${escapeHtml(a.name || prettyActivityType(a.activity_type))}</div>
+          <div class="list-sub">${escapeHtml(fmtDate(a.start_time))}${garminActivitySummary(a) ? " · " + escapeHtml(garminActivitySummary(a)) : ""}</div>
+        </div>
+      </li>`
+    )
+    .join("");
+
+  empty.hidden = !!hasContent;
+  if (!data.connected) empty.textContent = "Connect Garmin to see your sleep, stress, Body Battery and activities.";
+  else if (!hasContent) empty.textContent = "Connected. Press Sync to pull your latest Garmin data.";
+}
+
+// Populate the Garmin sheet (status + which controls to show).
+async function loadGarmin() {
+  let data;
+  try { data = await fetchJSON("api/garmin/status"); } catch (e) { return; }
+  const badge = (on) => `<span class="badge ${on ? "badge-on" : "badge-off"}">${on ? "Connected" : "Not connected"}</span>`;
+  const parts = [`<div class="reminder-line">${badge(data.connected)}<span>Garmin account</span></div>`];
+  if (data.connected) {
+    const last = data.last_sync ? fmtDateTime(data.last_sync) : "never";
+    parts.push(`<div class="reminder-line"><span>Last sync: ${escapeHtml(last)}${data.auto_sync ? ` · auto every ${data.interval_hours}h` : " · auto-sync off"}</span></div>`);
+    if (data.last_error) parts.push(`<div class="reminder-line"><span class="garmin-error">Last error: ${escapeHtml(data.last_error)}</span></div>`);
+  }
+  document.getElementById("garmin-status").innerHTML = parts.join("");
+
+  document.getElementById("garmin-login-form").hidden = data.connected;
+  document.getElementById("garmin-connected").hidden = !data.connected;
+  // Reset the login form between opens.
+  if (!data.connected) {
+    document.getElementById("garmin-mfa-field").hidden = true;
+    document.getElementById("garmin-login-btn").textContent = "Connect";
+  }
+}
+
+document.getElementById("garmin-open-btn").addEventListener("click", () => {
+  openSheet("garmin-backdrop");
+  loadGarmin();
+});
+document.getElementById("garmin-card-btn").addEventListener("click", () => {
+  openSheet("garmin-backdrop");
+  loadGarmin();
+});
+document.getElementById("garmin-close-btn").addEventListener("click", () => {
+  closeSheet("garmin-backdrop");
+  loadGarminCard();
+});
+
+// Login handles both the credential step and the follow-up 2FA code step. When
+// the server answers "mfa_required" we reveal the code field and the same
+// submit sends the code to api/garmin/mfa.
+document.getElementById("garmin-login-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const result = document.getElementById("garmin-login-result");
+  const mfaField = document.getElementById("garmin-mfa-field");
+  const code = document.getElementById("garmin-mfa-code").value.trim();
+  const btn = document.getElementById("garmin-login-btn");
+
+  try {
+    let res;
+    if (!mfaField.hidden && code) {
+      result.textContent = "Verifying code…";
+      res = await fetchJSON("api/garmin/mfa", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code }),
+      });
+    } else {
+      result.textContent = "Connecting…";
+      res = await fetchJSON("api/garmin/connect", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: document.getElementById("garmin-email").value.trim(),
+          password: document.getElementById("garmin-password").value,
+        }),
+      });
+    }
+    if (res.status === "mfa_required") {
+      mfaField.hidden = false;
+      btn.textContent = "Verify code";
+      result.textContent = "Enter the 2-factor code Garmin just sent you.";
+      document.getElementById("garmin-mfa-code").focus();
+      return;
+    }
+    // Connected.
+    document.getElementById("garmin-password").value = "";
+    document.getElementById("garmin-mfa-code").value = "";
+    result.textContent = "Connected. Syncing…";
+    await loadGarmin();
+    try { await fetchJSON("api/garmin/sync", { method: "POST" }); } catch (err) { /* first sync best-effort */ }
+    result.textContent = "";
+    loadGarminCard();
+  } catch (err) {
+    result.textContent = err.message;
+  }
+});
+
+document.getElementById("garmin-sync-btn").addEventListener("click", async () => {
+  const result = document.getElementById("garmin-sync-result");
+  result.textContent = "Syncing…";
+  try {
+    const res = await fetchJSON("api/garmin/sync", { method: "POST" });
+    const imp = res.imported || {};
+    result.textContent = `Synced ${imp.days || 0} days, ${imp.activities || 0} activities.`;
+    loadGarmin();
+    loadGarminCard();
+  } catch (err) {
+    result.textContent = `Sync failed: ${err.message}`;
+  }
+});
+
+document.getElementById("garmin-disconnect-btn").addEventListener("click", async () => {
+  if (!confirm("Disconnect Garmin? Imported data stays; you'll need to sign in again to sync.")) return;
+  try {
+    await fetchJSON("api/garmin/disconnect", { method: "POST" });
+    loadGarmin();
+    loadGarminCard();
+  } catch (err) { toast(err.message); }
+});
+
 // --- HA status dot ---------------------------------------------------------
 
 async function pingStatus() {
@@ -1200,4 +1377,5 @@ async function pingStatus() {
 loadHome();
 loadChallenge();
 loadRecentWorkouts();
+loadGarminCard();
 pingStatus();

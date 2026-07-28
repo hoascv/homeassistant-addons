@@ -3,7 +3,8 @@
 Track a body-weight / body-fat goal, home workouts, and a daily challenge —
 from your phone, through Home Assistant's sidebar (ingress). Everything is
 stored locally in the add-on's own SQLite database; nothing leaves your
-Home Assistant instance.
+Home Assistant instance — with one opt-in exception, the **Garmin Connect**
+sync, which reaches out to Garmin to pull your health data in (see below).
 
 ## The goal
 
@@ -115,6 +116,30 @@ prefix, e.g. `mobile_app_pixel`). The in-app 🔔 reminders sheet shows the
 current status, lets you pick from your available notify services, and can
 send a **test** notification.
 
+## Garmin Connect
+
+Connect your Garmin account to pull in **sleep**, **stress**, **Body
+Battery** and **activities**. Open the ⌚ Garmin sheet and sign in with your
+Garmin email and password. If your account uses **2-factor authentication**,
+you'll be asked for the code Garmin sends — enter it and the connection
+completes.
+
+Your **password is never stored** — only the resulting login token is saved,
+locally, under the add-on's `/data` directory (so it survives restarts and is
+included in Home Assistant backups). The token refreshes itself, so you
+normally only sign in once.
+
+Once connected, Gym Tracker syncs automatically in the background (every
+`garmin_sync_interval_hours`, default 6), and the ⌚ sheet has a **Sync now**
+button for an immediate pull. Each sync fetches the last several days, so any
+gaps backfill on their own. The home **Garmin** card shows your latest sleep,
+stress and Body Battery, plus recent activities. Use **Disconnect** to remove
+the stored token; already-imported data stays.
+
+This is the only feature that contacts an external service. It uses Garmin's
+unofficial API, so an occasional sync error (shown in the sheet) is normal;
+the next sync usually recovers.
+
 ## Configuration
 
 - **notify_service**: the Home Assistant notify service used for reminders,
@@ -131,6 +156,10 @@ send a **test** notification.
 - **restrict_to_user_ids**: comma-separated Home Assistant user IDs allowed
   to open the add-on. Empty (default) means any user who can see the
   sidebar entry may use it. Find your own user ID in the ⚙️ settings sheet.
+- **garmin_auto_sync**: sync Garmin data automatically in the background
+  (default `true`). Turn off to only sync when you press **Sync now**.
+- **garmin_sync_interval_hours**: how often the background sync runs, in
+  hours, 1–168 (default `6`). Only applies when `garmin_auto_sync` is on.
 
 ## Backup & restore
 

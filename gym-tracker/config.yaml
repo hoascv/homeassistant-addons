@@ -1,5 +1,5 @@
 name: "Gym Tracker"
-version: "1.3.2"
+version: "1.4.0"
 slug: "gym-tracker"
 description: "Track a weight/body-fat goal, home workouts, and a daily challenge with reminders"
 url: "https://github.com/hoascv/homeassistant-addons/tree/main/gym-tracker"
@@ -29,6 +29,8 @@ options:
   weighin_reminder_weekday: "sunday"
   weighin_reminder_time: "08:00"
   restrict_to_user_ids: ""
+  garmin_auto_sync: true
+  garmin_sync_interval_hours: 6
 schema:
   notify_service: "str?"
   challenge_reminder_enabled: "bool"
@@ -37,3 +39,5 @@ schema:
   weighin_reminder_weekday: "list(monday|tuesday|wednesday|thursday|friday|saturday|sunday)"
   weighin_reminder_time: "str"
   restrict_to_user_ids: "str?"
+  garmin_auto_sync: "bool"
+  garmin_sync_interval_hours: "int(1,168)"
