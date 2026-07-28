@@ -292,9 +292,17 @@ function renderWeightChart(logs, goal, forecast) {
 
 // --- Daily challenge -------------------------------------------------------
 
+// Last /api/challenge payload — the source for optimistic toggles between
+// server round-trips. Rendering reads from here so an optimistic tweak to the
+// cache shows up the moment we re-render, before the network answers.
+let challengeData = null;
+
 async function loadChallenge() {
-  let data;
-  try { data = await fetchJSON("api/challenge"); } catch (e) { return; }
+  try { challengeData = await fetchJSON("api/challenge"); } catch (e) { return; }
+  renderChallenge(challengeData);
+}
+
+function renderChallenge(data) {
   document.getElementById("challenge-streak").textContent = `🔥 ${data.streak}`;
 
   const list = document.getElementById("challenge-list");
@@ -316,20 +324,75 @@ async function loadChallenge() {
     .join("");
 }
 
-document.getElementById("challenge-list").addEventListener("click", async (e) => {
-  const item = e.target.closest(".challenge-item");
+document.getElementById("challenge-list").addEventListener("click", (e) => {
+  const el = e.target.closest(".challenge-item");
+  if (!el || !challengeData) return;
+  const item = (challengeData.items || []).find((it) => it.id === Number(el.dataset.id));
   if (!item) return;
-  try {
-    await fetchJSON("api/challenge/toggle", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ item_id: Number(item.dataset.id) }),
+
+  // Optimistic update: flip the check now (and, for exercise items, the Recent
+  // workouts card, since ticking one logs a workout) so the UI reacts instantly
+  // like a live app. The POST reconciles against the server; on failure we roll
+  // the same change back and tell the user.
+  const nextDone = !item.done_today;
+  applyChallengeToggle(item, nextDone);
+
+  fetchJSON("api/challenge/toggle", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ item_id: item.id }),
+  })
+    .then(() => {
+      // Server is the source of truth — re-sync streak, week dots and the exact
+      // workout rows (real ids, ordering) the optimistic pass approximated.
+      loadChallenge();
+      refreshWorkoutViews();
+    })
+    .catch(() => {
+      applyChallengeToggle(item, !nextDone);
+      toast("Couldn't update — check your connection.");
     });
-    loadChallenge();
-  } catch (err) {
-    toast("Couldn't update — check your connection.");
-  }
 });
+
+// Apply a challenge toggle to the local caches and re-render — no network. For
+// exercise items this also mirrors the auto-logged workout in the Recent
+// workouts card so it tracks the check optimistically.
+function applyChallengeToggle(item, done) {
+  item.done_today = done;
+  renderChallenge(challengeData);
+
+  if (item.item_type !== "exercise") return;
+  const day = challengeData.today;
+  const key = `challenge-${item.id}-${day}`;
+  // Remove any existing row for this exercise+day (an earlier optimistic row, or
+  // the real server row when un-ticking), then re-add if the item is now done.
+  const isThisRow = (w) =>
+    w._optimisticKey === key ||
+    (w.source === "challenge" && w.exercise_id === item.exercise_id && String(w.ts).slice(0, 10) === day);
+  recentWorkoutsCache = recentWorkoutsCache.filter((w) => !isThisRow(w));
+  if (done) {
+    recentWorkoutsCache.unshift({
+      _optimisticKey: key,
+      ts: `${day}T12:00:00`,
+      exercise_id: item.exercise_id,
+      exercise_name: item.name,
+      sets: item.target_sets,
+      reps: item.target_reps,
+      weight_kg: null,
+      duration_sec: null,
+      source: "challenge",
+    });
+  }
+  renderRecentWorkouts(recentWorkoutsCache);
+}
+
+// Keep every view of the workout log current: the home "Recent workouts" card
+// and, when the workouts sheet happens to be open, its history list.
+function refreshWorkoutViews() {
+  loadRecentWorkouts();
+  const backdrop = document.getElementById("workout-backdrop");
+  if (backdrop && backdrop.classList.contains("open")) loadWorkoutHistory(workoutFilterExerciseId);
+}
 
 // --- Challenge items management (typed: exercise / supplement) --------------
 
@@ -498,6 +561,10 @@ document.getElementById("history-grid").addEventListener("click", async (e) => {
       body: JSON.stringify({ item_id: Number(cell.dataset.item), day: cell.dataset.day }),
     });
     loadChallengeHistory();
+    // Ticking an exercise on a past day logs (or removes) a workout too, so
+    // keep the challenge card and the workout lists in step.
+    loadChallenge();
+    refreshWorkoutViews();
   } catch (err) { toast(err.message); }
 });
 
@@ -942,14 +1009,24 @@ document.getElementById("workout-history").addEventListener("click", async (e) =
   }
 });
 
+// Full recent-workout list from the server (up to the API's 200). Keeping more
+// than the five shown lets an optimistic un-tick reveal the next real row
+// underneath instead of leaving a gap. renderRecentWorkouts() shows the top 5.
+let recentWorkoutsCache = [];
+
 async function loadRecentWorkouts() {
-  const list = document.getElementById("recent-workout-list");
-  const empty = document.getElementById("recent-workout-empty");
   let rows;
   try { rows = await fetchJSON("api/workouts"); } catch (e) { return; }
-  rows = rows.slice(0, 5);
-  empty.hidden = rows.length > 0;
-  list.innerHTML = rows
+  recentWorkoutsCache = rows;
+  renderRecentWorkouts(recentWorkoutsCache);
+}
+
+function renderRecentWorkouts(rows) {
+  const list = document.getElementById("recent-workout-list");
+  const empty = document.getElementById("recent-workout-empty");
+  const top = rows.slice(0, 5);
+  empty.hidden = top.length > 0;
+  list.innerHTML = top
     .map(
       (w) => `
       <li>

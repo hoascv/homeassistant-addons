@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.3.1
+
+- **Recent workouts updates instantly.** Ticking off an exercise in the
+  daily challenge logs a workout — that entry now appears in **Recent
+  workouts** straight away, instead of only after a refresh. Un-ticking
+  removes it just as quickly, and the same applies when backfilling past
+  days from **History**.
+
 ## 1.3.0
 
 - **Richer supplements.** A supplement now has a structured **dosage**
