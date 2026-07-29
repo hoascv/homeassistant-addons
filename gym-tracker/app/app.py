@@ -18,7 +18,7 @@ from flask import Flask, Response, g, jsonify, render_template, request, send_fi
 
 import garmin_client
 
-APP_VERSION = "1.5.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.6.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("GYM_DB_PATH", "/data/gym.db")
 OPTIONS_PATH = os.environ.get("GYM_OPTIONS_PATH", "/data/options.json")
@@ -698,8 +698,75 @@ def _weight_progress(conn):
         "weight_progress_pct": weight_progress,
         "body_fat_progress_pct": bf_progress,
         "days_remaining": days_remaining,
-        "forecast": _weight_forecast(logs, goal),
+        "forecast": _forecast(logs, goal),
         "logs": logs,
+    }
+
+
+def _forecast(logs, goal):
+    """Weight forecast plus the body-fat trend that shares its target date.
+    Body fat gets projected even when the weight trend can't be defined (they
+    fail independently: bf is logged less often than weight)."""
+    forecast = _weight_forecast(logs, goal)
+    target_date = None
+    if goal.get("target_date"):
+        try:
+            target_date = date.fromisoformat(goal["target_date"])
+        except ValueError:
+            target_date = None
+    if target_date is None:
+        return {**forecast, "bf_available": False}
+    return {**forecast, **_body_fat_forecast(logs, goal, target_date)}
+
+
+def _linear_trend(points):
+    """Least-squares fit over (date, value) points. Returns (fit_fn, d0, slope)
+    where fit_fn(date) -> value, or None if a line can't be defined (fewer than
+    two points, or all on the same day)."""
+    if len(points) < 2:
+        return None
+    d0 = points[0][0]
+    xs = [(d - d0).days for d, _ in points]
+    ys = [v for _, v in points]
+    n = len(xs)
+    xbar = sum(xs) / n
+    ybar = sum(ys) / n
+    sxx = sum((x - xbar) ** 2 for x in xs)
+    if sxx == 0:
+        return None
+    slope = sum((x - xbar) * (y - ybar) for x, y in zip(xs, ys)) / sxx
+    intercept = ybar - slope * xbar
+    return (lambda d: intercept + slope * (d - d0).days), d0, slope
+
+
+def _body_fat_forecast(logs, goal, target_date):
+    """Body-fat linear trend projected to the same goal date as the weight
+    forecast, so both can be drawn on one chart. Independent of the weight
+    trend (body fat is logged less often), but shares the target date."""
+    bf_points = []
+    for l in logs:
+        bf = l["body_fat_pct"]
+        if bf is None:
+            continue
+        try:
+            d = date.fromisoformat(l["ts"][:10])
+        except (ValueError, TypeError):
+            continue
+        bf_points.append((d, bf))
+    fit = _linear_trend(bf_points)
+    if fit is None:
+        return {"bf_available": False}
+    fit_fn, d0, slope = fit
+    projected = fit_fn(target_date)
+    return {
+        "bf_available": True,
+        "bf_slope_per_week": round(slope * 7, 2),
+        "bf_projected_pct": round(projected, 1),
+        # Two points for drawing the body-fat trend across the same chart.
+        "bf_trend": [
+            {"ts": d0.isoformat(), "body_fat_pct": round(fit_fn(d0), 1)},
+            {"ts": target_date.isoformat(), "body_fat_pct": round(projected, 1)},
+        ],
     }
 
 

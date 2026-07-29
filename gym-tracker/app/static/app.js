@@ -126,144 +126,198 @@ function setBar(id, pct) {
   document.getElementById(id).style.width = `${Math.max(0, Math.min(100, pct || 0))}%`;
 }
 
-// --- Weight chart (single-series line + target reference line) -------------
+// --- Weight chart: stacked weight (kg) + body fat (%) panels ---------------
+//
+// Two panels rather than one frame with twin y-axes: kg and % have no common
+// scale, so overlaying them would make the point where the lines cross — and
+// their relative steepness — an artifact of the two scales. Stacked panels
+// share the x-axis and the crosshair, so the trends still read together.
 
 function renderWeightChart(logs, goal, forecast) {
   const host = document.getElementById("weight-chart");
   host.innerHTML = "";
-  const points = logs
-    .map((l) => ({ t: new Date(l.ts).getTime(), y: l.weight_kg }))
-    .filter((p) => !isNaN(p.t))
-    .sort((a, b) => a.t - b.t);
+  const series = (key) =>
+    logs
+      .map((l) => ({ t: new Date(l.ts).getTime(), y: l[key] }))
+      .filter((p) => !isNaN(p.t) && p.y != null)
+      .sort((a, b) => a.t - b.t);
+  const points = series("weight_kg");
+  const bfPoints = series("body_fat_pct");
 
   if (!points.length) {
     host.innerHTML = '<p class="empty-state">Log a weight to see your trend.</p>';
     return;
   }
+  const showBf = bfPoints.length > 0;
+  const bfAt = new Map(bfPoints.map((p) => [p.t, p.y]));
 
-  const W = 320, H = 170, padL = 34, padR = 12, padT = 12, padB = 22;
-  const plotW = W - padL - padR, plotH = H - padT - padB;
-  const target = goal.target_weight_kg;
+  const W = 320, padL = 34, padR = 12, padT = 12, padB = 22;
+  const plotW = W - padL - padR;
+  // The weight panel gives up height to the body-fat panel when there is one.
+  const wH = showBf ? 104 : 136;
+  const bfTop = padT + wH + 30; // 30 leaves room for the body-fat panel label
+  const bfH = 56;
+  const bottom = showBf ? bfTop + bfH : padT + wH;
+  const H = bottom + padB;
 
   let tMin = points[0].t;
   let tMax = points[points.length - 1].t;
+  if (bfPoints.length) {
+    tMin = Math.min(tMin, bfPoints[0].t);
+    tMax = Math.max(tMax, bfPoints[bfPoints.length - 1].t);
+  }
   if (goal.target_date) {
     const td = new Date(goal.target_date).getTime();
     if (!isNaN(td)) tMax = Math.max(tMax, td);
   }
   if (tMax === tMin) tMax = tMin + 86400000;
 
-  const ys = points.map((p) => p.y).concat(target != null ? [target] : []);
-  let yMin = Math.min(...ys), yMax = Math.max(...ys);
-  const pad = Math.max(0.5, (yMax - yMin) * 0.15);
-  yMin -= pad; yMax += pad;
-
   const sx = (t) => padL + ((t - tMin) / (tMax - tMin)) * plotW;
-  const sy = (y) => padT + (1 - (y - yMin) / (yMax - yMin)) * plotH;
+  const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
   const NS = "http://www.w3.org/2000/svg";
   const svg = document.createElementNS(NS, "svg");
   svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
   svg.setAttribute("role", "img");
-  svg.setAttribute("aria-label", "Weight over time");
+  svg.setAttribute("aria-label", showBf ? "Weight and body fat over time" : "Weight over time");
 
-  // Horizontal gridlines + y labels
-  const ticks = 3;
-  for (let i = 0; i <= ticks; i++) {
-    const yVal = yMin + (i / ticks) * (yMax - yMin);
-    const y = sy(yVal);
-    const line = document.createElementNS(NS, "line");
-    line.setAttribute("x1", padL); line.setAttribute("x2", W - padR);
-    line.setAttribute("y1", y); line.setAttribute("y2", y);
-    line.setAttribute("class", "chart-grid-line");
-    svg.appendChild(line);
-    const lbl = document.createElementNS(NS, "text");
-    lbl.setAttribute("x", padL - 5); lbl.setAttribute("y", y + 3);
-    lbl.setAttribute("text-anchor", "end");
-    lbl.setAttribute("class", "chart-axis-label");
-    lbl.textContent = yVal.toFixed(0);
-    svg.appendChild(lbl);
+  const add = (name, attrs, cls) => {
+    const e = document.createElementNS(NS, name);
+    for (const k in attrs) e.setAttribute(k, attrs[k]);
+    if (cls) e.setAttribute("class", cls);
+    svg.appendChild(e);
+    return e;
+  };
+  const label = (x, y, anchor, cls, content) => {
+    const t = add("text", { x, y, "text-anchor": anchor }, cls);
+    t.textContent = content;
+    return t;
+  };
+
+  const defs = add("defs", {});
+
+  // Draws one panel (gridlines, target line, dashed projection, series) and
+  // returns its value->y scale so the tooltip can reuse it.
+  function drawPanel(p) {
+    const vals = p.points.map((q) => q.y).concat(p.target != null ? [p.target] : []);
+    let lo = Math.min(...vals), hi = Math.max(...vals);
+    const pad = Math.max(0.5, (hi - lo) * 0.15);
+    lo -= pad; hi += pad;
+    const sy = (v) => p.top + (1 - (v - lo) / (hi - lo)) * p.height;
+
+    // The projection is clipped to its own panel, so a trend running off the
+    // bottom reads as "trending off the chart" instead of bleeding into the
+    // panel below.
+    const clipId = `chart-clip-${p.id}`;
+    const clip = document.createElementNS(NS, "clipPath");
+    clip.setAttribute("id", clipId);
+    const cr = document.createElementNS(NS, "rect");
+    cr.setAttribute("x", padL); cr.setAttribute("y", p.top);
+    cr.setAttribute("width", plotW); cr.setAttribute("height", p.height);
+    clip.appendChild(cr);
+    defs.appendChild(clip);
+
+    for (let i = 0; i <= p.ticks; i++) {
+      const val = lo + (i / p.ticks) * (hi - lo);
+      const y = sy(val);
+      add("line", { x1: padL, x2: W - padR, y1: y, y2: y }, "chart-grid-line");
+      label(padL - 5, y + 3, "end", "chart-axis-label", val.toFixed(0));
+    }
+
+    if (p.target != null) {
+      const y = sy(p.target);
+      add("line", { x1: padL, x2: W - padR, y1: y, y2: y }, "chart-target");
+      label(W - padR, y - 4, "end", "chart-target-label", p.targetLabel);
+    }
+
+    // Projected trend line (dashed) — drawn under the actual line.
+    if (p.trend && p.trend.length === 2) {
+      const x1 = sx(p.trend[0].t), y1 = sy(p.trend[0].y);
+      const x2 = sx(p.trend[1].t), y2 = sy(p.trend[1].y);
+      add("line", { x1, y1, x2, y2, "clip-path": `url(#${clipId})` }, "chart-trend");
+      // Label at the line's midpoint (kept inside the panel), so it never
+      // collides with the "Target" label pinned to the top-right. Sit it above
+      // the trend, unless that lands it on the target line — where the trend
+      // crosses the target, which is exactly the interesting case, so flip
+      // below rather than let the two labels overlap.
+      const mx = (clamp(x1, padL, W - padR) + clamp(x2, padL, W - padR)) / 2;
+      const mid = (y1 + y2) / 2;
+      const above = mid - 5;
+      const flip = p.target != null && Math.abs(above - sy(p.target)) < 10;
+      const my = clamp(flip ? mid + 12 : above, p.top + 10, p.top + p.height - 4);
+      label(mx, my, "middle", "chart-trend-label", p.trendLabel);
+    }
+
+    if (p.points.length > 1) {
+      add("polyline", { points: p.points.map((q) => `${sx(q.t)},${sy(q.y)}`).join(" ") }, p.lineClass);
+    }
+    p.points.forEach((q) => add("circle", { cx: sx(q.t), cy: sy(q.y), r: 3.5 }, p.markerClass));
+    return sy;
   }
 
-  // Target reference line
-  if (target != null) {
-    const y = sy(target);
-    const tl = document.createElementNS(NS, "line");
-    tl.setAttribute("x1", padL); tl.setAttribute("x2", W - padR);
-    tl.setAttribute("y1", y); tl.setAttribute("y2", y);
-    tl.setAttribute("class", "chart-target");
-    svg.appendChild(tl);
-    const tlbl = document.createElementNS(NS, "text");
-    tlbl.setAttribute("x", W - padR); tlbl.setAttribute("y", y - 4);
-    tlbl.setAttribute("text-anchor", "end");
-    tlbl.setAttribute("class", "chart-target-label");
-    tlbl.textContent = `Target ${target}`;
-    svg.appendChild(tlbl);
-  }
-
-  // Projected trend line (dashed) — drawn under the actual line. It may run
-  // past the plot vertically; the SVG clips it, which reads correctly as
-  // "trending off the top/bottom".
-  if (forecast && forecast.available && forecast.trend && forecast.trend.length === 2) {
-    const a = forecast.trend[0], b = forecast.trend[1];
-    const x1 = sx(new Date(a.ts).getTime()), y1 = sy(a.weight_kg);
-    const x2 = sx(new Date(b.ts).getTime()), y2 = sy(b.weight_kg);
-    const tr = document.createElementNS(NS, "line");
-    tr.setAttribute("x1", x1); tr.setAttribute("y1", y1);
-    tr.setAttribute("x2", x2); tr.setAttribute("y2", y2);
-    tr.setAttribute("class", "chart-trend");
-    svg.appendChild(tr);
-    // Label at the line's midpoint (kept inside the plot), so it never
-    // collides with the "Target" label pinned to the top-right.
-    const mx = (Math.max(padL, Math.min(W - padR, x1)) + Math.max(padL, Math.min(W - padR, x2))) / 2;
-    const my = Math.max(padT + 10, Math.min(padT + plotH - 4, (y1 + y2) / 2 - 5));
-    const plbl = document.createElementNS(NS, "text");
-    plbl.setAttribute("x", mx);
-    plbl.setAttribute("y", my);
-    plbl.setAttribute("text-anchor", "middle");
-    plbl.setAttribute("class", "chart-trend-label");
-    plbl.textContent = "Projected";
-    svg.appendChild(plbl);
-  }
-
-  // Weight line
-  if (points.length > 1) {
-    const path = document.createElementNS(NS, "polyline");
-    path.setAttribute("points", points.map((p) => `${sx(p.t)},${sy(p.y)}`).join(" "));
-    path.setAttribute("class", "chart-line");
-    svg.appendChild(path);
-  }
-  // Markers
-  points.forEach((p) => {
-    const c = document.createElementNS(NS, "circle");
-    c.setAttribute("cx", sx(p.t)); c.setAttribute("cy", sy(p.y)); c.setAttribute("r", 3.5);
-    c.setAttribute("class", "chart-marker");
-    svg.appendChild(c);
+  const fc = forecast || {};
+  const target = goal.target_weight_kg;
+  const sy = drawPanel({
+    id: "weight",
+    top: padT,
+    height: wH,
+    ticks: showBf ? 2 : 3,
+    points,
+    target,
+    targetLabel: `Target ${target}`,
+    lineClass: "chart-line",
+    markerClass: "chart-marker",
+    trend:
+      fc.available && fc.trend && fc.trend.length === 2
+        ? fc.trend.map((q) => ({ t: new Date(q.ts).getTime(), y: q.weight_kg }))
+        : null,
+    trendLabel: "Projected",
   });
 
-  // x labels: first + last
-  const xlbl = (t, anchor, x) => {
-    const el = document.createElementNS(NS, "text");
-    el.setAttribute("x", x); el.setAttribute("y", H - 6);
-    el.setAttribute("text-anchor", anchor);
-    el.setAttribute("class", "chart-axis-label");
-    el.textContent = fmtDate(new Date(t).toISOString());
-    svg.appendChild(el);
-  };
+  let syBf = null;
+  if (showBf) {
+    // Panel label doubles as the legend: the marker carries the series colour,
+    // the text names it, so identity is never colour-alone.
+    add("circle", { cx: padL + 4, cy: bfTop - 13, r: 3.5 }, "chart-marker-bf");
+    label(
+      padL + 12, bfTop - 10, "start", "chart-panel-label",
+      goal.target_body_fat_pct != null
+        ? `Body fat % · target ${goal.target_body_fat_pct} %`
+        : "Body fat %"
+    );
+    const bfTarget = goal.target_body_fat_pct;
+    syBf = drawPanel({
+      id: "bf",
+      top: bfTop,
+      height: bfH,
+      ticks: 2,
+      points: bfPoints,
+      target: bfTarget != null ? bfTarget : null,
+      targetLabel: `Target ${bfTarget} %`,
+      lineClass: "chart-line-bf",
+      markerClass: "chart-marker-bf",
+      trend:
+        fc.bf_available && fc.bf_trend && fc.bf_trend.length === 2
+          ? fc.bf_trend.map((q) => ({ t: new Date(q.ts).getTime(), y: q.body_fat_pct }))
+          : null,
+      trendLabel: fc.bf_available ? `Projected ${fc.bf_projected_pct} %` : "Projected",
+    });
+  }
+
+  // x labels: first + last, shared by both panels
+  const xlbl = (t, anchor, x) =>
+    label(x, H - 6, anchor, "chart-axis-label", fmtDate(new Date(t).toISOString()));
   xlbl(tMin, "start", padL);
   xlbl(tMax, "end", W - padR);
 
-  // Hover crosshair + tooltip
-  const cross = document.createElementNS(NS, "line");
-  cross.setAttribute("class", "chart-crosshair");
-  cross.setAttribute("y1", padT); cross.setAttribute("y2", padT + plotH);
+  // Hover crosshair + tooltip — one crosshair spanning both panels.
+  const cross = add("line", { y1: padT, y2: bottom }, "chart-crosshair");
   cross.style.opacity = "0";
-  svg.appendChild(cross);
-  const hit = document.createElementNS(NS, "rect");
-  hit.setAttribute("x", padL); hit.setAttribute("y", padT);
-  hit.setAttribute("width", plotW); hit.setAttribute("height", plotH);
-  hit.setAttribute("class", "chart-hit");
-  svg.appendChild(hit);
+  const hit = add(
+    "rect",
+    { x: padL, y: padT, width: plotW, height: bottom - padT },
+    "chart-hit"
+  );
 
   host.style.position = "relative";
   const tip = document.createElement("div");
@@ -284,7 +338,11 @@ function renderWeightChart(logs, goal, forecast) {
     cross.style.opacity = "1";
     tip.style.left = `${(px / W) * 100}%`;
     tip.style.top = `${(py / H) * 100}%`;
-    tip.innerHTML = `<strong>${nearest.y} kg</strong><br>${escapeHtml(fmtDate(new Date(nearest.t).toISOString()))}`;
+    const bf = bfAt.get(nearest.t);
+    tip.innerHTML =
+      `<strong>${nearest.y} kg</strong>` +
+      (bf != null ? ` · <strong>${bf} %</strong>` : "") +
+      `<br>${escapeHtml(fmtDate(new Date(nearest.t).toISOString()))}`;
     tip.style.opacity = "1";
   }
   function onLeave() { cross.style.opacity = "0"; tip.style.opacity = "0"; }

@@ -89,6 +89,56 @@ def test_forecast_on_track_for_steady_gain(client, conn):
     assert fc["trend"][1]["ts"] == "2026-12-28"
 
 
+def test_body_fat_forecast_needs_two_readings(client, conn):
+    # Body fat is logged less often than weight: enough weigh-ins to trend the
+    # weight, only one body-fat reading -> no body-fat projection.
+    for day, w in [("2026-07-17", 100.6), ("2026-07-31", 101.5)]:
+        conn.execute("INSERT INTO weight_logs (ts, weight_kg) VALUES (?, ?)", (f"{day}T08:00:00", w))
+    conn.execute(
+        "INSERT INTO weight_logs (ts, weight_kg, body_fat_pct) VALUES (?, ?, ?)",
+        ("2026-08-14T08:00:00", 102.4, 21.0),
+    )
+    conn.commit()
+    fc = client.get("/api/weight").get_json()["forecast"]
+    assert fc["available"] is True
+    assert fc["bf_available"] is False
+
+
+def test_body_fat_forecast_projects_to_goal_date(client, conn):
+    # Steady 21 -> 19 % cut; the goal target is 15 % on 2026-12-28.
+    for day, bf in [("2026-07-17", 21.0), ("2026-07-31", 20.0), ("2026-08-14", 19.0)]:
+        conn.execute(
+            "INSERT INTO weight_logs (ts, weight_kg, body_fat_pct) VALUES (?, ?, ?)",
+            (f"{day}T08:00:00", 100.0, bf),
+        )
+    conn.commit()
+    fc = client.get("/api/weight").get_json()["forecast"]
+    assert fc["bf_available"] is True
+    assert fc["bf_slope_per_week"] < 0
+    # Trend endpoints share the weight forecast's target date, so both panels
+    # of the chart line up on one x-axis.
+    assert fc["bf_trend"][0]["ts"] == "2026-07-17"
+    assert fc["bf_trend"][1]["ts"] == "2026-12-28"
+    assert fc["bf_trend"][1]["body_fat_pct"] == fc["bf_projected_pct"]
+
+
+def test_body_fat_forecast_survives_missing_weight_trend(client, conn):
+    # Two body-fat readings on the same day as the only other weigh-in still
+    # give a body-fat trend even where the weight trend is undefined.
+    conn.execute(
+        "INSERT INTO weight_logs (ts, weight_kg, body_fat_pct) VALUES (?, ?, ?)",
+        ("2026-07-03T09:00:00", 99.7, 22.0),
+    )
+    conn.execute(
+        "INSERT INTO weight_logs (ts, weight_kg, body_fat_pct) VALUES (?, ?, ?)",
+        ("2026-08-14T08:00:00", 99.7, 20.0),
+    )
+    conn.commit()
+    fc = client.get("/api/weight").get_json()["forecast"]
+    assert fc["bf_available"] is True
+    assert fc["bf_slope_per_week"] < 0
+
+
 def test_forecast_off_track_when_moving_away(client, conn):
     # Losing weight while the goal is to bulk to 105 -> off track.
     for day, w in [("2026-07-17", 99.3), ("2026-07-31", 98.9), ("2026-08-14", 98.4)]:

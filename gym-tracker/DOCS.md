@@ -16,7 +16,10 @@ Set a **target weight**, **target body-fat %**, and a **target date** in the
 - Your **lean mass** (computed from weight and body-fat, when you log a
   body-fat reading).
 - **Days remaining** until the target date.
-- A **weight chart** over time with a horizontal line marking the target.
+- A **weight chart** over time with a horizontal line marking the target, and
+  — once you've logged body fat — a second panel below it charting body fat %
+  against your target. The two panels share one time axis and one hover
+  crosshair, so weight and body fat read together.
 
 The add-on ships seeded for a bulk / recomposition goal — starting at
 **99.7 kg on 3 Jul 2026**, targeting **105 kg at 15 % body fat by
@@ -36,6 +39,10 @@ trend through your weights and projects it to your target date. You get:
   you'll reach the target.
 - A dashed **projection line** on the chart, so you can see your trend meet
   (or miss) the target line.
+- The same straight-line projection for **body fat**, on its own panel, once
+  you have two body-fat readings on different days. It's fitted independently
+  of the weight trend (body fat is logged less often) but runs to the same
+  target date.
 
 The forecast is a simple linear trend — good for spotting whether the last
 few weeks point at your goal, not a precise prediction. More weigh-ins make

@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.6.0
+
+- **Body-fat forecast on the goal chart.** The chart now has a second panel
+  under the weight one, plotting logged body fat with its own least-squares
+  trend projected to the same goal date, plus your body-fat target line. Both
+  panels share one time axis and one hover crosshair, so weight and body fat
+  read together; the tooltip shows both for a weigh-in that has them. Body fat
+  gets its own panel rather than a second y-axis on the weight chart, because
+  kg and % have no common scale — overlaid, where the two lines cross would be
+  an artifact of the scaling. The panel only appears once you've logged body
+  fat, and the trend needs two readings on different days.
+
 ## 1.5.0
 
 - **Record which scale/device a weigh-in came from.** The Log weight form now
