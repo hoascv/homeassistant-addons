@@ -133,7 +133,22 @@ body {
 
 /* Chart */
 .chart-figure { margin: 0.9rem 0 0.4rem; }
-.chart-figure figcaption { font-size: 0.8rem; color: var(--text-muted); margin-bottom: 0.3rem; }
+.chart-figure figcaption {
+  font-size: 0.8rem; color: var(--text-muted); margin-bottom: 0.3rem;
+  display: flex; align-items: center; justify-content: space-between; gap: 0.5rem;
+}
+.chart-expand-btn {
+  flex-shrink: 0; background: none; border: 0; cursor: pointer; padding: 0.1rem 0.25rem;
+  color: var(--text-muted); font-size: 1rem; line-height: 1; border-radius: 6px;
+}
+.chart-expand-btn:hover { background: var(--surface-2); color: var(--text); }
+
+/* Expanded chart sheet: the chart is sized to fill the sheet, so it is drawn
+   at real pixel size instead of being upscaled from the card's viewBox. */
+.sheet-chart { height: 92vh; display: flex; flex-direction: column; overflow: hidden; }
+.sheet-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
+.chart-expanded { flex: 1; min-height: 0; margin-top: 0.4rem; }
+.chart-expanded svg { display: block; }
 .weight-chart { width: 100%; overflow: hidden; }
 .weight-chart svg { width: 100%; height: auto; display: block; }
 .chart-grid-line { stroke: var(--grid); stroke-width: 1; }

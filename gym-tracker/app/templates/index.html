@@ -47,7 +47,10 @@
     </div>
 
     <figure class="chart-figure" id="weight-chart-figure">
-      <figcaption>Weight over time <span class="muted" id="chart-target-note"></span></figcaption>
+      <figcaption>
+        <span>Weight over time <span class="muted" id="chart-target-note"></span></span>
+        <button type="button" class="chart-expand-btn" id="chart-expand-btn" aria-label="Expand chart" title="Expand chart">⤢</button>
+      </figcaption>
       <div id="weight-chart" class="weight-chart"></div>
     </figure>
 
@@ -98,6 +101,17 @@
     <p class="empty-state" id="garmin-empty">Connect Garmin to see your sleep, stress, Body Battery and activities.</p>
   </section>
 </main>
+
+<!-- Expanded chart sheet -->
+<div class="sheet-backdrop" id="chart-backdrop">
+  <div class="sheet sheet-chart">
+    <div class="sheet-head">
+      <h2 id="chart-sheet-title">Weight over time</h2>
+      <button type="button" class="topbar-icon-btn" id="chart-close-btn" aria-label="Close">✕</button>
+    </div>
+    <div id="weight-chart-expanded" class="weight-chart chart-expanded"></div>
+  </div>
+</div>
 
 <!-- Weight sheet -->
 <div class="sheet-backdrop" id="weight-backdrop">

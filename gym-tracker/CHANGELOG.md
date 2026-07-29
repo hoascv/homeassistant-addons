@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.7.0
+
+- **Expand the goal chart.** A ⤢ button on the chart opens it in a near
+  fullscreen sheet, with extra gridlines and dates that only fit at that size.
+  Turning the phone to landscape redraws it wider. The expanded chart is drawn
+  at its real pixel size rather than scaled up from the card, so the extra room
+  becomes more chart instead of bigger text.
+
 ## 1.6.0
 
 - **Body-fat forecast on the goal chart.** The chart now has a second panel

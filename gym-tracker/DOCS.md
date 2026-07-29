@@ -19,7 +19,9 @@ Set a **target weight**, **target body-fat %**, and a **target date** in the
 - A **weight chart** over time with a horizontal line marking the target, and
   — once you've logged body fat — a second panel below it charting body fat %
   against your target. The two panels share one time axis and one hover
-  crosshair, so weight and body fat read together.
+  crosshair, so weight and body fat read together. The **⤢** button opens the chart
+  near fullscreen, where it gets more gridlines and dates; turn the phone to
+  landscape for a wider view.
 
 The add-on ships seeded for a bulk / recomposition goal — starting at
 **99.7 kg on 3 Jul 2026**, targeting **105 kg at 15 % body fat by

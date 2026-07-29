@@ -50,6 +50,10 @@ function todayISO() { return new Date().toISOString().slice(0, 10); }
 
 // --- Home: goal card -------------------------------------------------------
 
+// Last /api/weight payload, so the expanded chart can redraw on open and on
+// resize without refetching.
+let weightData = null;
+
 async function loadHome() {
   let data;
   try {
@@ -57,6 +61,7 @@ async function loadHome() {
   } catch (e) {
     return;
   }
+  weightData = data;
   const goal = data.goal || {};
 
   const cw = data.current_weight_kg;
@@ -84,7 +89,47 @@ async function loadHome() {
     goal.target_weight_kg != null ? `· target ${goal.target_weight_kg} kg` : "";
   renderForecast(data.forecast, goal);
   renderWeightChart(data.logs || [], goal, data.forecast);
+  if (document.getElementById("chart-backdrop").classList.contains("open")) {
+    renderExpandedChart();
+  }
 }
+
+// --- Expanded chart sheet --------------------------------------------------
+
+// Drawn at the host's measured size rather than upscaled from the card's
+// viewBox, so the extra room becomes more chart instead of bigger text.
+function renderExpandedChart() {
+  if (!weightData) return;
+  const host = document.getElementById("weight-chart-expanded");
+  const width = Math.round(host.clientWidth);
+  const height = Math.round(host.clientHeight);
+  if (!width || !height) return;
+  renderWeightChart(weightData.logs || [], weightData.goal || {}, weightData.forecast, {
+    host,
+    width,
+    height,
+    expanded: true,
+  });
+}
+
+document.getElementById("chart-expand-btn").addEventListener("click", () => {
+  openSheet("chart-backdrop");
+  const goal = (weightData && weightData.goal) || {};
+  const hasBf = (weightData ? weightData.logs || [] : []).some((l) => l.body_fat_pct != null);
+  document.getElementById("chart-sheet-title").textContent =
+    hasBf ? "Weight & body fat over time" : "Weight over time";
+  // Reading clientWidth/Height forces the layout the class change just
+  // invalidated, so the host reports its real size here — no rAF needed.
+  renderExpandedChart();
+});
+document.getElementById("chart-close-btn").addEventListener("click", () => closeSheet("chart-backdrop"));
+
+// Rotating the phone changes the space available; redraw to match.
+window.addEventListener("resize", () => {
+  if (document.getElementById("chart-backdrop").classList.contains("open")) {
+    renderExpandedChart();
+  }
+});
 
 const FORECAST_STATUS = {
   ahead: { cls: "good", badge: "Ahead" },
@@ -133,8 +178,13 @@ function setBar(id, pct) {
 // their relative steepness — an artifact of the two scales. Stacked panels
 // share the x-axis and the crosshair, so the trends still read together.
 
-function renderWeightChart(logs, goal, forecast) {
-  const host = document.getElementById("weight-chart");
+// `opts` lets the expanded sheet reuse this: {host, width, height} draws the
+// chart at a given size in real pixels (no viewBox upscaling, so text and
+// strokes stay crisp), and `expanded` earns the extra date labels that only
+// have room at that size. Defaults reproduce the card exactly.
+function renderWeightChart(logs, goal, forecast, opts) {
+  opts = opts || {};
+  const host = opts.host || document.getElementById("weight-chart");
   host.innerHTML = "";
   const series = (key) =>
     logs
@@ -151,14 +201,20 @@ function renderWeightChart(logs, goal, forecast) {
   const showBf = bfPoints.length > 0;
   const bfAt = new Map(bfPoints.map((p) => [p.t, p.y]));
 
-  const W = 320, padL = 34, padR = 12, padT = 12, padB = 22;
+  const padL = 34, padR = 12, padT = 12, padB = 22;
+  // Room for the body-fat panel's label between the panels. The expanded chart
+  // needs more, or the two panels' nearest axis labels crowd each other.
+  const labelGap = opts.expanded ? 46 : 30;
+  const W = opts.width || 320;
+  const H = opts.height || (showBf ? 224 : 170);
   const plotW = W - padL - padR;
-  // The weight panel gives up height to the body-fat panel when there is one.
-  const wH = showBf ? 104 : 136;
-  const bfTop = padT + wH + 30; // 30 leaves room for the body-fat panel label
-  const bfH = 56;
+  // The weight panel gives up a third of the plot height to the body-fat panel
+  // when there is one. At the card's default height this is 104 / 56.
+  const usableH = H - padT - padB - (showBf ? labelGap : 0);
+  const wH = showBf ? Math.round(usableH * 0.65) : usableH;
+  const bfTop = padT + wH + labelGap;
+  const bfH = usableH - wH;
   const bottom = showBf ? bfTop + bfH : padT + wH;
-  const H = bottom + padB;
 
   let tMin = points[0].t;
   let tMax = points[points.length - 1].t;
@@ -208,7 +264,10 @@ function renderWeightChart(logs, goal, forecast) {
     // The projection is clipped to its own panel, so a trend running off the
     // bottom reads as "trending off the chart" instead of bleeding into the
     // panel below.
-    const clipId = `chart-clip-${p.id}`;
+    // Namespaced per host: the card and the expanded sheet are in the DOM at
+    // the same time, and duplicate ids would make both charts resolve
+    // `url(#...)` to whichever clip path came first.
+    const clipId = `${host.id || "chart"}-clip-${p.id}`;
     const clip = document.createElementNS(NS, "clipPath");
     clip.setAttribute("id", clipId);
     const cr = document.createElementNS(NS, "rect");
@@ -243,8 +302,22 @@ function renderWeightChart(logs, goal, forecast) {
       const mx = (clamp(x1, padL, W - padR) + clamp(x2, padL, W - padR)) / 2;
       const mid = (y1 + y2) / 2;
       const above = mid - 5;
-      const flip = p.target != null && Math.abs(above - sy(p.target)) < 10;
-      const my = clamp(flip ? mid + 12 : above, p.top + 10, p.top + p.height - 4);
+      // Flip below the trend if sitting above it would put the label on the
+      // target line, or on the logged series itself — which happens on the
+      // body-fat panel, where the readings stop around the trend's midpoint.
+      const near = p.points.reduce(
+        (best, q) => (Math.abs(sx(q.t) - mx) < Math.abs(sx(best.t) - mx) ? q : best),
+        p.points[0]
+      );
+      const flip =
+        (p.target != null && Math.abs(above - sy(p.target)) < 10) ||
+        (Math.abs(sx(near.t) - mx) < 45 && Math.abs(sy(near.y) - above) < 14);
+      // Clearing a sloped line by a fixed 12px isn't enough: over the label's
+      // half-width the line has already dropped back into it, so scale the
+      // offset by the slope.
+      const slope = x2 === x1 ? 0 : Math.abs((y2 - y1) / (x2 - x1));
+      const below = mid + clamp(12 + slope * 45, 12, 30);
+      const my = clamp(flip ? below : above, p.top + 10, p.top + p.height - 4);
       label(mx, my, "middle", "chart-trend-label", p.trendLabel);
     }
 
@@ -257,11 +330,14 @@ function renderWeightChart(logs, goal, forecast) {
 
   const fc = forecast || {};
   const target = goal.target_weight_kg;
+  // One gridline per ~45px of panel height: gives the card its 2 (or 3, with
+  // no body-fat panel) and fills the taller expanded panels without crowding.
+  const ticksFor = (h) => clamp(Math.round(h / 45), 2, 5);
   const sy = drawPanel({
     id: "weight",
     top: padT,
     height: wH,
-    ticks: showBf ? 2 : 3,
+    ticks: ticksFor(wH),
     points,
     target,
     targetLabel: `Target ${target}`,
@@ -290,7 +366,7 @@ function renderWeightChart(logs, goal, forecast) {
       id: "bf",
       top: bfTop,
       height: bfH,
-      ticks: 2,
+      ticks: ticksFor(bfH),
       points: bfPoints,
       target: bfTarget != null ? bfTarget : null,
       targetLabel: `Target ${bfTarget} %`,
@@ -304,11 +380,17 @@ function renderWeightChart(logs, goal, forecast) {
     });
   }
 
-  // x labels: first + last, shared by both panels
+  // x labels: first + last, shared by both panels. The expanded chart is wide
+  // enough for dates in between, one per ~120px.
   const xlbl = (t, anchor, x) =>
     label(x, H - 6, anchor, "chart-axis-label", fmtDate(new Date(t).toISOString()));
   xlbl(tMin, "start", padL);
   xlbl(tMax, "end", W - padR);
+  const xTicks = opts.expanded ? clamp(Math.round(plotW / 120), 2, 6) : 1;
+  for (let i = 1; i < xTicks; i++) {
+    const t = tMin + (i / xTicks) * (tMax - tMin);
+    xlbl(t, "middle", padL + (i / xTicks) * plotW);
+  }
 
   // Hover crosshair + tooltip — one crosshair spanning both panels.
   const cross = add("line", { y1: padT, y2: bottom }, "chart-crosshair");
