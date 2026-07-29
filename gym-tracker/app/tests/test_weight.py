@@ -46,6 +46,23 @@ def test_edit_and_delete_weight(client):
     assert wid not in ids
 
 
+def test_weight_device_stored_and_editable(client):
+    wid = client.post(
+        "/api/weight", json={"weight_kg": 100, "body_fat_pct": 22, "device": "Home scale"}
+    ).get_json()["id"]
+    logs = {l["id"]: l for l in client.get("/api/weight").get_json()["logs"]}
+    assert logs[wid]["device"] == "Home scale"
+
+    # Blank device stores NULL; editing can set/clear it.
+    wid2 = client.post("/api/weight", json={"weight_kg": 101, "device": "  "}).get_json()["id"]
+    logs = {l["id"]: l for l in client.get("/api/weight").get_json()["logs"]}
+    assert logs[wid2]["device"] is None
+
+    client.put(f"/api/weight/{wid}", json={"weight_kg": 100, "device": "DEXA clinic"})
+    logs = {l["id"]: l for l in client.get("/api/weight").get_json()["logs"]}
+    assert logs[wid]["device"] == "DEXA clinic"
+
+
 def test_weight_404s(client):
     assert client.put("/api/weight/999", json={"weight_kg": 100}).status_code == 404
     assert client.delete("/api/weight/999").status_code == 404

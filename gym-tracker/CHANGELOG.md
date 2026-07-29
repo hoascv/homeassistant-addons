@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.5.0
+
+- **Record which scale/device a weigh-in came from.** The Log weight form now
+  has a **Scale / device** field (with suggestions from devices you've used
+  before, pre-filled with your most recent one). It shows on each entry in the
+  weight history and is editable there — so when you later weigh in on a more
+  accurate machine, you can see the difference per device and correct earlier
+  readings.
+
 ## 1.4.1
 
 - **Fix Garmin connect failing with a 502 error.** Connecting saved the login

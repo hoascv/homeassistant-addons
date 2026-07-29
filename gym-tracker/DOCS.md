@@ -44,8 +44,13 @@ it steadier.
 ## Logging weight
 
 Tap **Log weight** on the home screen. Enter your weight and, optionally, a
-body-fat percentage and a note. The weight sheet lists every reading and
-lets you edit or delete past entries.
+body-fat percentage, the **scale / device** you measured on, and a note. The
+weight sheet lists every reading and lets you edit or delete past entries.
+
+The **scale / device** field remembers the devices you've used (and pre-fills
+your most recent one), so you can tell readings from a home scale apart from a
+more accurate machine. When you later measure on a better device, compare the
+two and edit earlier entries to correct them.
 
 ## The library: exercises and supplements
 

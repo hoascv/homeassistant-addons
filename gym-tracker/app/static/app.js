@@ -625,6 +625,9 @@ function resetWeightForm() {
   document.getElementById("weight-form-bf").value = "";
   document.getElementById("weight-form-notes").value = "";
   document.getElementById("weight-form-date").value = todayISO();
+  // Pre-fill the device with the last one used, so repeat weigh-ins on the same
+  // scale are one tap; the datalist still offers any other devices.
+  document.getElementById("weight-form-device").value = window._lastWeightDevice || "";
   document.getElementById("weight-form-save").textContent = "Add";
   document.getElementById("weight-form-cancel").hidden = true;
 }
@@ -638,6 +641,7 @@ document.getElementById("weight-form").addEventListener("submit", async (e) => {
     weight_kg: document.getElementById("weight-form-kg").value,
     body_fat_pct: document.getElementById("weight-form-bf").value,
     notes: document.getElementById("weight-form-notes").value,
+    device: document.getElementById("weight-form-device").value,
     date: document.getElementById("weight-form-date").value,
   };
   try {
@@ -668,12 +672,13 @@ async function loadWeightHistory() {
   list.innerHTML = logs
     .map((l) => {
       const bf = l.body_fat_pct != null ? ` · ${l.body_fat_pct}% bf` : "";
+      const device = l.device ? ` · ⚖ ${escapeHtml(l.device)}` : "";
       const note = l.notes ? ` · ${escapeHtml(l.notes)}` : "";
       return `
         <li data-id="${l.id}">
           <div class="list-main">
             <div class="list-title">${l.weight_kg} kg</div>
-            <div class="list-sub">${escapeHtml(fmtDate(l.ts))}${bf}${note}</div>
+            <div class="list-sub">${escapeHtml(fmtDate(l.ts))}${bf}${device}${note}</div>
           </div>
           <div>
             <button type="button" class="link-btn weight-edit" data-id="${l.id}">Edit</button>
@@ -683,6 +688,22 @@ async function loadWeightHistory() {
     })
     .join("");
   window._weightLogs = data.logs || [];
+
+  // Datalist of devices already used (most recent first), and remember the
+  // latest for pre-filling new entries.
+  const seen = [];
+  for (const l of logs) {
+    if (l.device && !seen.includes(l.device)) seen.push(l.device);
+  }
+  window._lastWeightDevice = seen[0] || "";
+  document.getElementById("weight-device-list").innerHTML = seen
+    .map((d) => `<option value="${escapeHtml(d)}"></option>`)
+    .join("");
+  // If the form is on a fresh entry, keep its device default in sync.
+  if (!document.getElementById("weight-form-id").value &&
+      !document.getElementById("weight-form-device").value) {
+    document.getElementById("weight-form-device").value = window._lastWeightDevice;
+  }
 }
 
 document.getElementById("weight-history").addEventListener("click", async (e) => {
@@ -701,6 +722,7 @@ document.getElementById("weight-history").addEventListener("click", async (e) =>
     document.getElementById("weight-form-kg").value = log.weight_kg;
     document.getElementById("weight-form-bf").value = log.body_fat_pct != null ? log.body_fat_pct : "";
     document.getElementById("weight-form-notes").value = log.notes || "";
+    document.getElementById("weight-form-device").value = log.device || "";
     document.getElementById("weight-form-date").value = log.ts.slice(0, 10);
     document.getElementById("weight-form-save").textContent = "Save";
     document.getElementById("weight-form-cancel").hidden = false;

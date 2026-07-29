@@ -18,7 +18,7 @@ from flask import Flask, Response, g, jsonify, render_template, request, send_fi
 
 import garmin_client
 
-APP_VERSION = "1.4.1"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.5.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("GYM_DB_PATH", "/data/gym.db")
 OPTIONS_PATH = os.environ.get("GYM_OPTIONS_PATH", "/data/options.json")
@@ -223,7 +223,8 @@ def init_db():
             ts TEXT NOT NULL,
             weight_kg REAL NOT NULL,
             body_fat_pct REAL,
-            notes TEXT
+            notes TEXT,
+            device TEXT
         )
         """
     )
@@ -382,6 +383,10 @@ def _migrate_columns(conn):
     ):
         if col not in challenge_cols:
             conn.execute(f"ALTER TABLE challenge_items ADD COLUMN {col} {decl}")
+    weight_cols = {row[1] for row in conn.execute("PRAGMA table_info(weight_logs)")}
+    if "device" not in weight_cols:
+        conn.execute("ALTER TABLE weight_logs ADD COLUMN device TEXT")
+
     workout_cols = {row[1] for row in conn.execute("PRAGMA table_info(workout_logs)")}
     if "source" not in workout_cols:
         conn.execute("ALTER TABLE workout_logs ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'")
@@ -649,7 +654,7 @@ def _weight_progress(conn):
     logs = [
         dict(r)
         for r in conn.execute(
-            "SELECT id, ts, weight_kg, body_fat_pct, notes FROM weight_logs ORDER BY ts ASC, id ASC"
+            "SELECT id, ts, weight_kg, body_fat_pct, notes, device FROM weight_logs ORDER BY ts ASC, id ASC"
         )
     ]
     latest = logs[-1] if logs else None
@@ -942,11 +947,12 @@ def api_add_weight():
     else:
         ts = datetime.now().isoformat(timespec="seconds")
     notes = (data.get("notes") or "").strip() or None
+    device = (data.get("device") or "").strip() or None
 
     db = get_db()
     cur = db.execute(
-        "INSERT INTO weight_logs (ts, weight_kg, body_fat_pct, notes) VALUES (?, ?, ?, ?)",
-        (ts, weight, body_fat, notes),
+        "INSERT INTO weight_logs (ts, weight_kg, body_fat_pct, notes, device) VALUES (?, ?, ?, ?, ?)",
+        (ts, weight, body_fat, notes, device),
     )
     db.commit()
     return jsonify({"status": "created", "id": cur.lastrowid}), 201
@@ -973,9 +979,10 @@ def api_update_weight(log_id):
     else:
         body_fat = None
     notes = (data.get("notes") or "").strip() or None
+    device = (data.get("device") or "").strip() or None
     db.execute(
-        "UPDATE weight_logs SET weight_kg = ?, body_fat_pct = ?, notes = ? WHERE id = ?",
-        (weight, body_fat, notes, log_id),
+        "UPDATE weight_logs SET weight_kg = ?, body_fat_pct = ?, notes = ?, device = ? WHERE id = ?",
+        (weight, body_fat, notes, device, log_id),
     )
     db.commit()
     return jsonify({"status": "updated"})

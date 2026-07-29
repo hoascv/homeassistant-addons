@@ -111,8 +111,10 @@
       </div>
       <div class="field-row">
         <label>Date<input type="date" id="weight-form-date"></label>
-        <label>Note<input type="text" id="weight-form-notes" placeholder="optional"></label>
+        <label>Scale / device<input type="text" id="weight-form-device" list="weight-device-list" placeholder="e.g. Home scale" autocomplete="off"></label>
       </div>
+      <label class="full-label">Note<input type="text" id="weight-form-notes" placeholder="optional"></label>
+      <datalist id="weight-device-list"></datalist>
       <div class="form-actions">
         <button type="button" class="btn-secondary" id="weight-form-cancel" hidden>Cancel edit</button>
         <button type="submit" class="btn-primary" id="weight-form-save">Add</button>
