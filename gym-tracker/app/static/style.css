@@ -52,6 +52,18 @@ body {
   padding-bottom: calc(2rem + env(safe-area-inset-bottom));
 }
 
+/* Main tabs */
+.tabs {
+  display: flex; gap: 0.4rem; padding: 0.2rem 1.25rem 0;
+  max-width: 640px; margin: 0 auto; width: 100%;
+}
+.tab {
+  flex: 1; padding: 0.5rem 0.75rem; font-size: 0.9rem; font-weight: 600;
+  cursor: pointer; color: var(--text-muted);
+  background: none; border: 0; border-bottom: 2px solid transparent;
+}
+.tab-on { color: var(--accent); border-bottom-color: var(--accent); }
+
 /* Topbar */
 .topbar {
   display: flex;

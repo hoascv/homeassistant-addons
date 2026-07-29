@@ -17,7 +17,15 @@
   <button class="topbar-icon-btn" id="settings-open-btn" aria-label="Settings">⚙️</button>
 </header>
 
+<nav class="tabs" id="main-tabs" role="tablist" aria-label="Sections">
+  <button type="button" class="tab tab-on" role="tab" id="tab-btn-home"
+          data-panel="panel-home" aria-controls="panel-home" aria-selected="true">Home</button>
+  <button type="button" class="tab" role="tab" id="tab-btn-trends"
+          data-panel="panel-trends" aria-controls="panel-trends" aria-selected="false">Trends</button>
+</nav>
+
 <main class="page">
+ <div class="tab-panel" id="panel-home" role="tabpanel" aria-labelledby="tab-btn-home">
   <!-- Goal progress -->
   <section class="card" id="goal-card">
     <div class="card-head">
@@ -44,19 +52,6 @@
     <div class="mini-stats">
       <div class="mini-stat"><span class="mini-value" id="lean-mass">–</span><span class="mini-label">Lean mass</span></div>
       <div class="mini-stat"><span class="mini-value" id="weight-remaining">–</span><span class="mini-label">To target</span></div>
-    </div>
-
-    <figure class="chart-figure" id="weight-chart-figure">
-      <figcaption>
-        <span>Weight over time <span class="muted" id="chart-target-note"></span></span>
-        <button type="button" class="chart-expand-btn" id="chart-expand-btn" aria-label="Expand chart" title="Expand chart">⤢</button>
-      </figcaption>
-      <div id="weight-chart" class="weight-chart"></div>
-    </figure>
-
-    <div class="forecast" id="forecast-line" hidden>
-      <span class="forecast-badge" id="forecast-badge"></span>
-      <span class="forecast-text" id="forecast-text"></span>
     </div>
 
     <button type="button" class="btn-primary full" id="log-weight-btn">Log weight</button>
@@ -101,6 +96,29 @@
     <ul class="workout-list" id="garmin-activity-list"></ul>
     <p class="empty-state" id="garmin-empty">Connect Garmin to see your sleep, stress, Body Battery and activities.</p>
   </section>
+ </div><!-- /panel-home -->
+
+ <div class="tab-panel" id="panel-trends" role="tabpanel" aria-labelledby="tab-btn-trends" hidden>
+  <section class="card" id="trends-card">
+    <div class="card-head">
+      <h2>Weight &amp; body fat</h2>
+      <span class="pill" id="trends-days">–</span>
+    </div>
+
+    <figure class="chart-figure" id="weight-chart-figure">
+      <figcaption>
+        <span>Weight over time <span class="muted" id="chart-target-note"></span></span>
+        <button type="button" class="chart-expand-btn" id="chart-expand-btn" aria-label="Expand chart" title="Expand chart">⤢</button>
+      </figcaption>
+      <div id="weight-chart" class="weight-chart"></div>
+    </figure>
+
+    <div class="forecast" id="forecast-line" hidden>
+      <span class="forecast-badge" id="forecast-badge"></span>
+      <span class="forecast-text" id="forecast-text"></span>
+    </div>
+  </section>
+ </div><!-- /panel-trends -->
 </main>
 
 <!-- Expanded chart sheet -->

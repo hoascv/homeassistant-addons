@@ -48,6 +48,34 @@ function fmtDateTime(iso) {
 }
 function todayISO() { return new Date().toISOString().slice(0, 10); }
 
+// --- Tabs ------------------------------------------------------------------
+
+const TAB_STORAGE_KEY = "gym.tab";
+
+function showTab(panelId) {
+  document.querySelectorAll("#main-tabs .tab").forEach((btn) => {
+    const on = btn.dataset.panel === panelId;
+    btn.classList.toggle("tab-on", on);
+    btn.setAttribute("aria-selected", on ? "true" : "false");
+  });
+  document.querySelectorAll(".tab-panel").forEach((panel) => {
+    panel.hidden = panel.id !== panelId;
+  });
+  // Ingress can run without storage; remembering the tab is not worth failing over.
+  try { localStorage.setItem(TAB_STORAGE_KEY, panelId); } catch (e) { /* ignore */ }
+}
+
+document.getElementById("main-tabs").addEventListener("click", (e) => {
+  const btn = e.target.closest(".tab");
+  if (btn) showTab(btn.dataset.panel);
+});
+
+(function restoreTab() {
+  let saved = null;
+  try { saved = localStorage.getItem(TAB_STORAGE_KEY); } catch (e) { /* ignore */ }
+  if (saved && document.getElementById(saved)) showTab(saved);
+})();
+
 // --- Home: goal card -------------------------------------------------------
 
 // Last /api/weight payload, so the expanded chart can redraw on open and on
@@ -82,8 +110,9 @@ async function loadHome() {
     data.weight_to_target_kg != null ? `${data.weight_to_target_kg > 0 ? "+" : ""}${data.weight_to_target_kg} kg` : "—";
 
   const days = data.days_remaining;
-  document.getElementById("goal-days").textContent =
-    days == null ? "—" : days >= 0 ? `${days} days left` : `${-days} days over`;
+  const daysText = days == null ? "—" : days >= 0 ? `${days} days left` : `${-days} days over`;
+  document.getElementById("goal-days").textContent = daysText;
+  document.getElementById("trends-days").textContent = daysText;
 
   document.getElementById("chart-target-note").textContent =
     goal.target_weight_kg != null ? `· target ${goal.target_weight_kg} kg` : "";

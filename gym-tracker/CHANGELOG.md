@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.9.0
+
+- **Trends tab.** The app now has **Home** and **Trends** tabs. The weight and
+  body-fat chart, its projection and the on-track line have moved to Trends,
+  leaving the Goal card on Home as the quick read: progress bars, lean mass, to
+  target, days left and Log weight. The tab you were last on is remembered.
+
 ## 1.8.1
 
 - **Fix Body Battery always reading "no data".** It was only ever read from

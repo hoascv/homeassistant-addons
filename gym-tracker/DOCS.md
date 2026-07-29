@@ -6,17 +6,23 @@ stored locally in the add-on's own SQLite database; nothing leaves your
 Home Assistant instance — with one opt-in exception, the **Garmin Connect**
 sync, which reaches out to Garmin to pull your health data in (see below).
 
+## Tabs
+
+**Home** is the day-to-day view: goal progress, the daily challenge, recent
+workouts and Garmin. **Trends** holds the weight and body-fat chart with its
+projections. The app reopens on whichever tab you used last.
+
 ## The goal
 
 Set a **target weight**, **target body-fat %**, and a **target date** in the
-⚙️ settings sheet. The home screen then shows:
+⚙️ settings sheet. The app then shows:
 
 - A **weight** progress bar from your starting point to the target.
 - A **body-fat** progress bar toward the target %.
 - Your **lean mass** (computed from weight and body-fat, when you log a
   body-fat reading).
 - **Days remaining** until the target date.
-- A **weight chart** over time with a horizontal line marking the target, and
+- A **weight chart**, on the **Trends** tab, with a horizontal line marking the target, and
   — once you've logged body fat — a second panel below it charting body fat %
   against your target. The two panels share one time axis and one hover
   crosshair, so weight and body fat read together. The **⤢** button opens the chart
