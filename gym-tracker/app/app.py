@@ -18,7 +18,7 @@ from flask import Flask, Response, g, jsonify, render_template, request, send_fi
 
 import garmin_client
 
-APP_VERSION = "1.8.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.8.1"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("GYM_DB_PATH", "/data/gym.db")
 OPTIONS_PATH = os.environ.get("GYM_OPTIONS_PATH", "/data/options.json")
@@ -605,6 +605,11 @@ GARMIN_BACKFILL_MAX = 10
 # How many times a hole is re-asked about before it waits for the watch to
 # upload again.
 GARMIN_PROBE_ATTEMPTS = 3
+# A day counts as filled once it has all three daily metrics. A day missing one
+# of them is chased like a hole, so a metric that starts working (or arrives
+# late from the watch) fills in across the history rather than only in the
+# refresh window.
+GARMIN_DAY_METRICS = ("sleep_seconds", "stress_avg", "body_battery_high")
 
 
 def _garmin_upsert_day(conn, day, fields):
@@ -641,27 +646,43 @@ def _garmin_record_probe(conn, day, device_upload):
     )
 
 
+def _garmin_day_is_filled(conn, day):
+    row = conn.execute(
+        f"SELECT {', '.join(GARMIN_DAY_METRICS)} FROM garmin_daily WHERE day = ?", (day,)
+    ).fetchone()
+    return bool(row) and all(row[c] is not None for c in GARMIN_DAY_METRICS)
+
+
 def _garmin_sync_one_day(conn, client, day, device_upload):
-    """Fetch one day and store whatever came back. A day that yields nothing is
-    recorded as a probe rather than as an empty row, so it stays a known hole."""
+    """Fetch one day and store whatever came back. A day left without all its
+    metrics stays on the probe list, so it keeps being chased — that covers a
+    day the watch hasn't finished uploading as well as a metric that was
+    failing to parse and later starts working."""
     fields = garmin_client.fetch_day(client, day)
-    if _garmin_upsert_day(conn, day, fields):
+    stored = _garmin_upsert_day(conn, day, fields)
+    if _garmin_day_is_filled(conn, day):
         conn.execute("DELETE FROM garmin_day_probe WHERE day = ?", (day,))
-        return True
-    _garmin_record_probe(conn, day, device_upload)
-    return False
+    else:
+        _garmin_record_probe(conn, day, device_upload)
+    return stored
 
 
 def _garmin_backfill_days(conn, today, device_upload):
-    """Days behind the refresh window that still have nothing stored, nearest
-    day first, capped at GARMIN_BACKFILL_MAX.
+    """Days behind the refresh window that are still missing data, nearest day
+    first, capped at GARMIN_BACKFILL_MAX.
 
     A hole is re-asked about a few times and then left alone until the watch
     uploads again — an upload is the only thing that can turn a permanently
     empty day (one the watch wasn't worn) into a day with data, so it is what
     re-opens the retries.
     """
-    have = {r["day"] for r in conn.execute("SELECT day FROM garmin_daily")}
+    have = {
+        r["day"]
+        for r in conn.execute(
+            f"SELECT day, {', '.join(GARMIN_DAY_METRICS)} FROM garmin_daily"
+        )
+        if all(r[c] is not None for c in GARMIN_DAY_METRICS)
+    }
     probes = {r["day"]: r for r in conn.execute("SELECT * FROM garmin_day_probe")}
     out = []
     for offset in range(GARMIN_SYNC_DAYS, GARMIN_BACKFILL_DAYS + 1):
@@ -1893,6 +1914,20 @@ def api_garmin_sync():
     except Exception as e:  # noqa: BLE001
         return jsonify({"status": "failed", "error": str(e)}), 502
     return jsonify({"status": "ok", "imported": imported})
+
+
+@app.route("/api/garmin/diagnose")
+def api_garmin_diagnose():
+    """Why a Garmin metric is empty: what each source returns for one day, and
+    the shape of the response, without dumping the raw payload."""
+    if not garmin_client.is_connected():
+        return jsonify({"error": "Garmin is not connected"}), 409
+    day = request.args.get("day") or date.today().isoformat()
+    try:
+        client = garmin_client.get_client()
+        return jsonify(garmin_client.diagnose_body_battery(client, day))
+    except Exception as e:  # noqa: BLE001 - a diagnostic must report, not raise
+        return jsonify({"day": day, "error": str(e)}), 502
 
 
 @app.route("/api/garmin/summary")

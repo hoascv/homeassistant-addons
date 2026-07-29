@@ -1471,7 +1471,13 @@ async function renderGarminHistory() {
     const value = row ? row[metric.key] : null;
     const label = `<span class="ghist-day">${escapeHtml(fmtDate(day))}</span>`;
     if (value == null) {
-      const why = uploadedThrough && day > uploadedThrough ? "not synced" : "no data";
+      // A day that arrived without this metric is not the same as a day that
+      // never arrived — only the latter can be blamed on the watch.
+      const why = row
+        ? "—"
+        : uploadedThrough && day > uploadedThrough
+        ? "not synced"
+        : "no data";
       out.push(
         `<div class="ghist-row ghist-gap">${label}` +
           `<span class="ghist-bar"><span class="ghist-none"></span></span>` +

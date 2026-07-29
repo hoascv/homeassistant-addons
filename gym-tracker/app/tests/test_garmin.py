@@ -376,3 +376,138 @@ def test_device_last_upload_parses_garmin_epoch_millis(monkeypatch):
             raise RuntimeError("garmin said no")
 
     assert gymapp.garmin_client.device_last_upload(_Broken()) is None
+
+
+# --- Body Battery sources --------------------------------------------------
+
+
+class _BBClient:
+    """A Garmin client with configurable Body Battery responses."""
+
+    def __init__(self, summary=None, series=None):
+        self._summary = summary if summary is not None else {}
+        self._series = series if series is not None else []
+
+    def get_user_summary(self, day):
+        return self._summary
+
+    def get_body_battery(self, start, end=None):
+        return self._series
+
+
+def test_body_battery_read_from_the_daily_summary():
+    client = _BBClient(
+        summary={
+            "bodyBatteryHighestValue": 92,
+            "bodyBatteryLowestValue": 24,
+            "bodyBatteryChargedValue": 61,
+            "bodyBatteryDrainedValue": 48,
+        }
+    )
+    assert gymapp.garmin_client._body_battery_fields(client, "2026-07-29") == {
+        "body_battery_high": 92,
+        "body_battery_low": 24,
+        "body_battery_charged": 61,
+        "body_battery_drained": 48,
+    }
+
+
+def test_body_battery_falls_back_to_the_series_when_the_summary_is_empty():
+    # The historical row layout: [timestamp, status, level, version].
+    client = _BBClient(
+        summary={},
+        series=[
+            {
+                "charged": 55,
+                "drained": 40,
+                "bodyBatteryValuesArray": [
+                    [1785300000000, "MEASURED", 30, 1.0],
+                    [1785303600000, "MEASURED", 88, 1.0],
+                ],
+            }
+        ],
+    )
+    fields = gymapp.garmin_client._body_battery_fields(client, "2026-07-29")
+    assert fields["body_battery_high"] == 88 and fields["body_battery_low"] == 30
+    assert fields["body_battery_charged"] == 55 and fields["body_battery_drained"] == 40
+
+
+def test_body_battery_series_honours_the_declared_level_column():
+    # A layout that would have been read as the version number before.
+    client = _BBClient(
+        summary={},
+        series=[
+            {
+                "bodyBatteryValueDescriptorDTOList": [
+                    {"bodyBatteryValueDescriptorIndex": 0, "bodyBatteryValueDescriptorKey": "timestamp"},
+                    {"bodyBatteryValueDescriptorIndex": 1, "bodyBatteryValueDescriptorKey": "bodyBatteryLevel"},
+                ],
+                "bodyBatteryValuesArray": [[1785300000000, 41], [1785303600000, 77]],
+            }
+        ],
+    )
+    fields = gymapp.garmin_client._body_battery_fields(client, "2026-07-29")
+    assert fields["body_battery_high"] == 77 and fields["body_battery_low"] == 41
+
+
+def test_body_battery_survives_a_source_that_raises():
+    class _Broken(_BBClient):
+        def get_user_summary(self, day):
+            raise RuntimeError("garmin said no")
+
+    client = _Broken(series=[{"bodyBatteryValuesArray": [[1, "MEASURED", 50, 1.0]]}])
+    assert gymapp.garmin_client._body_battery_fields(client, "2026-07-29")["body_battery_high"] == 50
+
+    class _AllBroken(_BBClient):
+        def get_user_summary(self, day):
+            raise RuntimeError("nope")
+
+        def get_body_battery(self, start, end=None):
+            raise RuntimeError("nope")
+
+    assert gymapp.garmin_client._body_battery_fields(_AllBroken(), "2026-07-29") == {}
+
+
+def test_diagnose_endpoint_reports_both_sources(client, monkeypatch):
+    monkeypatch.setattr(gymapp.garmin_client, "is_connected", lambda: True)
+    monkeypatch.setattr(
+        gymapp.garmin_client,
+        "get_client",
+        lambda: _BBClient(
+            summary={"bodyBatteryHighestValue": 90, "bodyBatteryLowestValue": 20, "steps": 1},
+            series=[{"bodyBatteryValuesArray": [[1785300000000, "MEASURED", 44, 1.0]]}],
+        ),
+    )
+    data = client.get("/api/garmin/diagnose?day=2026-07-29").get_json()
+    assert data["from_summary"] == {"body_battery_high": 90, "body_battery_low": 20}
+    assert data["from_series"]["body_battery_high"] == 44
+    assert data["summary_body_battery_keys"] == ["bodyBatteryHighestValue", "bodyBatteryLowestValue"]
+    assert data["series_sample_row"] == [1785300000000, "MEASURED", 44, 1.0]
+
+
+def test_backfill_revisits_days_that_are_missing_a_metric(conn, monkeypatch):
+    from datetime import date, timedelta
+
+    # An old day stored back when Body Battery wasn't being parsed.
+    old_day = (date.today() - timedelta(days=20)).isoformat()
+    conn.execute(
+        "INSERT INTO garmin_daily (day, sleep_seconds, stress_avg, synced_at) VALUES (?,?,?,?)",
+        (old_day, 26000, 31, "2026-07-01T06:00:00"),
+    )
+    conn.commit()
+
+    _patch_data(monkeypatch, {"body_battery_high": 88}, [], days_with_data={old_day})
+    # The backfill works outwards a batch at a time, so a day 20 back is
+    # reached after a few passes rather than on the first one.
+    for _ in range(10):
+        gymapp._garmin_do_sync(conn)
+        if conn.execute(
+            "SELECT body_battery_high FROM garmin_daily WHERE day = ?", (old_day,)
+        ).fetchone()["body_battery_high"] is not None:
+            break
+    else:
+        raise AssertionError("backfill never reached the incomplete day")
+
+    row = conn.execute("SELECT * FROM garmin_daily WHERE day = ?", (old_day,)).fetchone()
+    assert row["body_battery_high"] == 88  # the gap filled in
+    assert row["sleep_seconds"] == 26000 and row["stress_avg"] == 31  # and nothing was lost

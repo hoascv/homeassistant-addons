@@ -174,6 +174,13 @@ missing data:
 Empty days are re-checked a few times and then left alone until your watch
 uploads again, which is the only thing that can turn them into real data.
 
+Days missing one metric are chased the same way as days missing entirely, so a
+metric that starts working fills in backwards through your history over the
+next few syncs rather than only from today on.
+
+If a metric goes quiet, `/api/garmin/diagnose?day=YYYY-MM-DD` (append it to the
+add-on's URL) reports what each Garmin source returns for that day.
+
 This is the only feature that contacts an external service. It uses Garmin's
 unofficial API, so an occasional sync error (shown in the sheet) is normal;
 the next sync usually recovers.

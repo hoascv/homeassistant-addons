@@ -140,23 +140,131 @@ def _stress_fields(client, day):
         return {}
 
 
-def _body_battery_fields(client, day):
+# Body Battery comes from two places and neither is guaranteed. The daily user
+# summary carries the four values outright and is what Garmin's own app shows;
+# the reports/daily endpoint carries a series to reduce, whose row layout
+# varies by account and firmware. The summary is tried first, and the series
+# only fills what it left empty.
+_BB_SUMMARY_KEYS = {
+    "body_battery_high": "bodyBatteryHighestValue",
+    "body_battery_low": "bodyBatteryLowestValue",
+    "body_battery_charged": "bodyBatteryChargedValue",
+    "body_battery_drained": "bodyBatteryDrainedValue",
+}
+
+
+def _body_battery_from_summary(client, day):
     try:
-        data = client.get_body_battery(day, day) or []
-        entry = data[0] if data else {}
-        levels = [
-            row[2]
-            for row in (entry.get("bodyBatteryValuesArray") or [])
-            if isinstance(row, (list, tuple)) and len(row) >= 3 and isinstance(row[2], (int, float))
-        ]
-        return {
-            "body_battery_high": _num(max(levels)) if levels else None,
-            "body_battery_low": _num(min(levels)) if levels else None,
-            "body_battery_charged": _num(entry.get("charged")),
-            "body_battery_drained": _num(entry.get("drained")),
-        }
+        data = client.get_user_summary(day) or {}
     except Exception:  # noqa: BLE001
         return {}
+    if not isinstance(data, dict):
+        return {}
+    out = {}
+    for field, key in _BB_SUMMARY_KEYS.items():
+        value = _num(data.get(key))
+        if value is not None:
+            out[field] = value
+    return out
+
+
+def _bb_level_index(entry):
+    """Which column of a bodyBatteryValuesArray row holds the level. The
+    response describes its own layout, so the descriptor wins over the
+    historical index of 2."""
+    for descriptor in entry.get("bodyBatteryValueDescriptorDTOList") or []:
+        if not isinstance(descriptor, dict):
+            continue
+        key = descriptor.get("bodyBatteryValueDescriptorKey") or descriptor.get("key") or ""
+        if "level" in str(key).lower():
+            index = descriptor.get("bodyBatteryValueDescriptorIndex", descriptor.get("index"))
+            if isinstance(index, int) and not isinstance(index, bool):
+                return index
+    return None
+
+
+def _bb_row_level(row, index):
+    if not isinstance(row, (list, tuple)) or len(row) < 2:
+        return None
+    candidates = [index] if index is not None else []
+    # [timestamp, status, level, version] historically; [timestamp, level] on
+    # the accounts that return the short form.
+    candidates += [2, 1] if len(row) > 2 else [1]
+    for i in candidates:
+        if i is None or i >= len(row):
+            continue
+        value = row[i]
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return value
+    return None
+
+
+def _body_battery_from_series(client, day):
+    try:
+        data = client.get_body_battery(day, day) or []
+    except Exception:  # noqa: BLE001
+        return {}
+    entry = data[0] if isinstance(data, list) and data else {}
+    if not isinstance(entry, dict):
+        return {}
+    index = _bb_level_index(entry)
+    levels = []
+    for row in entry.get("bodyBatteryValuesArray") or []:
+        level = _bb_row_level(row, index)
+        if level is not None:
+            levels.append(level)
+    out = {}
+    if levels:
+        out["body_battery_high"] = _num(max(levels))
+        out["body_battery_low"] = _num(min(levels))
+    for field, key in (("body_battery_charged", "charged"), ("body_battery_drained", "drained")):
+        value = _num(entry.get(key))
+        if value is not None:
+            out[field] = value
+    return out
+
+
+def _body_battery_fields(client, day):
+    fields = _body_battery_from_summary(client, day)
+    if fields.get("body_battery_high") is None or fields.get("body_battery_low") is None:
+        for key, value in _body_battery_from_series(client, day).items():
+            if fields.get(key) is None:
+                fields[key] = value
+    return fields
+
+
+def diagnose_body_battery(client, day):
+    """What each Body Battery source gives for one day. Reports the parsed
+    values plus the shape of the series response, which is what a mismatch
+    turns on — not the raw payload."""
+    summary_keys, sample_row, descriptors = [], None, []
+    try:
+        summary = client.get_user_summary(day) or {}
+        if isinstance(summary, dict):
+            summary_keys = sorted(k for k in summary if "bodyBattery" in k)
+    except Exception as e:  # noqa: BLE001
+        summary_keys = [f"error: {e}"]
+    try:
+        data = client.get_body_battery(day, day) or []
+        entry = data[0] if isinstance(data, list) and data else {}
+        if isinstance(entry, dict):
+            rows = entry.get("bodyBatteryValuesArray") or []
+            sample_row = rows[0] if rows else None
+            descriptors = entry.get("bodyBatteryValueDescriptorDTOList") or []
+    except Exception as e:  # noqa: BLE001
+        descriptors = [f"error: {e}"]
+    return {
+        "day": day,
+        "from_summary": _body_battery_from_summary(client, day),
+        "from_series": _body_battery_from_series(client, day),
+        "merged": _body_battery_fields(client, day),
+        "summary_body_battery_keys": summary_keys,
+        "series_sample_row": sample_row,
+        "series_level_index": _bb_level_index({"bodyBatteryValueDescriptorDTOList": descriptors})
+        if descriptors
+        else None,
+        "series_descriptors": descriptors,
+    }
 
 
 def device_last_upload(client):

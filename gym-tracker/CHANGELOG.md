@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.8.1
+
+- **Fix Body Battery always reading "no data".** It was only ever read from
+  Garmin's body-battery series, taking the level from a fixed column of each
+  row. Accounts whose rows are laid out differently yielded nothing, so every
+  Body Battery value was stored empty while sleep and stress worked fine. It is
+  now read from Garmin's daily summary — the same numbers the Garmin app shows
+  — and only falls back to the series if that comes up empty, honouring the
+  column layout the response declares.
+- **Existing days repair themselves.** The backfill used to chase only days
+  with nothing stored, so days that already had sleep and stress would have
+  kept their empty Body Battery forever. It now also revisits days missing a
+  metric, filling them in over the next few syncs.
+- **A day that synced without a metric no longer reads "not synced"** in the
+  history — that wording is now only used for days your watch hasn't uploaded.
+- New `/api/garmin/diagnose?day=YYYY-MM-DD` reports what each Body Battery
+  source returns for a day, for when a metric goes quiet again.
+
 ## 1.8.0
 
 - **Garmin history, and honest handling of a watch that hasn't synced.** Your
