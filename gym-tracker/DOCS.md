@@ -155,6 +155,21 @@ button for an immediate pull. The home **Garmin** card shows your latest sleep,
 stress and Body Battery, plus recent activities. Use **Disconnect** to remove
 the stored token; already-imported data stays.
 
+### Heart rate for your exercises
+
+Every exercise you log gets the heart rate Garmin recorded while you were doing
+it, shown next to it as `♥ 131 avg · 141 max`. You don't need to start a
+workout on the watch — this reads Garmin's all-day heart rate and takes the
+part that lines up with your exercise.
+
+The window **ends when you log the exercise**, so log it when you finish. It
+runs back by that entry's **duration** if it has one, otherwise by
+**garmin_hr_window_minutes** (default 30). Ticking a challenge item counts as
+logging it, and records the moment you ticked.
+
+If your watch hasn't uploaded yet there's simply no heart rate on the entry —
+never a zero — and a later sync fills it in, up to 21 days back.
+
 ### History, and a watch that hasn't synced
 
 Every day pulled is kept, building up a history you can scroll back through —
@@ -211,6 +226,9 @@ the next sync usually recovers.
   (default `true`). Turn off to only sync when you press **Sync now**.
 - **garmin_sync_interval_hours**: how often the background sync runs, in
   hours, 1–168 (default `6`). Only applies when `garmin_auto_sync` is on.
+- **garmin_hr_window_minutes**: how far back from an exercise's log time to
+  read heart rate when the entry has no duration of its own, 5–180 (default
+  `30`).
 
 ## Backup & restore
 

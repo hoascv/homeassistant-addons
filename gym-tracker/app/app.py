@@ -18,7 +18,7 @@ from flask import Flask, Response, g, jsonify, render_template, request, send_fi
 
 import garmin_client
 
-APP_VERSION = "1.9.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.10.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("GYM_DB_PATH", "/data/gym.db")
 OPTIONS_PATH = os.environ.get("GYM_OPTIONS_PATH", "/data/options.json")
@@ -167,9 +167,15 @@ def get_garmin_config():
         interval = int(opts.get("garmin_sync_interval_hours", 6))
     except (TypeError, ValueError):
         interval = 6
+    try:
+        hr_window = int(opts.get("garmin_hr_window_minutes", 30))
+    except (TypeError, ValueError):
+        hr_window = 30
     return {
         "auto_sync": bool(opts.get("garmin_auto_sync", True)),
         "interval_hours": max(1, interval),
+        # Window used for an entry that carries no duration of its own.
+        "hr_window_minutes": min(180, max(5, hr_window)),
     }
 
 
@@ -310,6 +316,9 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             item_id INTEGER NOT NULL REFERENCES challenge_items(id),
             day TEXT NOT NULL,
+            -- When it was actually ticked, not just which day. Needed to line
+            -- an exercise up with the heart rate Garmin recorded for it.
+            ts TEXT,
             UNIQUE(item_id, day)
         )
         """
@@ -406,6 +415,24 @@ def _migrate_columns(conn):
         conn.execute("ALTER TABLE workout_logs ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'")
     if "challenge_item_id" not in workout_cols:
         conn.execute("ALTER TABLE workout_logs ADD COLUMN challenge_item_id INTEGER")
+    # Heart rate for the window the exercise was done in, filled from Garmin
+    # once the watch has uploaded. hr_attempts / hr_upload bound the retries
+    # the same way garmin_day_probe does for whole days.
+    for col, decl in (
+        ("hr_avg", "INTEGER"),
+        ("hr_max", "INTEGER"),
+        ("hr_min", "INTEGER"),
+        ("hr_samples", "INTEGER"),
+        ("hr_synced_at", "TEXT"),
+        ("hr_attempts", "INTEGER NOT NULL DEFAULT 0"),
+        ("hr_upload", "TEXT"),
+    ):
+        if col not in workout_cols:
+            conn.execute(f"ALTER TABLE workout_logs ADD COLUMN {col} {decl}")
+
+    completion_cols = {row[1] for row in conn.execute("PRAGMA table_info(challenge_completions)")}
+    if "ts" not in completion_cols:
+        conn.execute("ALTER TABLE challenge_completions ADD COLUMN ts TEXT")
 
     supplement_cols = {row[1] for row in conn.execute("PRAGMA table_info(supplements)")}
     added_supplement_cols = False
@@ -716,11 +743,98 @@ def _garmin_upsert_activity(conn, a):
     )
 
 
+# How far back logged exercises are chased for heart rate, and how many times
+# each is re-asked about before it waits for the watch to upload again.
+GARMIN_HR_BACKFILL_DAYS = 21
+GARMIN_HR_ATTEMPTS = 3
+# Fewer samples than this in the window is noise, not a heart rate.
+GARMIN_HR_MIN_SAMPLES = 2
+
+
+def _hr_window(row, default_minutes):
+    """The window an exercise was performed in: it ends when the entry was
+    logged (you log after finishing) and runs back by the entry's own duration,
+    or by the configured default when it has none."""
+    try:
+        end = datetime.fromisoformat(row["ts"])
+    except (ValueError, TypeError):
+        return None
+    seconds = row["duration_sec"] if row["duration_sec"] else default_minutes * 60
+    return end - timedelta(seconds=int(seconds)), end
+
+
+def _hr_summary(series, start, end):
+    """avg / max / min over the samples inside [start, end]."""
+    lo, hi = start.timestamp(), end.timestamp()
+    beats = [bpm for at, bpm in series if lo <= at <= hi]
+    if len(beats) < GARMIN_HR_MIN_SAMPLES:
+        return None
+    return {
+        "hr_avg": round(sum(beats) / len(beats)),
+        "hr_max": max(beats),
+        "hr_min": min(beats),
+        "hr_samples": len(beats),
+    }
+
+
+def _garmin_hr_candidates(conn, today):
+    """Logged exercises still without a heart rate, newest first.
+
+    An entry is re-asked about a few times and then left alone until the watch
+    uploads again — the same rule the daily backfill uses, for the same reason:
+    only an upload can turn an empty window into real samples.
+    """
+    since = (today - timedelta(days=GARMIN_HR_BACKFILL_DAYS)).isoformat()
+    return conn.execute(
+        "SELECT id, ts, duration_sec, hr_attempts, hr_upload FROM workout_logs "
+        "WHERE hr_avg IS NULL AND substr(ts, 1, 10) >= ? "
+        "ORDER BY ts DESC LIMIT 200",
+        (since,),
+    ).fetchall()
+
+
+def _garmin_sync_heart_rates(conn, client, today, device_upload):
+    """Fill in heart rate for logged exercises. Returns how many were filled.
+
+    One heart-rate call per day covers every entry logged that day.
+    """
+    filled = 0
+    by_day = {}
+    for row in _garmin_hr_candidates(conn, today):
+        if row["hr_attempts"] >= GARMIN_HR_ATTEMPTS and (row["hr_upload"] or "") == (
+            device_upload or ""
+        ):
+            continue
+        window = _hr_window(row, get_garmin_config()["hr_window_minutes"])
+        if window is None:
+            continue
+        day = row["ts"][:10]
+        if day not in by_day:
+            by_day[day] = garmin_client.fetch_heart_rate_series(client, day)
+        summary = _hr_summary(by_day[day], *window)
+        if summary:
+            conn.execute(
+                "UPDATE workout_logs SET hr_avg = ?, hr_max = ?, hr_min = ?, hr_samples = ?, "
+                "hr_synced_at = ?, hr_attempts = hr_attempts + 1, hr_upload = ? WHERE id = ?",
+                (
+                    summary["hr_avg"], summary["hr_max"], summary["hr_min"], summary["hr_samples"],
+                    datetime.now().isoformat(timespec="seconds"), device_upload, row["id"],
+                ),
+            )
+            filled += 1
+        else:
+            conn.execute(
+                "UPDATE workout_logs SET hr_attempts = hr_attempts + 1, hr_upload = ? WHERE id = ?",
+                (device_upload, row["id"]),
+            )
+    return filled
+
+
 def _garmin_do_sync(conn):
     """Refresh the trailing GARMIN_SYNC_DAYS of wellness data, chase any holes
-    behind that window, and pull activities over the whole span (idempotent
-    upserts). Returns {"days": n, "backfilled": n, "activities": m}. Records
-    the last-sync timestamp; on failure records the error and re-raises."""
+    behind that window, pull activities over the whole span, and fill in heart
+    rate for logged exercises (idempotent upserts). Records the last-sync
+    timestamp; on failure records the error and re-raises."""
     try:
         client = garmin_client.get_client()
         today = date.today()
@@ -744,11 +858,17 @@ def _garmin_do_sync(conn):
         activities = garmin_client.fetch_activities(client, act_start, today.isoformat())
         for a in activities:
             _garmin_upsert_activity(conn, a)
+        heart_rates = _garmin_sync_heart_rates(conn, client, today, device_upload)
         conn.commit()
         _set_app_state(conn, "garmin_last_sync", datetime.now().isoformat(timespec="seconds"))
         _set_app_state(conn, "garmin_device_last_upload", device_upload or "")
         _set_app_state(conn, "garmin_last_error", "")
-        return {"days": days, "backfilled": backfilled, "activities": len(activities)}
+        return {
+            "days": days,
+            "backfilled": backfilled,
+            "activities": len(activities),
+            "heart_rates": heart_rates,
+        }
     except Exception as e:  # noqa: BLE001 - surface the message, never crash the caller
         _set_app_state(conn, "garmin_last_error", str(e))
         raise
@@ -1479,7 +1599,8 @@ def api_workouts():
         dict(r)
         for r in db.execute(
             "SELECT w.id, w.ts, w.exercise_id, w.sets, w.reps, w.weight_kg, w.duration_sec, "
-            "w.notes, w.source, e.name AS exercise_name, e.equipment "
+            "w.notes, w.source, w.hr_avg, w.hr_max, w.hr_min, w.hr_samples, "
+            "e.name AS exercise_name, e.equipment "
             f"FROM workout_logs w JOIN exercises e ON e.id = w.exercise_id {where} "
             "ORDER BY w.ts DESC, w.id DESC LIMIT 200",
             tuple(params),
@@ -1617,8 +1738,13 @@ def api_challenge_toggle():
         db.execute("DELETE FROM challenge_completions WHERE id = ?", (existing["id"],))
         done = False
     else:
+        # Ticking today records the moment; ticking an earlier day can't know
+        # when it happened, so it keeps the day's midday placeholder.
+        now = datetime.now()
+        ts = now.isoformat(timespec="seconds") if day == now.date().isoformat() else f"{day}T12:00:00"
         db.execute(
-            "INSERT INTO challenge_completions (item_id, day) VALUES (?, ?)", (item_id, day)
+            "INSERT INTO challenge_completions (item_id, day, ts) VALUES (?, ?, ?)",
+            (item_id, day, ts),
         )
         done = True
 
@@ -1630,7 +1756,7 @@ def api_challenge_toggle():
             db.execute(
                 "INSERT INTO workout_logs (ts, exercise_id, sets, reps, source, challenge_item_id) "
                 "VALUES (?, ?, ?, ?, 'challenge', ?)",
-                (f"{day}T12:00:00", item["exercise_id"], item["target_sets"], item["target_reps"], item_id),
+                (ts, item["exercise_id"], item["target_sets"], item["target_reps"], item_id),
             )
         else:
             db.execute(

@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.10.0
+
+- **Heart rate for the exercises you log.** Each logged exercise now shows the
+  heart rate Garmin recorded while you were doing it — `♥ 131 avg · 141 max` —
+  taken from the window ending when you logged it and running back by that
+  entry's duration, or by **garmin_hr_window_minutes** (default 30) when it has
+  none. You don't have to start anything on the watch: this reads Garmin's
+  all-day heart rate.
+- **It backfills.** If your watch hasn't uploaded yet, the exercise simply has
+  no heart rate — never a zero — and later syncs fill it in, going back 21
+  days. Entries are re-checked a few times and then wait for your watch to
+  upload again.
+- **Challenge ticks now record when you ticked them.** They were being written
+  at a hardcoded midday, so there was no record of when anything was actually
+  done and no window to read a heart rate from. Ticking today stores the
+  moment; ticking an earlier day keeps the midday placeholder, since there's no
+  way to know when it happened.
+
 ## 1.9.0
 
 - **Trends tab.** The app now has **Home** and **Trends** tabs. The weight and

@@ -511,3 +511,178 @@ def test_backfill_revisits_days_that_are_missing_a_metric(conn, monkeypatch):
     row = conn.execute("SELECT * FROM garmin_daily WHERE day = ?", (old_day,)).fetchone()
     assert row["body_battery_high"] == 88  # the gap filled in
     assert row["sleep_seconds"] == 26000 and row["stress_avg"] == 31  # and nothing was lost
+
+
+# --- Heart rate for logged exercises ---------------------------------------
+
+
+def _hr_series(day, samples):
+    """Garmin-shaped daily heart rate: [[epoch_ms, bpm], ...]."""
+    from datetime import datetime
+
+    out = []
+    for hhmm, bpm in samples:
+        at = datetime.fromisoformat(f"{day}T{hhmm}:00")
+        out.append([int(at.timestamp() * 1000), bpm])
+    return out
+
+
+def _patch_hr(monkeypatch, series_by_day, device_upload=None):
+    monkeypatch.setattr(gymapp.garmin_client, "is_connected", lambda: True)
+    monkeypatch.setattr(gymapp.garmin_client, "get_client", lambda: _FakeClient())
+    monkeypatch.setattr(gymapp.garmin_client, "fetch_day", lambda client, day: {})
+    monkeypatch.setattr(gymapp.garmin_client, "fetch_activities", lambda client, s, e: [])
+    monkeypatch.setattr(gymapp.garmin_client, "device_last_upload", lambda client: device_upload)
+
+    def _series(client, day):
+        raw = series_by_day.get(day, [])
+        return [(row[0] / 1000.0, row[1]) for row in raw]
+
+    monkeypatch.setattr(gymapp.garmin_client, "fetch_heart_rate_series", _series)
+
+
+def _log_exercise(conn, ts, duration_sec=None):
+    conn.execute("INSERT OR IGNORE INTO exercises (id, name) VALUES (1, 'Push-up')")
+    cur = conn.execute(
+        "INSERT INTO workout_logs (ts, exercise_id, sets, reps, duration_sec, source) "
+        "VALUES (?, 1, 3, 15, ?, 'manual')",
+        (ts, duration_sec),
+    )
+    conn.commit()
+    return cur.lastrowid
+
+
+def test_heart_rate_is_taken_from_the_window_before_the_log(conn, monkeypatch):
+    from datetime import date
+
+    day = date.today().isoformat()
+    # Logged at 18:42 with a 12-minute duration -> the window is 18:30-18:42.
+    wid = _log_exercise(conn, f"{day}T18:42:00", duration_sec=12 * 60)
+    _patch_hr(
+        monkeypatch,
+        {day: _hr_series(day, [("18:20", 68), ("18:32", 118), ("18:36", 141), ("18:40", 134), ("18:50", 96)])},
+    )
+
+    result = gymapp._garmin_do_sync(conn)
+    assert result["heart_rates"] == 1
+
+    row = conn.execute("SELECT * FROM workout_logs WHERE id = ?", (wid,)).fetchone()
+    assert row["hr_max"] == 141  # the 18:20 and 18:50 samples are outside the window
+    assert row["hr_min"] == 118
+    assert row["hr_avg"] == round((118 + 141 + 134) / 3)
+    assert row["hr_samples"] == 3
+
+
+def test_heart_rate_window_falls_back_to_the_configured_default(conn, monkeypatch, set_options):
+    from datetime import date
+
+    set_options(garmin_hr_window_minutes=15)
+    day = date.today().isoformat()
+    wid = _log_exercise(conn, f"{day}T19:00:00")  # no duration on the entry
+    _patch_hr(
+        monkeypatch,
+        {day: _hr_series(day, [("18:40", 60), ("18:50", 120), ("18:58", 130)])},
+    )
+    gymapp._garmin_do_sync(conn)
+
+    row = conn.execute("SELECT * FROM workout_logs WHERE id = ?", (wid,)).fetchone()
+    assert row["hr_samples"] == 2  # 18:45 onwards, so the 18:40 sample is out
+    assert row["hr_avg"] == 125
+
+
+def test_heart_rate_backfills_once_the_watch_syncs(conn, monkeypatch):
+    from datetime import date, timedelta
+
+    # Logged two days ago; the watch hadn't uploaded, so Garmin had nothing.
+    day = (date.today() - timedelta(days=2)).isoformat()
+    wid = _log_exercise(conn, f"{day}T07:30:00", duration_sec=10 * 60)
+    _patch_hr(monkeypatch, {}, device_upload="2026-07-27T08:00:00")
+    gymapp._garmin_do_sync(conn)
+    assert conn.execute(
+        "SELECT hr_avg FROM workout_logs WHERE id = ?", (wid,)
+    ).fetchone()["hr_avg"] is None
+
+    # The watch syncs; the samples for that morning show up and are picked up.
+    _patch_hr(
+        monkeypatch,
+        {day: _hr_series(day, [("07:15", 62), ("07:20", 121), ("07:25", 145)])},
+        device_upload="2026-07-29T20:00:00",
+    )
+    result = gymapp._garmin_do_sync(conn)
+
+    assert result["heart_rates"] == 1
+    row = conn.execute("SELECT * FROM workout_logs WHERE id = ?", (wid,)).fetchone()
+    assert row["hr_avg"] == 133 and row["hr_max"] == 145
+
+
+def test_heart_rate_gives_up_until_the_watch_uploads_again(conn, monkeypatch):
+    from datetime import date
+
+    day = date.today().isoformat()
+    _log_exercise(conn, f"{day}T09:00:00")
+    calls = []
+
+    def _series(client, cdate):
+        calls.append(cdate)
+        return []
+
+    _patch_hr(monkeypatch, {}, device_upload="2026-07-27T08:00:00")
+    monkeypatch.setattr(gymapp.garmin_client, "fetch_heart_rate_series", _series)
+
+    for _ in range(gymapp.GARMIN_HR_ATTEMPTS):
+        gymapp._garmin_do_sync(conn)
+    calls.clear()
+    gymapp._garmin_do_sync(conn)
+    assert calls == []  # exhausted, waiting on the watch
+
+    monkeypatch.setattr(gymapp.garmin_client, "device_last_upload", lambda client: "2026-07-29T21:00:00")
+    gymapp._garmin_do_sync(conn)
+    assert calls  # a new upload reopens it
+
+
+def test_a_single_stray_sample_is_not_a_heart_rate(conn, monkeypatch):
+    from datetime import date
+
+    day = date.today().isoformat()
+    wid = _log_exercise(conn, f"{day}T20:00:00", duration_sec=10 * 60)
+    _patch_hr(monkeypatch, {day: _hr_series(day, [("19:55", 130)])})
+    gymapp._garmin_do_sync(conn)
+
+    assert conn.execute(
+        "SELECT hr_avg FROM workout_logs WHERE id = ?", (wid,)
+    ).fetchone()["hr_avg"] is None
+
+
+def test_ticking_a_challenge_item_records_the_real_time(client, conn):
+    from datetime import datetime
+
+    conn.execute("INSERT OR IGNORE INTO exercises (id, name) VALUES (1, 'Push-up')")
+    conn.execute(
+        "INSERT INTO challenge_items (id, sort_order, label, item_type, exercise_id, target_sets, target_reps) "
+        "VALUES (99, 1, 'Push-up', 'exercise', 1, 3, 15)"
+    )
+    conn.commit()
+
+    assert client.post("/api/challenge/toggle", json={"item_id": 99}).status_code == 200
+
+    ts = conn.execute("SELECT ts FROM challenge_completions WHERE item_id = 99").fetchone()["ts"]
+    logged = conn.execute(
+        "SELECT ts FROM workout_logs WHERE challenge_item_id = 99"
+    ).fetchone()["ts"]
+    # Not the old hardcoded midday: the window for heart rate depends on this.
+    assert not ts.endswith("T12:00:00")
+    assert logged == ts
+    assert abs((datetime.now() - datetime.fromisoformat(ts)).total_seconds()) < 60
+
+
+def test_ticking_an_earlier_day_keeps_the_midday_placeholder(client, conn):
+    conn.execute("INSERT OR IGNORE INTO exercises (id, name) VALUES (1, 'Push-up')")
+    conn.execute(
+        "INSERT INTO challenge_items (id, sort_order, label, item_type, exercise_id) "
+        "VALUES (98, 1, 'Push-up', 'exercise', 1)"
+    )
+    conn.commit()
+
+    client.post("/api/challenge/toggle", json={"item_id": 98, "day": "2026-07-01"})
+    ts = conn.execute("SELECT ts FROM challenge_completions WHERE item_id = 98").fetchone()["ts"]
+    assert ts == "2026-07-01T12:00:00"  # can't know when, so don't pretend

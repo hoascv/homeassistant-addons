@@ -302,6 +302,34 @@ def fetch_day(client, day):
     return fields
 
 
+def fetch_heart_rate_series(client, day):
+    """The day's heart-rate samples as [(epoch_seconds, bpm)], oldest first.
+
+    Garmin records these every couple of minutes all day, which is what makes
+    it possible to work out the heart rate for an exercise that was never
+    started on the watch — and to do it later, once the watch has uploaded.
+    Gaps come through as null and are dropped.
+    """
+    try:
+        data = client.get_heart_rates(day) or {}
+    except Exception:  # noqa: BLE001
+        return []
+    if not isinstance(data, dict):
+        return []
+    out = []
+    for row in data.get("heartRateValues") or []:
+        if not isinstance(row, (list, tuple)) or len(row) < 2:
+            continue
+        at, bpm = row[0], row[1]
+        if isinstance(at, bool) or isinstance(bpm, bool):
+            continue
+        if not isinstance(at, (int, float)) or not isinstance(bpm, (int, float)):
+            continue
+        out.append((at / 1000.0, int(bpm)))
+    out.sort()
+    return out
+
+
 def fetch_activities(client, start, end):
     """Normalized activities between two YYYY-MM-DD dates (inclusive)."""
     try:

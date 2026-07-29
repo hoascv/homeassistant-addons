@@ -1178,6 +1178,11 @@ function workoutSummary(w) {
   else if (w.sets != null) bits.push(`${w.sets} sets`);
   if (w.weight_kg != null) bits.push(`@ ${w.weight_kg} kg`);
   if (w.duration_sec != null) bits.push(`${w.duration_sec}s`);
+  // Heart rate arrives later, once the watch has uploaded, so it is simply
+  // absent until then rather than shown as a zero.
+  if (w.hr_avg != null) {
+    bits.push(`♥ ${w.hr_avg} avg${w.hr_max != null ? ` · ${w.hr_max} max` : ""}`);
+  }
   return bits.join(" ");
 }
 
