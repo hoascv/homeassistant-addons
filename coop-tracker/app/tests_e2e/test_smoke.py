@@ -41,6 +41,7 @@ def test_trends_tab_renders_chart(page, app_server):
     page.goto(app_server)
     page.click('.tabbar-btn[data-page="page-trends"]')
     expect(page.locator("#trends-chart-wrap svg")).to_be_visible()
+    expect(page.locator("#eggs-per-day-chart-wrap svg")).to_be_visible()
 
 
 def test_my_flock_opens_with_seeded_breeds(page, app_server):

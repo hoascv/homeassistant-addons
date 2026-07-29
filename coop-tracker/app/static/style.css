@@ -923,6 +923,11 @@ img.chicken-avatar {
   color: var(--text-muted);
 }
 
+.eggs-per-day h2 {
+  font-size: 1rem;
+  margin: 0 0 0.5rem;
+}
+
 .feeding-stats-summary h2 {
   font-size: 1rem;
   margin: 0 0 0.25rem;

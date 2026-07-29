@@ -22,6 +22,9 @@ your chickens, right from your phone via the Home Assistant sidebar.
   egg-collection forecast based on your flock — and how that forecast
   would have performed in past months, so you can see how well it's
   tracking
+- Eggs-per-day chart on the same tab: how many eggs a day your flock is
+  actually laying each month, worked out so that it doesn't matter
+  whether you collect daily or every few days
 - My Flock panel (🐔 icon): track individual chickens (name, photo, breed,
   hatch date) for an age-adjusted forecast, more accurate than flat
   per-breed counts — plus a per-chicken health history (vet visits,
@@ -270,6 +273,34 @@ age *as of that past month*, not its current age.
 Tap the ⛶ icon on the chart to expand it to fill the screen (tap again,
 or press Esc, to go back) — turning your phone to landscape while
 expanded gives noticeably more width to read a long history at a glance.
+
+### Eggs per day
+
+Below the main chart, a second smaller one shows how many eggs a day your
+flock actually laid in each of those months, with a **Per day** column in
+the table alongside it.
+
+**You don't have to collect every day for this to be right.** Each
+collection is counted across every day since the one before it — find 12
+eggs after leaving it four days and that's 3 a day for those four days,
+not one big day followed by three empty ones. So collecting daily and
+collecting twice a week give you the same line, and you can compare
+months without thinking about how often you got out to the coop in each.
+
+Two consequences worth knowing:
+
+- **The days since your last collection aren't counted yet.** Those eggs
+  are still in the nest as far as the app knows, so the current month's
+  figure covers up to your most recent collection and no further — it
+  won't sag just because you haven't been out today.
+- **A month you didn't log anything for is left blank, not shown as
+  zero.** Same for a stretch of more than a month with no collection at
+  all: rather than smear a later collection back over weeks of silence
+  and draw a confident near-flat line, the chart just breaks. A gap means
+  "no data", not "the hens stopped."
+
+The dashed continuation past today is the same forecast as the chart
+above, expressed per day.
 
 ### Advanced forecast (experimental)
 

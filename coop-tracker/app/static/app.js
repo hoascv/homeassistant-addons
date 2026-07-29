@@ -1809,6 +1809,80 @@ function buildTrendsSvg(data) {
   return `<svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet">${content}${divider}</svg>`;
 }
 
+// Same visual grammar as buildTrendsSvg (same spacing, same plot height,
+// dashed = forecast) but its own y-scale: eggs/day lives in single digits
+// where the monthly totals above live in the hundreds, so sharing one
+// axis would flatten this line onto the floor. It also has to draw around
+// gaps — a month no collection covers is null, not zero (see
+// _compute_eggs_per_day) — so the line breaks there instead of diving.
+function buildEggsPerDaySvg(data) {
+  const pointSpacing = 48;
+  const chartH = 120;
+  const topPad = 10;
+  const labelH = 16;
+  const history = data.eggs_per_day || [];
+  const forecast = data.forecast_eggs_per_day || [];
+  const forecastMonths = data.forecast_months || [];
+  const historyCount = data.months.length;
+  const totalCount = historyCount + forecastMonths.length;
+  const width = totalCount * pointSpacing;
+  const height = topPad + chartH + labelH;
+  const maxVal = Math.max(1, ...history.filter((v) => v != null), ...forecast);
+
+  const xAt = (i) => i * pointSpacing + pointSpacing / 2;
+  const yAt = (value) => topPad + chartH - (value / maxVal) * chartH;
+
+  // Splits at nulls so an unmeasured month leaves a gap rather than a
+  // line drawn straight through it.
+  const line = (values, offset, colorVar, { dashed = false, opacity = 1 } = {}) => {
+    const dash = dashed ? ' stroke-dasharray="4,3"' : "";
+    const runs = [];
+    let run = [];
+    values.forEach((v, i) => {
+      if (v == null) {
+        if (run.length) runs.push(run);
+        run = [];
+        return;
+      }
+      run.push(`${xAt(offset + i)},${yAt(v)}`);
+    });
+    if (run.length) runs.push(run);
+
+    let svg = runs
+      .filter((points) => points.length > 1)
+      .map(
+        (points) =>
+          `<polyline points="${points.join(" ")}" fill="none" stroke="var(${colorVar})" stroke-width="2" stroke-opacity="${opacity}"${dash}></polyline>`
+      )
+      .join("");
+    // Circles last, and drawn for lone points too — a single measured
+    // month in a range of gaps has no polyline to render it.
+    runs.flat().forEach((point) => {
+      const [x, y] = point.split(",");
+      svg += `<circle cx="${x}" cy="${y}" r="2.5" fill="var(${colorVar})" fill-opacity="${opacity}"></circle>`;
+    });
+    return svg;
+  };
+
+  let content = line(history, 0, "--accent-egg");
+  content += line(forecast, historyCount, "--accent-egg", { dashed: true, opacity: 0.55 });
+
+  data.months.forEach((ym, i) => {
+    content += `<text class="trends-bar-label" x="${xAt(i)}" y="${height - 2}" text-anchor="middle">${monthLabel(ym).split(" ")[0]}</text>`;
+  });
+  forecastMonths.forEach((ym, i) => {
+    content += `<text class="trends-bar-label trends-bar-label-forecast" x="${xAt(historyCount + i)}" y="${height - 2}" text-anchor="middle">${monthLabel(ym).split(" ")[0]}</text>`;
+  });
+
+  let divider = "";
+  if (forecastMonths.length > 0) {
+    const dividerX = historyCount * pointSpacing;
+    divider = `<line x1="${dividerX}" y1="${topPad}" x2="${dividerX}" y2="${topPad + chartH}" stroke="var(--border)" stroke-width="1" stroke-dasharray="3,3"></line>`;
+  }
+
+  return `<svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet">${content}${divider}</svg>`;
+}
+
 // A separate builder rather than sharing buildTrendsSvg above: this chart
 // has one actual series + one forecast line + one CI band over its own
 // x-domain (all available history, not the range selector) with no
@@ -1905,6 +1979,27 @@ document.getElementById("advanced-forecast-panel").addEventListener("toggle", (e
   }
 });
 
+function renderEggsPerDay(data) {
+  const chartWrap = document.getElementById("eggs-per-day-chart-wrap");
+  const emptyEl = document.getElementById("eggs-per-day-empty");
+  const captionEl = document.getElementById("eggs-per-day-caption");
+  const perDay = data.eggs_per_day || [];
+  const measured = perDay.filter((v) => v != null);
+
+  chartWrap.querySelector("svg")?.remove();
+  emptyEl.hidden = measured.length > 0;
+  if (measured.length > 0) {
+    chartWrap.insertAdjacentHTML("beforeend", buildEggsPerDaySvg(data));
+  }
+
+  let caption =
+    "Average eggs laid per day. Each collection counts for every day since the one before it, so collecting every few days instead of daily doesn't drag the average down. Days since your last collection are left out until you collect them.";
+  if (measured.length < perDay.length) {
+    caption += " Months with no collection to go on are left blank.";
+  }
+  captionEl.textContent = caption;
+}
+
 async function loadTrends() {
   const months = trendsRangeSelect.value;
   const res = await fetch(`api/trends?months=${months}`);
@@ -1918,13 +2013,17 @@ async function loadTrends() {
     trendsChartWrap.insertAdjacentHTML("beforeend", buildTrendsSvg(data));
   }
 
+  renderEggsPerDay(data);
+
   const backtest = data.forecast_backtest || [];
+  const perDay = data.eggs_per_day || [];
   const historyRows = data.months
     .map(
       (ym, i) => `
         <tr>
           <td>${monthLabel(ym)}</td>
           <td>${data.collected[i]}</td>
+          <td>${perDay[i] == null ? "–" : perDay[i].toFixed(1)}</td>
           <td>${backtest[i]}</td>
           <td>${data.sold[i]}</td>
           <td>${data.used[i]}</td>
@@ -1933,12 +2032,14 @@ async function loadTrends() {
     )
     .join("");
 
+  const forecastPerDay = data.forecast_eggs_per_day || [];
   const forecastRows = (data.forecast_months || [])
     .map(
       (ym, i) => `
         <tr class="trends-row-forecast">
           <td>${monthLabel(ym)} (forecast)</td>
           <td>–</td>
+          <td>${forecastPerDay[i] == null ? "–" : forecastPerDay[i].toFixed(1)}</td>
           <td>${data.forecast_collected[i]}</td>
           <td>–</td>
           <td>–</td>

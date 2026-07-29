@@ -569,6 +569,60 @@ data actually backs — inventing a growth curve on top would be modeling
 something with zero supporting evidence, the opposite of this section's
 established "simple and honest first" bias.
 
+### Eggs per day (v1.36.0)
+
+A second, smaller chart under the main one: average eggs *laid* per day
+in each of the same months (`_compute_eggs_per_day`, `eggs_per_day` /
+`eggs_per_day_days` on `/api/trends`), plus a "Per day" column in the
+table. Its own chart with its own y-scale rather than a fourth line on
+the main one — eggs/day lives in single digits where the monthly totals
+live in the hundreds, so a shared axis would flatten it onto the floor.
+
+**Why not simply `collected ÷ days in the month`,** the obvious
+implementation: eggs are laid every day but collected whenever the owner
+gets round to it, so that formula reads every day you didn't get to the
+coop as a day the hens laid nothing, and the chart ends up measuring your
+collection habits rather than your flock. It also breaks in three
+specific places: the current month divides a partial total by a full
+month; eggs laid in late January but collected on 2 February land wholly
+in February; and a month you didn't visit at all reads as a hard zero.
+
+Instead, each collection is **spread evenly back over the days since the
+previous one** — 12 eggs found after 4 days away is 3/day for those 4
+days — and the per-month rate is (eggs attributed to the month) ÷ (days
+of the month a collection actually covers). All three cases above fall
+out of that for free: the current month's uncovered tail (eggs still in
+the nest) is simply excluded, cross-boundary eggs land mostly in the
+month they were laid, and the result is independent of collection
+frequency — a property `test_eggs_per_day_is_unchanged_by_how_often_you_collect`
+asserts directly, by logging the same eggs daily and in batches and
+comparing.
+
+**The one judgement call, `EGGS_PER_DAY_MAX_SPREAD_DAYS = 31`:** spreading
+is only honest while a gap really means "eggs accumulated." Past a month
+of silence it far more likely means the app wasn't used at all, and
+spreading a handful of eggs over 6 such months would draw a confident
+near-zero line where there's simply no data. Days beyond the cap are left
+**uncovered**: they count towards neither the eggs nor the days, so a
+month with nothing to go on returns `None` and the frontend breaks the
+line there rather than diving to zero. The cap is deliberately generous
+(not, say, 7 days) so that genuinely infrequent-but-regular collection
+stays fully accurate; only real abandonment trips it.
+
+`covered_days` ships alongside the rates rather than being dropped after
+the division, so the UI can tell how much of a month a figure rests on —
+a rate computed from 3 covered days is not the same claim as one from 30,
+and only the caller knows how much it wants to say about that.
+
+The forward projection reuses §9's rate directly: `_compute_forecast`
+already computes a per-day rate per future month before multiplying it by
+that month's length, so `forecast_eggs_per_day` is that same number
+exposed rather than a second model. (It can't be derived on the frontend
+by dividing `forecast_collected` by 30 — months differ in length.) There's
+no backtest counterpart here: the dashed line on this chart starts at the
+divider, since the historical side is already a measured rate, not a
+prediction.
+
 ## 10. Feed duration estimate
 
 A `container_empty` boolean on `logs` (meaningful only for `type =

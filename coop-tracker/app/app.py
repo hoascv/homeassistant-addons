@@ -64,7 +64,7 @@ except ImportError as e:
     SKLEARN_AVAILABLE = False
     SKLEARN_ERROR = str(e)
 
-APP_VERSION = "1.34.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.36.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("COOP_DB_PATH", "/data/coop.db")
 OPTIONS_PATH = os.environ.get("COOP_OPTIONS_PATH", "/data/options.json")
@@ -89,6 +89,15 @@ DEFAULT_CURRENCY = "DKK"
 FORECAST_MONTHS = 3
 FORECAST_TRAILING_DAYS = 30
 FORECAST_RATIO_BOUNDS = (0.2, 1.8)  # dampens noise from a single unusual week
+
+# Eggs are laid every day but collected whenever you get round to it, so
+# one collection covers every day back to the previous one — that's what
+# _compute_eggs_per_day spreads a count over. Past this many days, though,
+# a gap is far more likely to be a stretch where the app simply wasn't
+# used than one genuine month-long accumulation, and spreading a handful
+# of eggs over it would draw a confidently wrong near-zero rate. Those
+# days are left uncovered instead: no data, rather than a bad month.
+EGGS_PER_DAY_MAX_SPREAD_DAYS = 31
 
 # Seasonal laying curve: one universal sinusoid over the calendar year,
 # peaking at the summer solstice (daylight-driven laying). Constants, not
@@ -975,6 +984,69 @@ def _compute_trends(conn, now, months):
     }
 
 
+def _compute_eggs_per_day(conn, now, months):
+    """Average eggs *laid* per day in each of the same months
+    _compute_trends returns — deliberately not "that month's collected
+    total ÷ days in the month", which reads every day you didn't get to
+    the coop as a day the hens laid nothing.
+
+    Each collection is instead spread evenly back over the days since the
+    previous one (a basket of 12 found after 4 days away = 3/day for those
+    4 days), which also fixes the month-boundary case for free: eggs laid
+    in late January but collected on 2 February land mostly in January,
+    where they were laid. The result is independent of how often you
+    actually collect.
+
+    Days no collection covers — before the first-ever log, after the most
+    recent one (those eggs are still in the nest, uncounted), or inside a
+    gap longer than EGGS_PER_DAY_MAX_SPREAD_DAYS — count towards neither
+    the eggs nor the days, so a month with nothing to go on comes back as
+    None (a gap in the chart) rather than a misleading 0.0. The covered-day
+    counts ship alongside the rates so the UI can say how much of the
+    month each figure actually rests on.
+    """
+    month_starts = _recent_month_starts(now, months)
+    labels = [f"{y:04d}-{m:02d}" for y, m in month_starts]
+
+    # All history, not just the requested window: the first collection
+    # inside the window needs the one *before* it to know how many days it
+    # covers, and that one is often in an earlier month.
+    rows = conn.execute(
+        """
+        SELECT date(ts) AS day, COALESCE(SUM(count), 0) AS total
+        FROM logs
+        WHERE type = 'egg'
+        GROUP BY day
+        ORDER BY day
+        """
+    ).fetchall()
+
+    eggs = {label: 0.0 for label in labels}
+    covered_days = {label: 0 for label in labels}
+    previous_day = None
+    for row in rows:
+        day = date.fromisoformat(row["day"])
+        # The first-ever collection has nothing to measure back to, so it
+        # covers only its own day.
+        span = 1 if previous_day is None else (day - previous_day).days
+        previous_day = day
+        span = max(1, min(span, EGGS_PER_DAY_MAX_SPREAD_DAYS))
+        per_day = row["total"] / span
+        for offset in range(span):
+            label = (day - timedelta(days=offset)).strftime("%Y-%m")
+            if label in eggs:
+                eggs[label] += per_day
+                covered_days[label] += 1
+
+    return {
+        "eggs_per_day": [
+            round(eggs[label] / covered_days[label], 2) if covered_days[label] else None
+            for label in labels
+        ],
+        "eggs_per_day_days": [covered_days[label] for label in labels],
+    }
+
+
 def _get_breed_annual_eggs(conn, breed_name):
     if not breed_name:
         return None
@@ -1084,6 +1156,10 @@ def _compute_forecast(conn, now, months=FORECAST_MONTHS):
 
     labels = []
     values = []
+    # The same projection expressed per day, so the eggs-per-day chart can
+    # continue past today on its own scale — the monthly totals below
+    # can't simply be divided by 30 for that (months differ in length).
+    daily_rates = []
     year, month = now.year, now.month
     for i in range(1, months + 1):
         m = month + i
@@ -1097,10 +1173,12 @@ def _compute_forecast(conn, now, months=FORECAST_MONTHS):
         rate = baseline_daily * _seasonal_multiplier(midpoint) * ratio
         labels.append(f"{y:04d}-{m:02d}")
         values.append(round(rate * days_in_month))
+        daily_rates.append(round(rate, 2))
 
     return {
         "forecast_months": labels,
         "forecast_collected": values,
+        "forecast_eggs_per_day": daily_rates,
         "forecast_daily_rate": round(
             baseline_daily * _seasonal_multiplier(now) * ratio, 2
         ),
@@ -1158,6 +1236,7 @@ def api_trends():
     except ValueError:
         months = 6
     result = _compute_trends(db, now, months)
+    result.update(_compute_eggs_per_day(db, now, months))
     result.update(_compute_forecast(db, now))
     result.update(_compute_backtest(db, now, months))
     result["forecast_margin"] = _compute_forecast_margin(

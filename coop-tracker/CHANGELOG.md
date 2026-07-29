@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.36.0
+
+- New **Eggs per day** chart on the Trends tab, with a matching **Per
+  day** column in the table: how many eggs a day your flock actually laid
+  each month, rather than how many you happened to carry in.
+- **You don't have to collect every day.** Each collection counts across
+  every day since the one before it — 12 eggs found after four days away
+  is 3 a day for those four days — so collecting daily and collecting
+  twice a week give the same line, and months are comparable regardless.
+  Eggs still sitting in the nest since your last collection aren't
+  counted yet, so the current month doesn't sag just because you haven't
+  been out today, and a month with no collection to go on is left blank
+  instead of drawn as zero.
+- The forecast now continues onto that chart too, as eggs per day.
+
+(This release also corrects the in-app version number, which still read
+1.34.0 in 1.35.0's debug panel.)
+
 ## 1.35.0
 
 - Training-photo gallery: **Remove** is now a reversible **Exclude**. An
