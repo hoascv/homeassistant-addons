@@ -16,7 +16,9 @@ import threading
 
 # garth dumps these two files into the token directory; their presence is how
 # we tell "connected" from "not connected" without constructing a client.
-_TOKEN_FILES = ("oauth1_token.json", "oauth2_token.json")
+# garminconnect persists a single token file (the DI refresh token) inside the
+# token directory; its presence is how we tell "connected" without a client.
+_TOKEN_FILE = "garmin_tokens.json"
 
 # Persisted under the add-on's /data volume so the login survives restarts and
 # updates. Overridable for tests.
@@ -37,12 +39,13 @@ def _new_client(email=None, password=None, return_on_mfa=False):
 
 
 def _save_tokens(garmin):
-    os.makedirs(TOKENSTORE, exist_ok=True)
-    garmin.garth.dump(TOKENSTORE)
+    # garminconnect's own client.dump() creates the directory (0700) and writes
+    # garmin_tokens.json (0600) itself — no separate garth object is involved.
+    garmin.client.dump(TOKENSTORE)
 
 
 def is_connected():
-    return all(os.path.isfile(os.path.join(TOKENSTORE, f)) for f in _TOKEN_FILES)
+    return os.path.isfile(os.path.join(TOKENSTORE, _TOKEN_FILE))
 
 
 def begin_login(email, password):

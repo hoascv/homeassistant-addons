@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.4.1
+
+- **Fix Garmin connect failing with a 502 error.** Connecting saved the login
+  token through the wrong internal object (`garmin.garth`), which doesn't exist
+  in the current `garminconnect` library, so every successful sign-in (and every
+  2FA completion) crashed. Tokens are now persisted via the library's own client
+  and detected from the correct `garmin_tokens.json` file, so connecting — and
+  staying connected across restarts — works.
+
 ## 1.4.0
 
 - **Garmin Connect integration.** Connect your Garmin account (⌚ sheet) to

@@ -25,6 +25,32 @@ def _patch_data(monkeypatch, day_fields, activities):
 # --- Schema ----------------------------------------------------------------
 
 
+def test_save_tokens_uses_client_and_is_connected(monkeypatch, tmp_path):
+    # Guards the real-library contract: tokens are persisted via garmin.client
+    # .dump() (not a .garth attribute) into a single garmin_tokens.json file,
+    # and is_connected()/disconnect() key off exactly that file.
+    import os
+
+    store = str(tmp_path / "garmin")
+    monkeypatch.setattr(gymapp.garmin_client, "TOKENSTORE", store)
+
+    class _Client:
+        def dump(self, path):
+            os.makedirs(path, exist_ok=True)
+            with open(os.path.join(path, "garmin_tokens.json"), "w") as f:
+                f.write("{}")
+
+    class _Garmin:
+        client = _Client()
+
+    assert gymapp.garmin_client.is_connected() is False
+    gymapp.garmin_client._save_tokens(_Garmin())  # would AttributeError on a .garth-based impl
+    assert gymapp.garmin_client.is_connected() is True
+
+    gymapp.garmin_client.disconnect()
+    assert gymapp.garmin_client.is_connected() is False
+
+
 def test_schema_tables_created(conn):
     tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     assert {"garmin_daily", "garmin_activities"}.issubset(tables)
