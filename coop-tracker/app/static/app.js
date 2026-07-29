@@ -1809,6 +1809,38 @@ function buildTrendsSvg(data) {
   return `<svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet">${content}${divider}</svg>`;
 }
 
+// Splits a series into runs of contiguous non-null points, already
+// transformed to pixels, so a stretch with no data leaves a gap in the
+// line instead of one drawn straight through it. Shared by both
+// eggs-per-day charts, where a gap means "no collection speaks for these
+// days" and must not read as a drop to zero; each chart styles the runs
+// itself. Each point keeps its index `i` in the original series, since
+// that's what the caller's own per-point data is keyed by.
+function splitRuns(values, xAt, yAt, offset = 0) {
+  const runs = [];
+  let run = [];
+  values.forEach((v, i) => {
+    if (v == null) {
+      if (run.length) runs.push(run);
+      run = [];
+      return;
+    }
+    run.push({ x: xAt(offset + i), y: yAt(v), i });
+  });
+  if (run.length) runs.push(run);
+  return runs;
+}
+
+// A month whose rate rests on only part of the month — typically the one
+// you started logging in. Not wrong, but not comparable to a month with
+// full coverage sitting next to it, which is the whole reason it's
+// marked. The threshold comes from the API so there's one definition of
+// it (see EGGS_PER_DAY_MIN_COVERED_DAYS).
+function isThinlyCovered(data, i) {
+  const days = (data.eggs_per_day_days || [])[i];
+  return days != null && days > 0 && days < (data.eggs_per_day_min_days || 0);
+}
+
 // Same visual grammar as buildTrendsSvg (same spacing, same plot height,
 // dashed = forecast) but its own y-scale: eggs/day lives in single digits
 // where the monthly totals above live in the hundreds, so sharing one
@@ -1832,39 +1864,30 @@ function buildEggsPerDaySvg(data) {
   const xAt = (i) => i * pointSpacing + pointSpacing / 2;
   const yAt = (value) => topPad + chartH - (value / maxVal) * chartH;
 
-  // Splits at nulls so an unmeasured month leaves a gap rather than a
-  // line drawn straight through it.
-  const line = (values, offset, colorVar, { dashed = false, opacity = 1 } = {}) => {
+  const line = (values, offset, colorVar, { dashed = false, opacity = 1, thin = () => false } = {}) => {
     const dash = dashed ? ' stroke-dasharray="4,3"' : "";
-    const runs = [];
-    let run = [];
-    values.forEach((v, i) => {
-      if (v == null) {
-        if (run.length) runs.push(run);
-        run = [];
-        return;
-      }
-      run.push(`${xAt(offset + i)},${yAt(v)}`);
-    });
-    if (run.length) runs.push(run);
+    const runs = splitRuns(values, xAt, yAt, offset);
 
     let svg = runs
       .filter((points) => points.length > 1)
       .map(
         (points) =>
-          `<polyline points="${points.join(" ")}" fill="none" stroke="var(${colorVar})" stroke-width="2" stroke-opacity="${opacity}"${dash}></polyline>`
+          `<polyline points="${points.map((p) => `${p.x},${p.y}`).join(" ")}" fill="none" stroke="var(${colorVar})" stroke-width="2" stroke-opacity="${opacity}"${dash}></polyline>`
       )
       .join("");
     // Circles last, and drawn for lone points too — a single measured
-    // month in a range of gaps has no polyline to render it.
-    runs.flat().forEach((point) => {
-      const [x, y] = point.split(",");
-      svg += `<circle cx="${x}" cy="${y}" r="2.5" fill="var(${colorVar})" fill-opacity="${opacity}"></circle>`;
+    // month in a range of gaps has no polyline to render it. Thinly
+    // covered months get a hollow marker: the rate is real, but it isn't
+    // a whole month's worth and shouldn't read as one.
+    runs.flat().forEach((p) => {
+      svg += thin(p.i)
+        ? `<circle cx="${p.x}" cy="${p.y}" r="2.5" fill="var(--surface)" stroke="var(${colorVar})" stroke-width="1.5" stroke-opacity="${opacity}"></circle>`
+        : `<circle cx="${p.x}" cy="${p.y}" r="2.5" fill="var(${colorVar})" fill-opacity="${opacity}"></circle>`;
     });
     return svg;
   };
 
-  let content = line(history, 0, "--accent-egg");
+  let content = line(history, 0, "--accent-egg", { thin: (i) => isThinlyCovered(data, i) });
   content += line(forecast, historyCount, "--accent-egg", { dashed: true, opacity: 0.55 });
 
   data.months.forEach((ym, i) => {
@@ -1881,6 +1904,72 @@ function buildEggsPerDaySvg(data) {
   }
 
   return `<svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet">${content}${divider}</svg>`;
+}
+
+function dayLabel(iso) {
+  const [, month, day] = iso.split("-").map(Number);
+  return `${day} ${MONTH_NAMES[month - 1].slice(0, 3)}`;
+}
+
+// The day-by-day view: same attributed rate as the monthly chart, but at
+// daily resolution and ending today, for "how are they laying *now*" —
+// which the monthly chart can't answer, since its last point averages
+// everything since the 1st. Tighter point spacing than the monthly
+// charts (30-90 points, not 6-15) and no forecast: this one is about
+// what's happening, not what's coming.
+function buildDailyEggsSvg(data) {
+  const pointSpacing = 12;
+  const chartH = 100;
+  const topPad = 10;
+  const labelH = 14;
+  // Room for the outermost date labels, which are centred on points at
+  // the very edge of the plot and would otherwise be clipped by the
+  // viewBox — the monthly charts get away without it because "Jul" is a
+  // third the width of "29 Jul".
+  const sidePad = 14;
+  const values = data.eggs_per_day || [];
+  const count = values.length;
+  const width = Math.max(count, 1) * pointSpacing + sidePad * 2;
+  const height = topPad + chartH + labelH;
+  const maxVal = Math.max(1, ...values.filter((v) => v != null));
+
+  const xAt = (i) => sidePad + i * pointSpacing + pointSpacing / 2;
+  const yAt = (value) => topPad + chartH - (value / maxVal) * chartH;
+
+  const runs = splitRuns(values, xAt, yAt);
+  let content = runs
+    .filter((run) => run.length > 1)
+    .map(
+      (run) =>
+        `<polyline points="${run.map((p) => `${p.x},${p.y}`).join(" ")}" fill="none" stroke="var(--accent-egg)" stroke-width="2" stroke-linejoin="round"></polyline>`
+    )
+    .join("");
+  // No per-point markers at this density — they'd merge into a smear —
+  // except for a lone covered day, which has no polyline to render it.
+  runs
+    .filter((run) => run.length === 1)
+    .forEach((run) => {
+      content += `<circle cx="${run[0].x}" cy="${run[0].y}" r="2.5" fill="var(--accent-egg)"></circle>`;
+    });
+
+  // The most recent covered day gets a marker: the line usually stops
+  // short of today (eggs collected since are still in the nest), and
+  // without a deliberate end point that looks like missing data rather
+  // than the edge of what's known.
+  const lastRun = runs[runs.length - 1];
+  if (lastRun) {
+    const last = lastRun[lastRun.length - 1];
+    content += `<circle cx="${last.x}" cy="${last.y}" r="3.5" fill="var(--accent-egg)"></circle>`;
+  }
+
+  // Labelled from the right, so today's end of the window always carries
+  // a date and the intervals fall back from it.
+  const labelEvery = Math.max(1, Math.round(count / 5));
+  for (let i = count - 1; i >= 0; i -= labelEvery) {
+    content += `<text class="trends-bar-label" x="${xAt(i)}" y="${height - 2}" text-anchor="middle">${dayLabel(data.days[i])}</text>`;
+  }
+
+  return `<svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet">${content}</svg>`;
 }
 
 // A separate builder rather than sharing buildTrendsSvg above: this chart
@@ -1979,6 +2068,24 @@ document.getElementById("advanced-forecast-panel").addEventListener("toggle", (e
   }
 });
 
+// The rate plus the number of days it was actually averaged over —
+// without that second number, a month covering 9 days and one covering
+// 30 are indistinguishable in the table, which is exactly the comparison
+// that misleads.
+function perDayCell(data, i) {
+  const value = (data.eggs_per_day || [])[i];
+  if (value == null) return "–";
+  const days = (data.eggs_per_day_days || [])[i];
+  const thin = isThinlyCovered(data, i);
+  const title = thin
+    ? ` title="Averaged over only ${days} covered days — not a full month, so it isn't comparable to the months around it."`
+    : "";
+  return (
+    `<span class="${thin ? "eggs-per-day-thin" : ""}"${title}>${value.toFixed(1)}</span>` +
+    `<span class="eggs-per-day-coverage">${days}d</span>`
+  );
+}
+
 function renderEggsPerDay(data) {
   const chartWrap = document.getElementById("eggs-per-day-chart-wrap");
   const emptyEl = document.getElementById("eggs-per-day-empty");
@@ -1996,6 +2103,51 @@ function renderEggsPerDay(data) {
     "Average eggs laid per day. Each collection counts for every day since the one before it, so collecting every few days instead of daily doesn't drag the average down. Days since your last collection are left out until you collect them.";
   if (measured.length < perDay.length) {
     caption += " Months with no collection to go on are left blank.";
+  }
+  if (perDay.some((_, i) => isThinlyCovered(data, i))) {
+    caption +=
+      ` The small figure under each rate is how many days it was averaged over. Hollow points cover under ${data.eggs_per_day_min_days} days —` +
+      " usually the month you started logging, so they read high next to a full month rather than being comparable to one.";
+  }
+  captionEl.textContent = caption;
+}
+
+const dailyEggsRangeSelect = document.getElementById("daily-eggs-range");
+
+async function loadDailyEggs() {
+  const chartWrap = document.getElementById("daily-eggs-chart-wrap");
+  const emptyEl = document.getElementById("daily-eggs-empty");
+  const captionEl = document.getElementById("daily-eggs-caption");
+
+  let data;
+  try {
+    const res = await fetch(`api/trends/daily?days=${dailyEggsRangeSelect.value}`);
+    data = await res.json();
+  } catch (err) {
+    return;
+  }
+
+  const values = data.eggs_per_day || [];
+  const measured = values.filter((v) => v != null);
+  chartWrap.querySelector("svg")?.remove();
+  emptyEl.hidden = measured.length > 0;
+  if (measured.length > 0) {
+    chartWrap.insertAdjacentHTML("beforeend", buildDailyEggsSvg(data));
+  }
+
+  let caption =
+    "Eggs a day up to today, on the same basis as the chart above — a collection counts for every day since the last one, so the flat stretches are days a single collection covers.";
+  // The trailing gap is the one thing about this chart that looks like a
+  // fault, so it's called out whenever it's actually on screen.
+  let lastMeasured = -1;
+  values.forEach((v, i) => {
+    if (v != null) lastMeasured = i;
+  });
+  const trailingGap = values.length - 1 - lastMeasured;
+  if (measured.length > 0 && trailingGap > 0) {
+    caption +=
+      ` The line stops ${trailingGap} day${trailingGap === 1 ? "" : "s"} short of today because that's your last collection —` +
+      " anything laid since is still in the nest, not a drop to zero.";
   }
   captionEl.textContent = caption;
 }
@@ -2023,7 +2175,7 @@ async function loadTrends() {
         <tr>
           <td>${monthLabel(ym)}</td>
           <td>${data.collected[i]}</td>
-          <td>${perDay[i] == null ? "–" : perDay[i].toFixed(1)}</td>
+          <td>${perDayCell(data, i)}</td>
           <td>${backtest[i]}</td>
           <td>${data.sold[i]}</td>
           <td>${data.used[i]}</td>
@@ -2064,6 +2216,7 @@ async function loadTrends() {
   }
   trendsForecastCaption.textContent = caption;
 
+  loadDailyEggs();
   loadFeedingStatsSummary();
 }
 
@@ -2112,6 +2265,7 @@ tabButtons.forEach((btn) => {
 });
 
 trendsRangeSelect.addEventListener("change", loadTrends);
+dailyEggsRangeSelect.addEventListener("change", loadDailyEggs);
 
 function formatChickenAge(hatchDate) {
   if (!hatchDate) return "Unknown age";

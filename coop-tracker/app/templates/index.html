@@ -166,7 +166,22 @@
     <p class="trends-forecast-caption" id="trends-forecast-caption"></p>
 
     <div class="eggs-per-day">
-      <h2>Eggs per day</h2>
+      <div class="finances-header">
+        <h2>Eggs per day, recently</h2>
+        <select id="daily-eggs-range">
+          <option value="14">14 days</option>
+          <option value="30" selected>30 days</option>
+          <option value="90">90 days</option>
+        </select>
+      </div>
+      <div class="trends-chart-wrap" id="daily-eggs-chart-wrap">
+        <p class="empty-state" id="daily-eggs-empty" hidden>No egg collection logged yet</p>
+      </div>
+      <p class="trends-forecast-caption" id="daily-eggs-caption"></p>
+    </div>
+
+    <div class="eggs-per-day">
+      <h2>Eggs per day, by month</h2>
       <div class="trends-chart-wrap" id="eggs-per-day-chart-wrap">
         <p class="empty-state" id="eggs-per-day-empty" hidden>No egg collection logged yet</p>
       </div>

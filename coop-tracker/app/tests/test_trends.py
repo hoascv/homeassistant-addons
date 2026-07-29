@@ -123,6 +123,47 @@ def test_eggs_per_day_covers_days_in_the_month_the_eggs_were_laid(client):
     assert body["collected"] == [1, 20]  # while the raw totals stay where they were logged
 
 
+def test_eggs_per_day_reports_the_thin_coverage_threshold(client):
+    """The rate for a thinly-covered month is still reported — the UI
+    flags it rather than hiding it — so the threshold has to travel with
+    it for the frontend to know which months those are."""
+    client.post("/api/log", json={"type": "egg", "count": 4, "ts": _day_last_month(10).isoformat()})
+    client.post("/api/log", json={"type": "egg", "count": 9, "ts": _day_last_month(13).isoformat()})
+
+    body = client.get("/api/trends?months=3").get_json()
+    assert body["eggs_per_day_min_days"] == 10
+    assert body["eggs_per_day_days"][-2] == 4  # under the threshold
+    assert body["eggs_per_day"][-2] == 3.25  # but still reported
+
+
+def test_daily_eggs_ends_today_and_defaults_to_thirty_days(client):
+    body = client.get("/api/trends/daily").get_json()
+    assert len(body["days"]) == 30
+    assert body["days"][-1] == datetime.now().date().isoformat()
+    assert body["eggs_per_day"] == [None] * 30
+
+
+def test_daily_eggs_spreads_a_collection_across_the_days_it_covers(client):
+    now = datetime.now()
+    client.post(
+        "/api/log", json={"type": "egg", "count": 2, "ts": (now - timedelta(days=6)).isoformat()}
+    )
+    client.post(
+        "/api/log", json={"type": "egg", "count": 8, "ts": (now - timedelta(days=2)).isoformat()}
+    )
+
+    values = client.get("/api/trends/daily?days=10").get_json()["eggs_per_day"]
+    # Days -9..-7 predate the first collection, -6 is it (2 over its own
+    # day), -5..-2 share the 8 at 2/day, and -1/today aren't collected yet.
+    assert values == [None, None, None, 2.0, 2.0, 2.0, 2.0, 2.0, None, None]
+
+
+def test_daily_eggs_days_param_is_clamped(client):
+    assert len(client.get("/api/trends/daily?days=1").get_json()["days"]) == 7
+    assert len(client.get("/api/trends/daily?days=999").get_json()["days"]) == 90
+    assert len(client.get("/api/trends/daily?days=abc").get_json()["days"]) == 30
+
+
 def test_trends_includes_a_per_day_forecast_for_each_forecast_month(client):
     body = client.get("/api/trends").get_json()
     assert len(body["forecast_eggs_per_day"]) == len(body["forecast_months"])

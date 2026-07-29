@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.37.0
+
+- New **Eggs per day, recently** chart at the top of the Trends tab: a
+  day-by-day view of the last 14, 30 or 90 days, for how your flock is
+  laying *right now*. The monthly chart can't tell you that — its
+  current-month figure averages everything since the 1st.
+- The line normally **stops a day or two short of today**, at your last
+  collection. Anything laid since is still in the nest as far as the app
+  knows, so it's left off rather than drawn as zero, which would make the
+  chart look like it fell off a cliff every time you hadn't been out yet.
+  The caption says how far short it stops.
+- The monthly chart and table now show **how many days each rate was
+  averaged over**, and months resting on fewer than 10 days get a hollow
+  point. That's usually the month you started logging — it only covers
+  from your first collection onwards, so it reads high next to a full
+  month instead of being comparable to one.
+
 ## 1.36.0
 
 - New **Eggs per day** chart on the Trends tab, with a matching **Per

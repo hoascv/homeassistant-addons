@@ -22,9 +22,10 @@ your chickens, right from your phone via the Home Assistant sidebar.
   egg-collection forecast based on your flock — and how that forecast
   would have performed in past months, so you can see how well it's
   tracking
-- Eggs-per-day chart on the same tab: how many eggs a day your flock is
-  actually laying each month, worked out so that it doesn't matter
-  whether you collect daily or every few days
+- Eggs-per-day charts on the same tab: how many eggs a day your flock is
+  actually laying, day by day over the last 14/30/90 days and by month,
+  worked out so that it doesn't matter whether you collect daily or every
+  few days
 - My Flock panel (🐔 icon): track individual chickens (name, photo, breed,
   hatch date) for an age-adjusted forecast, more accurate than flat
   per-breed counts — plus a per-chicken health history (vet visits,
@@ -301,6 +302,26 @@ Two consequences worth knowing:
 
 The dashed continuation past today is the same forecast as the chart
 above, expressed per day.
+
+Under each rate is the number of days it was actually averaged over, and
+months resting on fewer than 10 days get a **hollow point** on the chart.
+That's almost always the month you started logging: it only covers from
+your first collection onwards, so it reads high next to a full month
+rather than being comparable to one.
+
+### Eggs per day, recently
+
+Above the monthly chart, a **day-by-day** view of the last 14, 30 or 90
+days, for how your flock is laying *right now* — the monthly chart can't
+tell you that, since its current-month figure averages everything since
+the 1st.
+
+It's the same basis, just not grouped into months, so the flat stretches
+are the days a single collection covers. **The line normally stops a day
+or two short of today**, at your last collection: anything laid since is
+still in the nest as far as the app knows, and drawing it as zero would
+show the chart falling off a cliff every time you hadn't been out yet.
+The caption tells you how far short it stops.
 
 ### Advanced forecast (experimental)
 

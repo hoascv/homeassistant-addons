@@ -256,7 +256,8 @@ main {
 }
 
 #history-filter,
-#trends-range {
+#trends-range,
+#daily-eggs-range {
   border: 1px solid var(--border);
   background: var(--surface);
   color: var(--text);
@@ -926,6 +927,24 @@ img.chicken-avatar {
 .eggs-per-day h2 {
   font-size: 1rem;
   margin: 0 0 0.5rem;
+}
+
+.eggs-per-day .finances-header h2 {
+  margin: 0;
+}
+
+/* Its own line inside the cell rather than "(9 days)" alongside the
+   rate — the table is already 6 columns wide on a phone. */
+.eggs-per-day-coverage {
+  display: block;
+  font-size: 0.7em;
+  color: var(--text-muted);
+  opacity: 0.8;
+}
+
+.eggs-per-day-thin {
+  font-style: italic;
+  color: var(--text-muted);
 }
 
 .feeding-stats-summary h2 {

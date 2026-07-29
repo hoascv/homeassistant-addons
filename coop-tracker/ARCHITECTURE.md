@@ -612,7 +612,47 @@ stays fully accurate; only real abandonment trips it.
 `covered_days` ships alongside the rates rather than being dropped after
 the division, so the UI can tell how much of a month a figure rests on —
 a rate computed from 3 covered days is not the same claim as one from 30,
-and only the caller knows how much it wants to say about that.
+and only the caller knows how much it wants to say about that. The table
+prints it under each rate, and months under
+`EGGS_PER_DAY_MIN_COVERED_DAYS` (10, shipped in the response so
+"thinly-covered" has one definition) get a hollow marker on the chart
+rather than being hidden: the month you start logging typically has a
+week of coverage and reads high, and the honest problem there is the
+comparison against a full month next to it, not the number itself.
+
+### Day by day (v1.37.0)
+
+`_compute_daily_eggs` / `GET /api/trends/daily?days=` — the same
+attributed rate at daily resolution, ending today, because the monthly
+chart structurally cannot answer "how are they laying *now*": its last
+point averages everything since the 1st. Its own endpoint rather than
+more keys on `/api/trends`, since its window is days rather than the
+3/6/12-month selector and it reloads independently of it.
+
+The spreading rule itself is factored into `_attributed_eggs_by_day`
+(`{date: eggs}`, one entry per covered day, nothing for the rest) and
+both views consume it, so the two charts cannot drift apart on what a
+collection means. Absence in that dict is load-bearing — a missing date
+is one no collection speaks for, which callers must keep distinct from a
+day that yielded nothing.
+
+Nulls matter most at the right-hand edge here. The days since your last
+collection always land there, so drawing them as `0.0` would show every
+chart plunging to the floor at today purely because the eggs are still in
+the nest. The line stops at the last covered day with a deliberate end
+marker, and the caption names the trailing gap ("stops 3 days short of
+today") — without that, the edge reads as broken rendering rather than as
+the edge of what's known.
+
+**Why this isn't a rolling average**, which is the other obvious way to
+get a smooth recent view: over a stretch with no collection, a rolling
+window faces the same choice as everything else here — divide by the
+window (understating, reading a tracking gap as a bad flock) or divide by
+covered days (which is what this already does). Smoothing cannot
+manufacture coverage. Spreading already flattens each collection interval
+into a plateau, so the daily line is legible without a second smoothing
+pass, and the plateaus have the useful property of showing *exactly*
+which days rest on one collection.
 
 The forward projection reuses §9's rate directly: `_compute_forecast`
 already computes a per-day rate per future month before multiplying it by
