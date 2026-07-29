@@ -130,6 +130,40 @@ body {
 /* Garmin card: reuse the mini-stat tiles in a row */
 .garmin-tiles { display: flex; gap: 0.75rem; margin: 0.2rem 0 0.6rem; }
 .garmin-error { color: var(--danger); }
+/* Full-sentence warning, so it needs body-text contrast on both surfaces:
+   5.0:1 on white, 5.0:1 on the dark surface. */
+.garmin-warn { color: #b45309; }
+@media (prefers-color-scheme: dark) {
+  .garmin-warn { color: #f0a83a; }
+}
+.garmin-asof { font-size: 0.75rem; color: var(--text-muted); margin: 0.1rem 0 0.5rem; }
+
+/* Garmin daily history */
+.ghist-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 0.5rem; flex-wrap: wrap;
+}
+.ghist-metrics { display: flex; gap: 0.3rem; }
+.chip {
+  font-size: 0.72rem; padding: 0.2rem 0.55rem; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--border); background: var(--surface-2); color: var(--text-muted);
+}
+.chip-on { background: var(--accent-soft); color: var(--accent); border-color: transparent; font-weight: 600; }
+.ghist { display: flex; flex-direction: column; gap: 0.25rem; margin-bottom: 0.9rem; }
+.ghist-row {
+  display: grid; grid-template-columns: 3.4rem 1fr 4.6rem;
+  align-items: center; gap: 0.5rem; font-size: 0.78rem;
+}
+.ghist-day { color: var(--text-muted); }
+.ghist-bar { height: 0.55rem; background: var(--surface-2); border-radius: 999px; overflow: hidden; }
+.ghist-fill { display: block; height: 100%; background: var(--accent); border-radius: 999px; }
+/* Hatching, not a zero-length bar: a day with no data is missing, not empty. */
+.ghist-none {
+  display: block; height: 100%;
+  background: repeating-linear-gradient(45deg, var(--grid) 0 3px, transparent 3px 6px);
+}
+.ghist-val { text-align: right; font-variant-numeric: tabular-nums; }
+.ghist-gap .ghist-val { color: var(--text-muted); }
 
 /* Chart */
 .chart-figure { margin: 0.9rem 0 0.4rem; }

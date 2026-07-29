@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.8.0
+
+- **Garmin history, and honest handling of a watch that hasn't synced.** Your
+  watch only reaches Garmin when it syncs with the phone app, which can lag by
+  days. Three things went wrong with that before: a day Garmin had nothing for
+  was stored as a row of blanks that **overwrote data already synced**; days
+  that arrived more than 7 days late were never picked up at all; and the sheet
+  only showed when the *add-on* last talked to Garmin, not when the *watch*
+  last uploaded.
+  - Only metrics Garmin actually returns are written, so an unsynced watch can
+    no longer erase history you already have.
+  - Each sync now chases holes up to 60 days back (nearest first), so a
+    fortnight off the charger fills in rather than being lost.
+  - Days with nothing are remembered as holes instead of stored as zeros, and
+    are re-checked until your watch uploads again.
+- **Last 14 days in the ⌚ sheet.** Sleep, stress or Body Battery as a bar per
+  day. Days with nothing are drawn as hatched gaps, not zero-length bars, and
+  say which kind of gap they are: **not synced** (after your watch's last
+  upload) or **no data** (a day it wasn't worn).
+- **The sheet now shows when your watch last uploaded**, with a nudge when it's
+  been over ~36 hours, and the home card says **As of ‹date›** when the newest
+  numbers aren't from today.
+
 ## 1.7.0
 
 - **Expand the goal chart.** A ⤢ button on the chart opens it in a near

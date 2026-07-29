@@ -14,12 +14,32 @@ class _FakeClient:
     pass
 
 
-def _patch_data(monkeypatch, day_fields, activities):
-    """Make garmin_client return canned data for a sync."""
+def _patch_data(monkeypatch, day_fields, activities, days_with_data=None, device_upload=None):
+    """Make garmin_client return canned data for a sync.
+
+    `days_with_data` limits which YYYY-MM-DD strings have anything at all —
+    every other day answers the way Garmin does for a day the watch has not
+    uploaded: the fields are there but empty.
+    """
+    empty = {k: None for k in day_fields}
+
+    def _fetch_day(client, day):
+        if days_with_data is not None and day not in days_with_data:
+            return dict(empty)
+        return dict(day_fields)
+
     monkeypatch.setattr(gymapp.garmin_client, "is_connected", lambda: True)
     monkeypatch.setattr(gymapp.garmin_client, "get_client", lambda: _FakeClient())
-    monkeypatch.setattr(gymapp.garmin_client, "fetch_day", lambda client, day: dict(day_fields))
+    monkeypatch.setattr(gymapp.garmin_client, "fetch_day", _fetch_day)
     monkeypatch.setattr(gymapp.garmin_client, "fetch_activities", lambda client, s, e: list(activities))
+    monkeypatch.setattr(gymapp.garmin_client, "device_last_upload", lambda client: device_upload)
+
+
+def _recent_days(n=gymapp.GARMIN_SYNC_DAYS):
+    from datetime import date, timedelta
+
+    today = date.today()
+    return {(today - timedelta(days=i)).isoformat() for i in range(n)}
 
 
 # --- Schema ----------------------------------------------------------------
@@ -69,7 +89,7 @@ def test_sync_upserts_and_dedupes(conn, monkeypatch):
          "name": "Gym", "duration_sec": 2400, "distance_m": None, "calories": 250,
          "avg_hr": 120, "max_hr": 140},
     ]
-    _patch_data(monkeypatch, day_fields, activities)
+    _patch_data(monkeypatch, day_fields, activities, days_with_data=_recent_days())
 
     first = gymapp._garmin_do_sync(conn)
     assert first["days"] == gymapp.GARMIN_SYNC_DAYS  # one row per day in the window
@@ -220,3 +240,139 @@ def test_disconnect(client, monkeypatch):
     res = client.post("/api/garmin/disconnect")
     assert res.get_json()["status"] == "disconnected"
     assert dropped["v"] is True
+
+
+# --- An unsynced watch -----------------------------------------------------
+
+
+def test_empty_day_never_overwrites_stored_data(conn, monkeypatch):
+    # A day syncs fine...
+    day_fields = {"sleep_seconds": 27000, "stress_avg": 30, "body_battery_high": 90}
+    _patch_data(monkeypatch, day_fields, [], days_with_data=_recent_days())
+    gymapp._garmin_do_sync(conn)
+    stored = conn.execute("SELECT COUNT(*) FROM garmin_daily").fetchone()[0]
+
+    # ...then the watch falls behind and Garmin answers with empty fields.
+    _patch_data(monkeypatch, day_fields, [], days_with_data=set())
+    gymapp._garmin_do_sync(conn)
+
+    rows = conn.execute("SELECT sleep_seconds, stress_avg FROM garmin_daily").fetchall()
+    assert len(rows) == stored  # nothing dropped
+    assert all(r["sleep_seconds"] == 27000 and r["stress_avg"] == 30 for r in rows)
+
+
+def test_partial_day_keeps_the_metrics_that_stopped_coming(conn, monkeypatch):
+    _patch_data(
+        monkeypatch,
+        {"sleep_seconds": 27000, "stress_avg": 30, "body_battery_high": 90},
+        [],
+        days_with_data=_recent_days(),
+    )
+    gymapp._garmin_do_sync(conn)
+
+    # Sleep still reports, the other two go empty: the stored values stay.
+    _patch_data(
+        monkeypatch,
+        {"sleep_seconds": 30000, "stress_avg": None, "body_battery_high": None},
+        [],
+        days_with_data=_recent_days(),
+    )
+    gymapp._garmin_do_sync(conn)
+
+    row = conn.execute("SELECT * FROM garmin_daily ORDER BY day DESC LIMIT 1").fetchone()
+    assert row["sleep_seconds"] == 30000  # updated
+    assert row["stress_avg"] == 30 and row["body_battery_high"] == 90  # not erased
+
+
+def test_day_with_no_data_stores_no_row(conn, monkeypatch):
+    _patch_data(monkeypatch, {"sleep_seconds": 1, "stress_avg": 1}, [], days_with_data=set())
+    result = gymapp._garmin_do_sync(conn)
+
+    assert result["days"] == 0  # nothing imported, and it doesn't claim otherwise
+    assert conn.execute("SELECT COUNT(*) FROM garmin_daily").fetchone()[0] == 0
+    # The days are remembered as holes, so they can be chased later.
+    assert conn.execute("SELECT COUNT(*) FROM garmin_day_probe").fetchone()[0] > 0
+
+
+def test_backfills_days_older_than_the_refresh_window(conn, monkeypatch):
+    from datetime import date, timedelta
+
+    # The watch was off the charger for a fortnight and has just caught up, so
+    # days 7-13 back — outside the refresh window — now have data.
+    today = date.today()
+    late = {(today - timedelta(days=i)).isoformat() for i in range(7, 14)}
+    _patch_data(monkeypatch, {"sleep_seconds": 25000}, [], days_with_data=late)
+
+    result = gymapp._garmin_do_sync(conn)
+
+    assert result["days"] == 0  # nothing in the trailing window
+    assert result["backfilled"] == len(late)
+    stored = {r["day"] for r in conn.execute("SELECT day FROM garmin_daily")}
+    assert stored == late
+
+
+def test_holes_stop_being_re_asked_until_the_watch_uploads(conn, monkeypatch):
+    calls = []
+
+    def _track(client, day):
+        calls.append(day)
+        return {"sleep_seconds": None}
+
+    monkeypatch.setattr(gymapp.garmin_client, "is_connected", lambda: True)
+    monkeypatch.setattr(gymapp.garmin_client, "get_client", lambda: _FakeClient())
+    monkeypatch.setattr(gymapp.garmin_client, "fetch_activities", lambda client, s, e: [])
+    monkeypatch.setattr(gymapp.garmin_client, "fetch_day", _track)
+    monkeypatch.setattr(gymapp.garmin_client, "device_last_upload", lambda client: "2026-07-01T08:00:00")
+
+    # Sync until the backfill has swept the whole window and gone quiet. It
+    # walks outwards GARMIN_BACKFILL_MAX days at a time, re-asking each hole
+    # GARMIN_PROBE_ATTEMPTS times, so this takes a bounded number of passes.
+    for _ in range(200):
+        calls.clear()
+        gymapp._garmin_do_sync(conn)
+        if len(calls) == gymapp.GARMIN_SYNC_DAYS:
+            break
+    else:
+        raise AssertionError("backfill never went quiet")
+
+    # Same watch upload as before: nothing but the trailing window is touched.
+    calls.clear()
+    gymapp._garmin_do_sync(conn)
+    assert len(calls) == gymapp.GARMIN_SYNC_DAYS
+
+    # The watch uploads again -> the holes are worth another look.
+    monkeypatch.setattr(gymapp.garmin_client, "device_last_upload", lambda client: "2026-07-20T09:00:00")
+    calls.clear()
+    gymapp._garmin_do_sync(conn)
+    assert len(calls) > gymapp.GARMIN_SYNC_DAYS
+
+
+def test_status_reports_when_the_watch_last_uploaded(client, conn, monkeypatch):
+    _patch_data(
+        monkeypatch,
+        {"sleep_seconds": 27000},
+        [],
+        days_with_data=_recent_days(),
+        device_upload="2026-07-28T21:14:00",
+    )
+    gymapp._garmin_do_sync(conn)
+
+    status = client.get("/api/garmin/status").get_json()
+    assert status["device_last_upload"] == "2026-07-28T21:14:00"
+
+
+def test_device_last_upload_parses_garmin_epoch_millis(monkeypatch):
+    from datetime import datetime
+
+    class _C:
+        def get_device_last_used(self):
+            return {"lastUsedDeviceUploadTime": 1785312840000}
+
+    got = gymapp.garmin_client.device_last_upload(_C())
+    assert got == datetime.fromtimestamp(1785312840).isoformat(timespec="seconds")
+
+    class _Broken:
+        def get_device_last_used(self):
+            raise RuntimeError("garmin said no")
+
+    assert gymapp.garmin_client.device_last_upload(_Broken()) is None

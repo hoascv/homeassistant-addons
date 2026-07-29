@@ -97,6 +97,7 @@
       <div class="mini-stat"><span class="mini-value" id="garmin-stress">–</span><span class="mini-label">Stress</span></div>
       <div class="mini-stat"><span class="mini-value" id="garmin-battery">–</span><span class="mini-label">Body Battery</span></div>
     </div>
+    <p class="garmin-asof" id="garmin-asof" hidden></p>
     <ul class="workout-list" id="garmin-activity-list"></ul>
     <p class="empty-state" id="garmin-empty">Connect Garmin to see your sleep, stress, Body Battery and activities.</p>
   </section>
@@ -335,6 +336,16 @@
 
     <!-- Shown when connected -->
     <div id="garmin-connected" hidden>
+      <div class="ghist-head">
+        <h3 class="subhead">Last 14 days</h3>
+        <div class="ghist-metrics" id="garmin-metric-chips" role="group" aria-label="Metric">
+          <button type="button" class="chip chip-on" data-metric="sleep">Sleep</button>
+          <button type="button" class="chip" data-metric="stress">Stress</button>
+          <button type="button" class="chip" data-metric="battery">Body Battery</button>
+        </div>
+      </div>
+      <div class="ghist" id="garmin-history"></div>
+
       <div class="form-actions">
         <button type="button" class="btn-primary" id="garmin-sync-btn">Sync now</button>
         <button type="button" class="btn-secondary" id="garmin-disconnect-btn">Disconnect</button>

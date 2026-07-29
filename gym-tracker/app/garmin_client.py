@@ -13,6 +13,7 @@ the first connect the background sync just reloads them.
 import os
 import shutil
 import threading
+from datetime import datetime
 
 # garth dumps these two files into the token directory; their presence is how
 # we tell "connected" from "not connected" without constructing a client.
@@ -156,6 +157,32 @@ def _body_battery_fields(client, day):
         }
     except Exception:  # noqa: BLE001
         return {}
+
+
+def device_last_upload(client):
+    """When the watch itself last uploaded to Garmin Connect, as a local ISO
+    string (Garmin reports epoch milliseconds).
+
+    This is the difference between "Garmin has no data for that day" and "the
+    watch hasn't told Garmin about that day yet" — the add-on can talk to
+    Garmin successfully every hour and still be looking at a watch that last
+    uploaded on Tuesday.
+    """
+    try:
+        data = client.get_device_last_used() or {}
+    except Exception:  # noqa: BLE001 - never let this sink a sync
+        return None
+    raw = data.get("lastUsedDeviceUploadTime")
+    if raw is None:
+        return None
+    if isinstance(raw, bool):
+        return None
+    if isinstance(raw, (int, float)):
+        try:
+            return datetime.fromtimestamp(raw / 1000).isoformat(timespec="seconds")
+        except (OverflowError, OSError, ValueError):
+            return None
+    return str(raw)
 
 
 def fetch_day(client, day):

@@ -1374,6 +1374,18 @@ function prettyActivityType(t) {
   return t.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
+// Rough "how long ago", for sync freshness. Accepts a date or a timestamp.
+function fmtAgo(iso) {
+  const then = new Date(iso.length <= 10 ? `${iso}T12:00:00` : iso);
+  if (isNaN(then)) return "";
+  const mins = Math.round((Date.now() - then.getTime()) / 60000);
+  if (mins < 2) return "just now";
+  if (mins < 60) return `${mins} min ago`;
+  const hours = Math.round(mins / 60);
+  if (hours < 36) return `${hours}h ago`;
+  return `${Math.round(hours / 24)} days ago`;
+}
+
 // Populate the home card from api/garmin/summary.
 async function loadGarminCard() {
   const tiles = document.getElementById("garmin-tiles");
@@ -1386,6 +1398,12 @@ async function loadGarminCard() {
   cardBtn.textContent = data.connected ? "Manage" : "Connect";
   const d = data.latest;
   const hasContent = data.connected && (d || (data.activities || []).length);
+
+  // A watch that hasn't uploaded leaves the newest stored day sitting in the
+  // past; showing it undated would read as "today".
+  const asOf = document.getElementById("garmin-asof");
+  asOf.hidden = !(d && d.day && d.day !== todayISO());
+  if (!asOf.hidden) asOf.textContent = `As of ${fmtDate(d.day)} · ${fmtAgo(d.day)}`;
 
   tiles.hidden = !d;
   if (d) {
@@ -1413,18 +1431,99 @@ async function loadGarminCard() {
   else if (!hasContent) empty.textContent = "Connected. Press Sync to pull your latest Garmin data.";
 }
 
+// The three stored daily metrics, one shown at a time. Only one series is on
+// screen at once, so colour carries no identity here — the chip does.
+const GARMIN_METRICS = {
+  sleep: { key: "sleep_seconds", max: 9 * 3600, fmt: (v) => fmtDuration(v) },
+  stress: { key: "stress_avg", max: 100, fmt: (v) => `${v}` },
+  battery: { key: "body_battery_high", max: 100, fmt: (v) => `${v}` },
+};
+const GARMIN_HISTORY_DAYS = 14;
+let garminMetric = "sleep";
+let garminDeviceUpload = null;
+
+// A day with nothing stored is drawn as a gap, never as a zero-length bar —
+// and it says which kind of nothing it is: a day the watch hasn't uploaded yet
+// reads differently from a day the watch simply wasn't worn.
+async function renderGarminHistory() {
+  const host = document.getElementById("garmin-history");
+  const from = new Date(Date.now() - (GARMIN_HISTORY_DAYS - 1) * 86400000)
+    .toISOString()
+    .slice(0, 10);
+  let rows;
+  try {
+    rows = await fetchJSON(`api/garmin/daily?from=${from}`);
+  } catch (e) {
+    host.innerHTML = "";
+    return;
+  }
+  const byDay = new Map((rows || []).map((r) => [r.day, r]));
+  const metric = GARMIN_METRICS[garminMetric];
+  const uploadedThrough = garminDeviceUpload ? garminDeviceUpload.slice(0, 10) : null;
+
+  const values = (rows || []).map((r) => r[metric.key]).filter((v) => v != null);
+  const scale = Math.max(metric.max, ...values) || 1;
+
+  const out = [];
+  for (let i = 0; i < GARMIN_HISTORY_DAYS; i++) {
+    const day = new Date(Date.now() - i * 86400000).toISOString().slice(0, 10);
+    const row = byDay.get(day);
+    const value = row ? row[metric.key] : null;
+    const label = `<span class="ghist-day">${escapeHtml(fmtDate(day))}</span>`;
+    if (value == null) {
+      const why = uploadedThrough && day > uploadedThrough ? "not synced" : "no data";
+      out.push(
+        `<div class="ghist-row ghist-gap">${label}` +
+          `<span class="ghist-bar"><span class="ghist-none"></span></span>` +
+          `<span class="ghist-val">${why}</span></div>`
+      );
+    } else {
+      const pct = Math.max(2, Math.min(100, (value / scale) * 100));
+      out.push(
+        `<div class="ghist-row">${label}` +
+          `<span class="ghist-bar"><span class="ghist-fill" style="width:${pct}%"></span></span>` +
+          `<span class="ghist-val">${escapeHtml(metric.fmt(value))}</span></div>`
+      );
+    }
+  }
+  host.innerHTML = out.join("");
+}
+
+document.getElementById("garmin-metric-chips").addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-metric]");
+  if (!btn) return;
+  garminMetric = btn.dataset.metric;
+  document.querySelectorAll("#garmin-metric-chips .chip").forEach((c) => {
+    c.classList.toggle("chip-on", c === btn);
+  });
+  renderGarminHistory();
+});
+
 // Populate the Garmin sheet (status + which controls to show).
 async function loadGarmin() {
   let data;
   try { data = await fetchJSON("api/garmin/status"); } catch (e) { return; }
+  garminDeviceUpload = data.device_last_upload || null;
   const badge = (on) => `<span class="badge ${on ? "badge-on" : "badge-off"}">${on ? "Connected" : "Not connected"}</span>`;
   const parts = [`<div class="reminder-line">${badge(data.connected)}<span>Garmin account</span></div>`];
   if (data.connected) {
     const last = data.last_sync ? fmtDateTime(data.last_sync) : "never";
     parts.push(`<div class="reminder-line"><span>Last sync: ${escapeHtml(last)}${data.auto_sync ? ` · auto every ${data.interval_hours}h` : " · auto-sync off"}</span></div>`);
+    // The add-on can be syncing happily against a watch that stopped
+    // uploading days ago, so the two are reported separately.
+    if (data.device_last_upload) {
+      const ago = fmtAgo(data.device_last_upload);
+      const stale = Date.now() - new Date(data.device_last_upload).getTime() > 36 * 3600 * 1000;
+      parts.push(
+        `<div class="reminder-line"><span${stale ? ' class="garmin-warn"' : ""}>` +
+          `Watch last uploaded: ${escapeHtml(fmtDateTime(data.device_last_upload))} · ${escapeHtml(ago)}` +
+          `${stale ? " — sync your watch to fill the gap" : ""}</span></div>`
+      );
+    }
     if (data.last_error) parts.push(`<div class="reminder-line"><span class="garmin-error">Last error: ${escapeHtml(data.last_error)}</span></div>`);
   }
   document.getElementById("garmin-status").innerHTML = parts.join("");
+  if (data.connected) renderGarminHistory();
 
   document.getElementById("garmin-login-form").hidden = data.connected;
   document.getElementById("garmin-connected").hidden = !data.connected;
@@ -1504,7 +1603,8 @@ document.getElementById("garmin-sync-btn").addEventListener("click", async () =>
   try {
     const res = await fetchJSON("api/garmin/sync", { method: "POST" });
     const imp = res.imported || {};
-    result.textContent = `Synced ${imp.days || 0} days, ${imp.activities || 0} activities.`;
+    const back = imp.backfilled ? `, ${imp.backfilled} backfilled` : "";
+    result.textContent = `Synced ${imp.days || 0} days${back}, ${imp.activities || 0} activities.`;
     loadGarmin();
     loadGarminCard();
   } catch (err) {

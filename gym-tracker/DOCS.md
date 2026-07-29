@@ -145,10 +145,34 @@ normally only sign in once.
 
 Once connected, Gym Tracker syncs automatically in the background (every
 `garmin_sync_interval_hours`, default 6), and the ⌚ sheet has a **Sync now**
-button for an immediate pull. Each sync fetches the last several days, so any
-gaps backfill on their own. The home **Garmin** card shows your latest sleep,
+button for an immediate pull. The home **Garmin** card shows your latest sleep,
 stress and Body Battery, plus recent activities. Use **Disconnect** to remove
 the stored token; already-imported data stays.
+
+### History, and a watch that hasn't synced
+
+Every day pulled is kept, building up a history you can scroll back through —
+the ⌚ sheet charts the **last 14 days** of sleep, stress or Body Battery.
+
+Your watch only reaches Garmin when it syncs with the Garmin Connect phone
+app, which can lag by days. Gym Tracker treats that as normal rather than as
+missing data:
+
+- Each sync refreshes the last **7 days** and then chases any **holes** up to
+  **60 days** back, so days that arrive late still land in your history. A
+  fortnight off the charger fills in on the next sync.
+- A day Garmin has nothing for is **never stored as zeros**, and a day already
+  synced is never overwritten with blanks — so an unsynced watch can't erase
+  history you already have.
+- The sheet shows when your **watch last uploaded**, separately from when the
+  add-on last talked to Garmin. Those are different things: the add-on can sync
+  happily every 6 hours against a watch that stopped uploading on Tuesday.
+- In the history, days after that last upload read **not synced**; earlier days
+  with nothing read **no data** (a day the watch wasn't worn). The home card
+  says **As of ‹date›** whenever the newest numbers aren't from today.
+
+Empty days are re-checked a few times and then left alone until your watch
+uploads again, which is the only thing that can turn them into real data.
 
 This is the only feature that contacts an external service. It uses Garmin's
 unofficial API, so an occasional sync error (shown in the sheet) is normal;

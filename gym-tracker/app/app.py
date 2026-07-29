@@ -18,7 +18,7 @@ from flask import Flask, Response, g, jsonify, render_template, request, send_fi
 
 import garmin_client
 
-APP_VERSION = "1.7.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.8.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("GYM_DB_PATH", "/data/gym.db")
 OPTIONS_PATH = os.environ.get("GYM_OPTIONS_PATH", "/data/options.json")
@@ -344,6 +344,20 @@ def init_db():
         )
         """
     )
+    # Days Garmin was asked about and had nothing for. Kept out of
+    # garmin_daily on purpose: a day with no data must never be stored as a
+    # day of zeros. Tracking the attempts here is what stops the backfill
+    # re-asking about the same empty days forever.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS garmin_day_probe (
+            day TEXT PRIMARY KEY,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            last_attempt TEXT,
+            device_upload TEXT
+        )
+        """
+    )
     # Garmin activities, keyed by Garmin's own activity id (natural dedup key).
     conn.execute(
         """
@@ -579,16 +593,34 @@ def _resolve_ts(day):
 
 # --- Garmin Connect sync ---
 
-# How many trailing days each sync pulls. A rolling window (rather than "since
-# last sync") means transient gaps or late-arriving data self-heal.
+# How many trailing days each sync refreshes. A rolling window (rather than
+# "since last sync") means transient gaps or late-arriving data self-heal.
 GARMIN_SYNC_DAYS = 7
+# ...but a watch that goes unsynced for longer than that window would otherwise
+# lose those days for good, so each sync also chases holes further back.
+GARMIN_BACKFILL_DAYS = 60
+# Holes filled per sync, nearest-first: a fortnight off the charger heals on the
+# next sync, while older history fills in over the following few.
+GARMIN_BACKFILL_MAX = 10
+# How many times a hole is re-asked about before it waits for the watch to
+# upload again.
+GARMIN_PROBE_ATTEMPTS = 3
 
 
 def _garmin_upsert_day(conn, day, fields):
-    if not fields:
-        return
-    cols = ["day", "synced_at"] + list(fields.keys())
-    vals = [day, datetime.now().isoformat(timespec="seconds")] + list(fields.values())
+    """Store the metrics Garmin actually returned for `day`. Returns True if
+    anything was stored.
+
+    Only non-null metrics are written. When the watch hasn't uploaded yet
+    Garmin answers with the fields present but empty, and writing those would
+    erase a day already synced — so a missing metric leaves the stored one
+    alone instead of nulling it.
+    """
+    present = {k: v for k, v in (fields or {}).items() if v is not None}
+    if not present:
+        return False
+    cols = ["day", "synced_at"] + list(present.keys())
+    vals = [day, datetime.now().isoformat(timespec="seconds")] + list(present.values())
     placeholders = ", ".join("?" for _ in cols)
     updates = ", ".join(f"{c} = excluded.{c}" for c in cols if c != "day")
     conn.execute(
@@ -596,6 +628,57 @@ def _garmin_upsert_day(conn, day, fields):
         f"ON CONFLICT(day) DO UPDATE SET {updates}",
         vals,
     )
+    return True
+
+
+def _garmin_record_probe(conn, day, device_upload):
+    conn.execute(
+        "INSERT INTO garmin_day_probe (day, attempts, last_attempt, device_upload) "
+        "VALUES (?, 1, ?, ?) "
+        "ON CONFLICT(day) DO UPDATE SET attempts = attempts + 1, "
+        "last_attempt = excluded.last_attempt, device_upload = excluded.device_upload",
+        (day, datetime.now().isoformat(timespec="seconds"), device_upload),
+    )
+
+
+def _garmin_sync_one_day(conn, client, day, device_upload):
+    """Fetch one day and store whatever came back. A day that yields nothing is
+    recorded as a probe rather than as an empty row, so it stays a known hole."""
+    fields = garmin_client.fetch_day(client, day)
+    if _garmin_upsert_day(conn, day, fields):
+        conn.execute("DELETE FROM garmin_day_probe WHERE day = ?", (day,))
+        return True
+    _garmin_record_probe(conn, day, device_upload)
+    return False
+
+
+def _garmin_backfill_days(conn, today, device_upload):
+    """Days behind the refresh window that still have nothing stored, nearest
+    day first, capped at GARMIN_BACKFILL_MAX.
+
+    A hole is re-asked about a few times and then left alone until the watch
+    uploads again — an upload is the only thing that can turn a permanently
+    empty day (one the watch wasn't worn) into a day with data, so it is what
+    re-opens the retries.
+    """
+    have = {r["day"] for r in conn.execute("SELECT day FROM garmin_daily")}
+    probes = {r["day"]: r for r in conn.execute("SELECT * FROM garmin_day_probe")}
+    out = []
+    for offset in range(GARMIN_SYNC_DAYS, GARMIN_BACKFILL_DAYS + 1):
+        day = (today - timedelta(days=offset)).isoformat()
+        if day in have:
+            continue
+        probe = probes.get(day)
+        if (
+            probe
+            and probe["attempts"] >= GARMIN_PROBE_ATTEMPTS
+            and (probe["device_upload"] or "") == (device_upload or "")
+        ):
+            continue
+        out.append(day)
+        if len(out) >= GARMIN_BACKFILL_MAX:
+            break
+    return out
 
 
 def _garmin_upsert_activity(conn, a):
@@ -613,27 +696,38 @@ def _garmin_upsert_activity(conn, a):
 
 
 def _garmin_do_sync(conn):
-    """Pull the trailing GARMIN_SYNC_DAYS of wellness data + activities into the
-    DB (idempotent upserts). Returns {"days": n, "activities": m}. Records the
-    last-sync timestamp; on failure records the error and re-raises."""
+    """Refresh the trailing GARMIN_SYNC_DAYS of wellness data, chase any holes
+    behind that window, and pull activities over the whole span (idempotent
+    upserts). Returns {"days": n, "backfilled": n, "activities": m}. Records
+    the last-sync timestamp; on failure records the error and re-raises."""
     try:
         client = garmin_client.get_client()
         today = date.today()
+        # Fetched once per sync: every day stored or probed is stamped with the
+        # watch upload it was fetched under.
+        device_upload = garmin_client.device_last_upload(client)
         start = today - timedelta(days=GARMIN_SYNC_DAYS - 1)
         days = 0
         for offset in range(GARMIN_SYNC_DAYS):
             d = (start + timedelta(days=offset)).isoformat()
-            fields = garmin_client.fetch_day(client, d)
-            if fields:
-                _garmin_upsert_day(conn, d, fields)
+            if _garmin_sync_one_day(conn, client, d, device_upload):
                 days += 1
-        activities = garmin_client.fetch_activities(client, start.isoformat(), today.isoformat())
+        backfilled = 0
+        holes = _garmin_backfill_days(conn, today, device_upload)
+        for d in holes:
+            if _garmin_sync_one_day(conn, client, d, device_upload):
+                backfilled += 1
+        # One activities call covering the refresh window and any holes: they
+        # are keyed by Garmin's own id, so a wider range just re-upserts.
+        act_start = min([start.isoformat()] + holes)
+        activities = garmin_client.fetch_activities(client, act_start, today.isoformat())
         for a in activities:
             _garmin_upsert_activity(conn, a)
         conn.commit()
         _set_app_state(conn, "garmin_last_sync", datetime.now().isoformat(timespec="seconds"))
+        _set_app_state(conn, "garmin_device_last_upload", device_upload or "")
         _set_app_state(conn, "garmin_last_error", "")
-        return {"days": days, "activities": len(activities)}
+        return {"days": days, "backfilled": backfilled, "activities": len(activities)}
     except Exception as e:  # noqa: BLE001 - surface the message, never crash the caller
         _set_app_state(conn, "garmin_last_error", str(e))
         raise
@@ -1738,6 +1832,9 @@ def _garmin_status_payload(db):
     return {
         "connected": garmin_client.is_connected(),
         "last_sync": _get_app_state(db, "garmin_last_sync"),
+        # When the watch last uploaded to Garmin, which is not the same thing
+        # as when this add-on last talked to Garmin.
+        "device_last_upload": _get_app_state(db, "garmin_device_last_upload") or None,
         "last_error": _get_app_state(db, "garmin_last_error") or None,
         "auto_sync": cfg["auto_sync"],
         "interval_hours": cfg["interval_hours"],
@@ -1781,6 +1878,7 @@ def api_garmin_disconnect():
     garmin_client.disconnect()
     db = get_db()
     _set_app_state(db, "garmin_last_sync", "")
+    _set_app_state(db, "garmin_device_last_upload", "")
     _set_app_state(db, "garmin_last_error", "")
     return jsonify({"status": "disconnected"})
 
