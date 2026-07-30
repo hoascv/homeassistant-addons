@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.14.0
+
+- **A weigh-in's date can be edited.** The date field in the edit form was
+  being ignored — the update never touched the timestamp — so a weigh-in filed
+  against the wrong day could not be corrected. Workout entries had the same
+  defect in reverse: editing one that was logged today restamped it with the
+  time you did the editing. Both now re-date only when the date actually
+  changes, and leave the recorded time alone otherwise.
+- **How far back Garmin gaps are chased is now configurable**, via
+  **garmin_backfill_days** (7–730, default 60). Garmin keeps your history
+  indefinitely, so raising this is how you pull in days from before the add-on
+  was installed — it fills in over the following syncs, ten days at a time.
+  The ⌚ sheet shows the reach it is currently using.
+
 ## 1.13.2
 
 - **A challenge that finished on a perfect run no longer reports a streak of

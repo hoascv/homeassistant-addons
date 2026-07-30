@@ -1744,6 +1744,9 @@ async function loadGarmin() {
   if (data.connected) {
     const last = data.last_sync ? fmtDateTime(data.last_sync) : "never";
     parts.push(`<div class="reminder-line"><span>Last sync: ${escapeHtml(last)}${data.auto_sync ? ` · auto every ${data.interval_hours}h` : " · auto-sync off"}</span></div>`);
+    if (data.backfill_days) {
+      parts.push(`<div class="reminder-line"><span class="muted">Filling gaps up to ${data.backfill_days} days back</span></div>`);
+    }
     // The add-on can be syncing happily against a watch that stopped
     // uploading days ago, so the two are reported separately.
     if (data.device_last_upload) {

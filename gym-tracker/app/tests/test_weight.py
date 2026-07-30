@@ -205,3 +205,34 @@ def test_migration_marks_old_midday_rows_inexact(db_path):
     ).fetchone()
     conn2.close()
     assert seeded[0] == 0  # the seeded starting weight is a stand-in, not a weigh-in
+
+
+def test_editing_a_weigh_in_can_change_its_date(client, conn):
+    wid = client.post("/api/weight", json={"weight_kg": 100.0, "date": "2026-07-10"}).get_json()["id"]
+
+    client.put(f"/api/weight/{wid}", json={"weight_kg": 100.0, "date": "2026-07-12"})
+
+    row = conn.execute("SELECT ts, ts_exact FROM weight_logs WHERE id = ?", (wid,)).fetchone()
+    assert row["ts"] == "2026-07-12T12:00:00"
+    assert row["ts_exact"] == 0
+
+
+def test_editing_without_moving_the_date_keeps_the_recorded_time(client, conn):
+    from datetime import date
+
+    wid = client.post("/api/weight", json={"weight_kg": 100.0, "date": date.today().isoformat()}).get_json()["id"]
+    before = conn.execute("SELECT ts, ts_exact FROM weight_logs WHERE id = ?", (wid,)).fetchone()
+    assert before["ts_exact"] == 1
+
+    # Editing the note re-sends the same date; the original time must survive.
+    client.put(f"/api/weight/{wid}", json={
+        "weight_kg": 100.0, "date": date.today().isoformat(), "notes": "after coffee",
+    })
+    after = conn.execute("SELECT ts, ts_exact FROM weight_logs WHERE id = ?", (wid,)).fetchone()
+    assert after["ts"] == before["ts"] and after["ts_exact"] == 1
+
+
+def test_editing_a_weigh_in_rejects_a_bad_date(client):
+    wid = client.post("/api/weight", json={"weight_kg": 100.0}).get_json()["id"]
+    r = client.put(f"/api/weight/{wid}", json={"weight_kg": 100.0, "date": "12-07-2026"})
+    assert r.status_code == 400

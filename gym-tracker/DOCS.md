@@ -206,7 +206,7 @@ never a zero — and a later sync fills it in, up to 21 days back.
 ### When things are timestamped
 
 Logging a weigh-in or an exercise **today** records the moment. Filing one
-against an **earlier day** stores it at midday, because there's no way to know
+against an **earlier day** — or moving an existing entry to one — stores it at midday, because there's no way to know
 when it happened — those rows carry `ts_exact = 0` in the database, and are
 skipped when heart rate is worked out rather than being given one from the
 wrong window. Rows recorded before this behaviour existed are all marked
@@ -231,9 +231,9 @@ Your watch only reaches Garmin when it syncs with the Garmin Connect phone
 app, which can lag by days. Gym Tracker treats that as normal rather than as
 missing data:
 
-- Each sync refreshes the last **7 days** and then chases any **holes** up to
-  **60 days** back, so days that arrive late still land in your history. A
-  fortnight off the charger fills in on the next sync.
+- Each sync refreshes the last **7 days** and then chases any **holes** as far
+  back as **garmin_backfill_days** (default 60), so days that arrive late still
+  land in your history. A fortnight off the charger fills in on the next sync.
 - A day Garmin has nothing for is **never stored as zeros**, and a day already
   synced is never overwritten with blanks — so an unsynced watch can't erase
   history you already have.
@@ -281,6 +281,10 @@ the next sync usually recovers.
 - **garmin_hr_window_minutes**: how far back from an exercise's log time to
   read heart rate when the entry has no duration of its own, 5–180 (default
   `30`).
+- **garmin_backfill_days**: how far back to chase missing Garmin days, 7–730
+  (default `60`). Garmin keeps your history indefinitely, so raising this pulls
+  in days from before you installed the add-on; they fill in over the next few
+  syncs rather than all at once.
 
 ## Backup & restore
 

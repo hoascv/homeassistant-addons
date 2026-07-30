@@ -705,3 +705,43 @@ def test_heart_rate_is_skipped_when_the_time_is_only_a_placeholder(conn, monkeyp
     assert conn.execute(
         "SELECT hr_avg FROM workout_logs WHERE id = ?", (wid,)
     ).fetchone()["hr_avg"] is None
+
+
+def test_backfill_horizon_is_configurable(conn, monkeypatch, set_options):
+    from datetime import date, timedelta
+
+    # Reach back further than the 60-day default, to pull in history from
+    # before the add-on was installed.
+    set_options(garmin_backfill_days=200)
+    today = date.today()
+    old_day = (today - timedelta(days=150)).isoformat()
+    _patch_data(monkeypatch, {"sleep_seconds": 25000}, [], days_with_data={old_day})
+
+    for _ in range(60):  # it walks outwards a batch at a time
+        gymapp._garmin_do_sync(conn)
+        if conn.execute("SELECT COUNT(*) FROM garmin_daily WHERE day = ?", (old_day,)).fetchone()[0]:
+            break
+    else:
+        raise AssertionError("the horizon never reached 150 days back")
+
+    assert gymapp.get_garmin_config()["backfill_days"] == 200
+
+
+def test_backfill_horizon_is_clamped(set_options):
+    set_options(garmin_backfill_days=99999)
+    assert gymapp.get_garmin_config()["backfill_days"] == 730
+    set_options(garmin_backfill_days="nonsense")
+    assert gymapp.get_garmin_config()["backfill_days"] == gymapp.GARMIN_BACKFILL_DAYS
+
+
+def test_default_horizon_does_not_reach_beyond_sixty_days(conn, monkeypatch):
+    from datetime import date, timedelta
+
+    today = date.today()
+    old_day = (today - timedelta(days=150)).isoformat()
+    _patch_data(monkeypatch, {"sleep_seconds": 25000}, [], days_with_data={old_day})
+    for _ in range(30):
+        gymapp._garmin_do_sync(conn)
+    assert conn.execute(
+        "SELECT COUNT(*) FROM garmin_daily WHERE day = ?", (old_day,)
+    ).fetchone()[0] == 0

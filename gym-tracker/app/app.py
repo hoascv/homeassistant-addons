@@ -18,7 +18,7 @@ from flask import Flask, Response, g, jsonify, render_template, request, send_fi
 
 import garmin_client
 
-APP_VERSION = "1.13.2"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.14.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("GYM_DB_PATH", "/data/gym.db")
 OPTIONS_PATH = os.environ.get("GYM_OPTIONS_PATH", "/data/options.json")
@@ -172,11 +172,18 @@ def get_garmin_config():
         hr_window = int(opts.get("garmin_hr_window_minutes", 30))
     except (TypeError, ValueError):
         hr_window = 30
+    try:
+        backfill = int(opts.get("garmin_backfill_days", GARMIN_BACKFILL_DAYS))
+    except (TypeError, ValueError):
+        backfill = GARMIN_BACKFILL_DAYS
     return {
         "auto_sync": bool(opts.get("garmin_auto_sync", True)),
         "interval_hours": max(1, interval),
         # Window used for an entry that carries no duration of its own.
         "hr_window_minutes": min(180, max(5, hr_window)),
+        # How far back holes are chased. Garmin keeps your history
+        # indefinitely, so this is only a limit on how much we ask for.
+        "backfill_days": min(730, max(7, backfill)),
     }
 
 
@@ -739,6 +746,22 @@ def _opt_float(data, key):
         raise ValueError(key)
 
 
+def _redate_ts(existing_ts, existing_exact, day):
+    """Work out the timestamp for an edited entry. Returns (ts, exact, error).
+
+    Changing the date re-resolves the timestamp; leaving it alone keeps the
+    original, so editing a note on something logged at 07:41 today doesn't
+    quietly restamp it with the time you did the editing.
+    """
+    day = (day or "").strip()
+    if not day or day == (existing_ts or "")[:10]:
+        return existing_ts, existing_exact, None
+    ts, exact, err = _resolve_ts(day)
+    if err:
+        return None, None, err
+    return ts, exact, None
+
+
 def _resolve_ts(day):
     """Turn an optional YYYY-MM-DD into a stored timestamp. Returns
     (ts, exact, None) or (None, None, error-message).
@@ -768,7 +791,9 @@ def _resolve_ts(day):
 # "since last sync") means transient gaps or late-arriving data self-heal.
 GARMIN_SYNC_DAYS = 7
 # ...but a watch that goes unsynced for longer than that window would otherwise
-# lose those days for good, so each sync also chases holes further back.
+# lose those days for good, so each sync also chases holes further back. This is
+# the default reach; `garmin_backfill_days` overrides it, and raising it is how
+# you pull in history from before the add-on was installed.
 GARMIN_BACKFILL_DAYS = 60
 # Holes filled per sync, nearest-first: a fortnight off the charger heals on the
 # next sync, while older history fills in over the following few.
@@ -838,7 +863,7 @@ def _garmin_sync_one_day(conn, client, day, device_upload):
     return stored
 
 
-def _garmin_backfill_days(conn, today, device_upload):
+def _garmin_backfill_days(conn, today, device_upload, horizon=None):
     """Days behind the refresh window that are still missing data, nearest day
     first, capped at GARMIN_BACKFILL_MAX.
 
@@ -856,7 +881,7 @@ def _garmin_backfill_days(conn, today, device_upload):
     }
     probes = {r["day"]: r for r in conn.execute("SELECT * FROM garmin_day_probe")}
     out = []
-    for offset in range(GARMIN_SYNC_DAYS, GARMIN_BACKFILL_DAYS + 1):
+    for offset in range(GARMIN_SYNC_DAYS, (horizon or GARMIN_BACKFILL_DAYS) + 1):
         day = (today - timedelta(days=offset)).isoformat()
         if day in have:
             continue
@@ -998,7 +1023,9 @@ def _garmin_do_sync(conn):
             if _garmin_sync_one_day(conn, client, d, device_upload):
                 days += 1
         backfilled = 0
-        holes = _garmin_backfill_days(conn, today, device_upload)
+        holes = _garmin_backfill_days(
+            conn, today, device_upload, get_garmin_config()["backfill_days"]
+        )
         for d in holes:
             if _garmin_sync_one_day(conn, client, d, device_upload):
                 backfilled += 1
@@ -1614,7 +1641,10 @@ def api_add_weight():
 def api_update_weight(log_id):
     data = request.get_json(force=True, silent=True) or {}
     db = get_db()
-    if db.execute("SELECT 1 FROM weight_logs WHERE id = ?", (log_id,)).fetchone() is None:
+    existing = db.execute(
+        "SELECT ts, ts_exact FROM weight_logs WHERE id = ?", (log_id,)
+    ).fetchone()
+    if existing is None:
         return jsonify({"error": "no such weight log"}), 404
     try:
         weight = float(data.get("weight_kg"))
@@ -1632,9 +1662,13 @@ def api_update_weight(log_id):
         body_fat = None
     notes = (data.get("notes") or "").strip() or None
     device = (data.get("device") or "").strip() or None
+    ts, ts_exact, err = _redate_ts(existing["ts"], existing["ts_exact"], data.get("date"))
+    if err:
+        return jsonify({"error": err}), 400
     db.execute(
-        "UPDATE weight_logs SET weight_kg = ?, body_fat_pct = ?, notes = ?, device = ? WHERE id = ?",
-        (weight, body_fat, notes, device, log_id),
+        "UPDATE weight_logs SET weight_kg = ?, body_fat_pct = ?, notes = ?, device = ?, "
+        "ts = ?, ts_exact = ? WHERE id = ?",
+        (weight, body_fat, notes, device, ts, ts_exact, log_id),
     )
     db.commit()
     return jsonify({"status": "updated"})
@@ -2024,13 +2058,9 @@ def api_update_workout(workout_id):
         weight = _opt_float(data, "weight_kg")
     except ValueError as e:
         return jsonify({"error": f"{e} must be a number"}), 400
-    # Keep the existing timestamp when no date is supplied.
-    if (data.get("date") or "").strip():
-        ts, ts_exact, err = _resolve_ts(data.get("date"))
-        if err:
-            return jsonify({"error": err}), 400
-    else:
-        ts, ts_exact = existing["ts"], existing["ts_exact"]
+    ts, ts_exact, err = _redate_ts(existing["ts"], existing["ts_exact"], data.get("date"))
+    if err:
+        return jsonify({"error": err}), 400
     notes = (data.get("notes") or "").strip() or None
     db.execute(
         "UPDATE workout_logs SET ts = ?, ts_exact = ?, sets = ?, reps = ?, weight_kg = ?, "
@@ -2570,6 +2600,7 @@ def _garmin_status_payload(db):
         "last_error": _get_app_state(db, "garmin_last_error") or None,
         "auto_sync": cfg["auto_sync"],
         "interval_hours": cfg["interval_hours"],
+        "backfill_days": cfg["backfill_days"],
     }
 
 
