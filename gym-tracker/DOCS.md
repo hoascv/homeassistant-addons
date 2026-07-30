@@ -183,6 +183,12 @@ If you export the database for your own analysis, `ts_exact` is what tells you
 whether a timestamp's time-of-day means anything. The date part is always
 reliable.
 
+Exercises, supplements and challenge items also carry `created_at` and
+`updated_at`, and every version of your goal is appended to `goal_history`
+(`/api/goal/history`) rather than overwritten — so a change of target is a
+visible event. Both start from the version that introduced them: anything older
+has empty timestamps, because the original times were never recorded.
+
 ### History, and a watch that hasn't synced
 
 Every day pulled is kept, building up a history you can scroll back through —

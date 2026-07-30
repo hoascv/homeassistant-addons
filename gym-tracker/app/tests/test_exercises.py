@@ -103,3 +103,34 @@ def test_workout_validation(client):
     ex_id = groups[0]["exercises"][0]["id"]
     assert client.post("/api/workouts", json={"exercise_id": ex_id, "reps": "lots"}).status_code == 400
     assert client.delete("/api/workouts/999").status_code == 404
+
+
+# --- Provenance: when definitions were created and last changed -------------
+
+
+def test_created_and_updated_are_stamped(client, conn):
+    r = client.post("/api/exercises", json={"name": "Nordic curl", "equipment": "Bodyweight"})
+    eid = r.get_json()["id"]
+    row = conn.execute("SELECT created_at, updated_at FROM exercises WHERE id = ?", (eid,)).fetchone()
+    assert row["created_at"] and row["updated_at"] == row["created_at"]
+
+    client.put(f"/api/exercises/{eid}", json={"name": "Nordic hamstring curl"})
+    after = conn.execute("SELECT created_at, updated_at FROM exercises WHERE id = ?", (eid,)).fetchone()
+    assert after["created_at"] == row["created_at"]  # creation never moves
+    assert after["updated_at"] >= row["updated_at"]
+
+
+def test_archiving_counts_as_a_change(client, conn):
+    eid = client.post("/api/exercises", json={"name": "Sled push"}).get_json()["id"]
+    conn.execute("UPDATE exercises SET updated_at = '2020-01-01T00:00:00' WHERE id = ?", (eid,))
+    conn.execute(
+        "INSERT INTO workout_logs (ts, exercise_id, source, ts_exact) "
+        "VALUES ('2026-07-30T10:00:00', ?, 'manual', 1)",
+        (eid,),
+    )
+    conn.commit()
+
+    client.delete(f"/api/exercises/{eid}")  # referenced, so archived rather than deleted
+    row = conn.execute("SELECT archived, updated_at FROM exercises WHERE id = ?", (eid,)).fetchone()
+    assert row["archived"] == 1
+    assert row["updated_at"] > "2020-01-01T00:00:00"

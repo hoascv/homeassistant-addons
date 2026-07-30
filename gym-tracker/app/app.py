@@ -18,7 +18,7 @@ from flask import Flask, Response, g, jsonify, render_template, request, send_fi
 
 import garmin_client
 
-APP_VERSION = "1.11.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.12.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("GYM_DB_PATH", "/data/gym.db")
 OPTIONS_PATH = os.environ.get("GYM_OPTIONS_PATH", "/data/options.json")
@@ -256,7 +256,9 @@ def init_db():
             category TEXT,
             is_custom INTEGER NOT NULL DEFAULT 0,
             archived INTEGER NOT NULL DEFAULT 0,
-            notes TEXT
+            notes TEXT,
+            created_at TEXT,
+            updated_at TEXT
         )
         """
     )
@@ -272,7 +274,9 @@ def init_db():
             timing TEXT,
             brand TEXT,
             is_custom INTEGER NOT NULL DEFAULT 0,
-            archived INTEGER NOT NULL DEFAULT 0
+            archived INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT,
+            updated_at TEXT
         )
         """
     )
@@ -308,7 +312,9 @@ def init_db():
             supplement_id INTEGER,
             target_sets INTEGER,
             target_reps INTEGER,
-            dose TEXT
+            dose TEXT,
+            created_at TEXT,
+            updated_at TEXT
         )
         """
     )
@@ -330,6 +336,23 @@ def init_db():
         CREATE TABLE IF NOT EXISTS app_state (
             key TEXT PRIMARY KEY,
             value TEXT
+        )
+        """
+    )
+    # Every version of the goal, appended. The goal itself is a single row
+    # that edits overwrite, so without this a change to your target leaves no
+    # trace that it ever changed.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS goal_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            changed_at TEXT NOT NULL,
+            source TEXT NOT NULL,
+            target_date TEXT,
+            target_weight_kg REAL,
+            target_body_fat_pct REAL,
+            start_date TEXT,
+            start_weight_kg REAL
         )
         """
     )
@@ -446,6 +469,15 @@ def _migrate_columns(conn):
         if col not in workout_cols:
             conn.execute(f"ALTER TABLE workout_logs ADD COLUMN {col} {decl}")
 
+    # When definitions were created and last changed. Left NULL on existing
+    # rows: their real creation time was never recorded and inventing one
+    # would be worse than admitting it is unknown.
+    for table in ("exercises", "supplements", "challenge_items"):
+        cols = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+        for col in ("created_at", "updated_at"):
+            if col not in cols:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} TEXT")
+
     completion_cols = {row[1] for row in conn.execute("PRAGMA table_info(challenge_completions)")}
     if "ts" not in completion_cols:
         conn.execute("ALTER TABLE challenge_completions ADD COLUMN ts TEXT")
@@ -491,6 +523,15 @@ def _seed_defaults(conn):
                 SEED_GOAL["start_weight_kg"],
             ),
         )
+    # The goal's first version, so its history starts from a known baseline.
+    if conn.execute("SELECT COUNT(*) FROM goal_history").fetchone()[0] == 0:
+        row = conn.execute("SELECT * FROM goal WHERE id = 1").fetchone()
+        if row:
+            # On an existing database the current goal is all there is to go
+            # on, and when it was last changed is unknowable — 'migrated' says
+            # changed_at is when tracking began, not when the goal moved.
+            seeded = dict(row) == dict(SEED_GOAL, id=1)
+            _record_goal_history(conn, dict(row), "seed" if seeded else "migrated")
     if conn.execute("SELECT COUNT(*) FROM weight_logs").fetchone()[0] == 0:
         conn.execute(
             "INSERT INTO weight_logs (ts, weight_kg, body_fat_pct, notes) VALUES (?, ?, NULL, ?)",
@@ -499,16 +540,17 @@ def _seed_defaults(conn):
     if conn.execute("SELECT COUNT(*) FROM exercises").fetchone()[0] == 0:
         for name, equipment, category in PRESET_EXERCISES:
             conn.execute(
-                "INSERT INTO exercises (name, equipment, category, is_custom, archived) "
-                "VALUES (?, ?, ?, 0, 0)",
-                (name, equipment, category),
+                "INSERT INTO exercises (name, equipment, category, is_custom, archived, "
+                "created_at, updated_at) VALUES (?, ?, ?, 0, 0, ?, ?)",
+                (name, equipment, category, _now_ts(), _now_ts()),
             )
     if conn.execute("SELECT COUNT(*) FROM supplements").fetchone()[0] == 0:
         for name, amount, unit, quantity, timing, brand in SEED_SUPPLEMENTS:
             conn.execute(
                 "INSERT INTO supplements (name, dose, dose_amount, dose_unit, quantity, timing, brand, "
-                "is_custom, archived) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0)",
-                (name, _supplement_dose_text(amount, unit, quantity), amount, unit, quantity, timing, brand),
+                "is_custom, archived, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?)",
+                (name, _supplement_dose_text(amount, unit, quantity), amount, unit, quantity, timing,
+                 brand, _now_ts(), _now_ts()),
             )
     _seed_typed_challenge(conn)
 
@@ -532,9 +574,10 @@ def _seed_typed_challenge(conn):
                 continue
             dose = spec.get("dose")
             conn.execute(
-                "INSERT INTO challenge_items (label, sort_order, archived, item_type, supplement_id, dose) "
-                "VALUES (?, ?, 0, 'supplement', ?, ?)",
-                (f"{spec['name']}{' · ' + dose if dose else ''}", order, row["id"], dose),
+                "INSERT INTO challenge_items (label, sort_order, archived, item_type, supplement_id, "
+                "dose, created_at, updated_at) VALUES (?, ?, 0, 'supplement', ?, ?, ?, ?)",
+                (f"{spec['name']}{' · ' + dose if dose else ''}", order, row["id"], dose,
+                 _now_ts(), _now_ts()),
             )
         else:
             row = conn.execute(
@@ -544,9 +587,10 @@ def _seed_typed_challenge(conn):
                 continue
             reps = spec.get("target_reps")
             conn.execute(
-                "INSERT INTO challenge_items (label, sort_order, archived, item_type, exercise_id, target_reps) "
-                "VALUES (?, ?, 0, 'exercise', ?, ?)",
-                (f"{spec['name']}{' × ' + str(reps) if reps else ''}", order, row["id"], reps),
+                "INSERT INTO challenge_items (label, sort_order, archived, item_type, exercise_id, "
+                "target_reps, created_at, updated_at) VALUES (?, ?, 0, 'exercise', ?, ?, ?, ?)",
+                (f"{spec['name']}{' × ' + str(reps) if reps else ''}", order, row["id"], reps,
+                 _now_ts(), _now_ts()),
             )
 
 
@@ -904,6 +948,30 @@ def _garmin_do_sync(conn):
 
 
 # --- Domain helpers ---
+
+
+def _now_ts():
+    return datetime.now().isoformat(timespec="seconds")
+
+
+def _record_goal_history(conn, goal, source):
+    """Append the goal as it now stands. `source` says why: 'seed' for the
+    starting goal, 'migrated' for the state found when history started being
+    kept (its changed_at is when tracking began, not when the goal changed),
+    'edit' for a real change."""
+    conn.execute(
+        "INSERT INTO goal_history (changed_at, source, target_date, target_weight_kg, "
+        "target_body_fat_pct, start_date, start_weight_kg) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (
+            _now_ts(),
+            source,
+            goal.get("target_date"),
+            goal.get("target_weight_kg"),
+            goal.get("target_body_fat_pct"),
+            goal.get("start_date"),
+            goal.get("start_weight_kg"),
+        ),
+    )
 
 
 def _get_goal(conn):
@@ -1365,8 +1433,22 @@ def api_update_goal():
         "start_date = excluded.start_date, start_weight_kg = excluded.start_weight_kg",
         (target_date, target_weight, target_bf, start_date, start_weight),
     )
+    updated = _get_goal(db)
+    # Only a real change is an event; re-saving the same numbers is not.
+    if any(updated.get(k) != goal.get(k) for k in (
+        "target_date", "target_weight_kg", "target_body_fat_pct", "start_date", "start_weight_kg"
+    )):
+        _record_goal_history(db, updated, "edit")
     db.commit()
-    return jsonify({"status": "updated", "goal": _get_goal(db)})
+    return jsonify({"status": "updated", "goal": updated})
+
+
+@app.route("/api/goal/history")
+def api_goal_history():
+    rows = get_db().execute(
+        "SELECT * FROM goal_history ORDER BY changed_at ASC, id ASC"
+    ).fetchall()
+    return jsonify([dict(r) for r in rows])
 
 
 # --- Routes: exercises + workouts ---
@@ -1400,8 +1482,9 @@ def api_add_exercise():
     category = (data.get("category") or "").strip() or None
     db = get_db()
     cur = db.execute(
-        "INSERT INTO exercises (name, equipment, category, is_custom, archived) VALUES (?, ?, ?, 1, 0)",
-        (name, equipment, category),
+        "INSERT INTO exercises (name, equipment, category, is_custom, archived, created_at, "
+        "updated_at) VALUES (?, ?, ?, 1, 0, ?, ?)",
+        (name, equipment, category, _now_ts(), _now_ts()),
     )
     db.commit()
     return jsonify({"status": "created", "id": cur.lastrowid}), 201
@@ -1417,8 +1500,8 @@ def api_update_exercise(exercise_id):
     category = (data.get("category") or "").strip() or None
     db = get_db()
     cur = db.execute(
-        "UPDATE exercises SET name = ?, equipment = ?, category = ? WHERE id = ?",
-        (name, equipment, category, exercise_id),
+        "UPDATE exercises SET name = ?, equipment = ?, category = ?, updated_at = ? WHERE id = ?",
+        (name, equipment, category, _now_ts(), exercise_id),
     )
     db.commit()
     if cur.rowcount == 0:
@@ -1440,7 +1523,10 @@ def api_delete_exercise(exercise_id):
         "SELECT 1 FROM challenge_items WHERE exercise_id = ? AND archived = 0 LIMIT 1", (exercise_id,)
     ).fetchone()
     if used:
-        db.execute("UPDATE exercises SET archived = 1 WHERE id = ?", (exercise_id,))
+        db.execute(
+            "UPDATE exercises SET archived = 1, updated_at = ? WHERE id = ?",
+            (_now_ts(), exercise_id),
+        )
         result = "archived"
     else:
         db.execute("DELETE FROM exercises WHERE id = ?", (exercise_id,))
@@ -1559,9 +1645,9 @@ def api_add_supplement():
     db = get_db()
     cur = db.execute(
         "INSERT INTO supplements (name, dose, dose_amount, dose_unit, quantity, timing, brand, "
-        "is_custom, archived) VALUES (?, ?, ?, ?, ?, ?, ?, 1, 0)",
+        "is_custom, archived, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?)",
         (fields["name"], dose, fields["dose_amount"], fields["dose_unit"], fields["quantity"],
-         fields["timing"], fields["brand"]),
+         fields["timing"], fields["brand"], _now_ts(), _now_ts()),
     )
     db.commit()
     return jsonify({"status": "created", "id": cur.lastrowid}), 201
@@ -1577,9 +1663,9 @@ def api_update_supplement(supplement_id):
     db = get_db()
     cur = db.execute(
         "UPDATE supplements SET name = ?, dose = ?, dose_amount = ?, dose_unit = ?, quantity = ?, "
-        "timing = ?, brand = ? WHERE id = ?",
+        "timing = ?, brand = ?, updated_at = ? WHERE id = ?",
         (fields["name"], dose, fields["dose_amount"], fields["dose_unit"], fields["quantity"],
-         fields["timing"], fields["brand"], supplement_id),
+         fields["timing"], fields["brand"], _now_ts(), supplement_id),
     )
     db.commit()
     if cur.rowcount == 0:
@@ -1597,7 +1683,10 @@ def api_delete_supplement(supplement_id):
         "SELECT 1 FROM challenge_items WHERE supplement_id = ? AND archived = 0 LIMIT 1", (supplement_id,)
     ).fetchone()
     if used:
-        db.execute("UPDATE supplements SET archived = 1 WHERE id = ?", (supplement_id,))
+        db.execute(
+            "UPDATE supplements SET archived = 1, updated_at = ? WHERE id = ?",
+            (_now_ts(), supplement_id),
+        )
         result = "archived"
     else:
         db.execute("DELETE FROM supplements WHERE id = ?", (supplement_id,))
@@ -1835,8 +1924,9 @@ def api_add_challenge_item():
             label += f" · {target}"
         cur = db.execute(
             "INSERT INTO challenge_items (label, sort_order, archived, item_type, exercise_id, "
-            "target_sets, target_reps) VALUES (?, ?, 0, 'exercise', ?, ?, ?)",
-            (label, next_order, exercise_id, target_sets, target_reps),
+            "target_sets, target_reps, created_at, updated_at) "
+            "VALUES (?, ?, 0, 'exercise', ?, ?, ?, ?, ?)",
+            (label, next_order, exercise_id, target_sets, target_reps, _now_ts(), _now_ts()),
         )
     else:
         try:
@@ -1851,9 +1941,9 @@ def api_add_challenge_item():
         dose = (data.get("dose") or "").strip() or sup["dose"]
         label = f"{sup['name']}{' · ' + dose if dose else ''}"
         cur = db.execute(
-            "INSERT INTO challenge_items (label, sort_order, archived, item_type, supplement_id, dose) "
-            "VALUES (?, ?, 0, 'supplement', ?, ?)",
-            (label, next_order, supplement_id, dose),
+            "INSERT INTO challenge_items (label, sort_order, archived, item_type, supplement_id, "
+            "dose, created_at, updated_at) VALUES (?, ?, 0, 'supplement', ?, ?, ?, ?)",
+            (label, next_order, supplement_id, dose, _now_ts(), _now_ts()),
         )
     db.commit()
     return jsonify({"status": "created", "id": cur.lastrowid}), 201
@@ -1880,15 +1970,17 @@ def api_update_challenge_item(item_id):
         target = _exercise_target_text(target_sets, target_reps)
         label = f"{name['name'] if name else 'Exercise'}{' · ' + target if target else ''}"
         db.execute(
-            "UPDATE challenge_items SET target_sets = ?, target_reps = ?, label = ? WHERE id = ?",
-            (target_sets, target_reps, label, item_id),
+            "UPDATE challenge_items SET target_sets = ?, target_reps = ?, label = ?, "
+            "updated_at = ? WHERE id = ?",
+            (target_sets, target_reps, label, _now_ts(), item_id),
         )
     else:
         name = db.execute("SELECT name FROM supplements WHERE id = ?", (item["supplement_id"],)).fetchone()
         dose = (data.get("dose") or "").strip() or None
         label = f"{name['name'] if name else 'Supplement'}{' · ' + dose if dose else ''}"
         db.execute(
-            "UPDATE challenge_items SET dose = ?, label = ? WHERE id = ?", (dose, label, item_id)
+            "UPDATE challenge_items SET dose = ?, label = ?, updated_at = ? WHERE id = ?",
+            (dose, label, _now_ts(), item_id),
         )
     db.commit()
     return jsonify({"status": "updated"})
@@ -1950,7 +2042,8 @@ def api_delete_challenge_item(item_id):
     db = get_db()
     # Archive rather than delete so past streak/history stays intact.
     cur = db.execute(
-        "UPDATE challenge_items SET archived = 1 WHERE id = ? AND archived = 0", (item_id,)
+        "UPDATE challenge_items SET archived = 1, updated_at = ? WHERE id = ? AND archived = 0",
+        (_now_ts(), item_id),
     )
     db.commit()
     if cur.rowcount == 0:

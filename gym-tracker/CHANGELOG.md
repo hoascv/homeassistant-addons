@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.12.0
+
+- **Exercises, supplements and challenge items now record when they were
+  created and last changed** (`created_at` / `updated_at`), including when they
+  were archived. Rows that already existed keep both as empty: their real
+  creation time was never recorded, and a made-up one would be worse.
+- **Goal changes are kept.** The goal is a single row that edits overwrote, so
+  changing your target left no trace it had ever been different. Every version
+  is now appended to a `goal_history` table, readable at `/api/goal/history`.
+  Re-saving the same numbers isn't recorded as a change.
+
 ## 1.11.0
 
 - **Weigh-ins and workouts logged today now record the time**, not a midday
