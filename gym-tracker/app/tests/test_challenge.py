@@ -203,3 +203,144 @@ def test_challenge_validation(client):
     assert client.post("/api/challenge/items", json={"label": "  "}).status_code == 400
     assert client.put("/api/challenge/items/999", json={"label": "x"}).status_code == 404
     assert client.delete("/api/challenge/items/999").status_code == 404
+
+
+# --- Multiple challenges, and time-boxed ones -------------------------------
+
+
+def _new_challenge(client, name, start, end=None):
+    body = {"name": name, "start_date": start}
+    if end:
+        body["end_date"] = end
+    r = client.post("/api/challenges", json=body)
+    assert r.status_code == 201, r.get_json()
+    return r.get_json()["id"]
+
+
+def _add_exercise_item(client, conn, challenge_id, name):
+    ex = conn.execute("SELECT id FROM exercises WHERE archived = 0 LIMIT 1").fetchone()["id"]
+    r = client.post("/api/challenge/items", json={
+        "item_type": "exercise", "exercise_id": ex, "target_reps": 10,
+        "challenge_id": challenge_id,
+    })
+    assert r.status_code == 201, r.get_json()
+    return r.get_json()["id"]
+
+
+def test_existing_items_are_migrated_into_a_default_challenge(client, conn):
+    challenges = client.get("/api/challenges").get_json()
+    assert len(challenges) == 1
+    assert challenges[0]["name"] == "Daily challenge"
+    assert challenges[0]["end_date"] is None  # open-ended
+    assert challenges[0]["items"]  # the seeded items came with it
+    orphans = conn.execute(
+        "SELECT COUNT(*) FROM challenge_items WHERE challenge_id IS NULL AND archived = 0"
+    ).fetchone()[0]
+    assert orphans == 0
+
+
+def test_challenges_are_independent(client, conn):
+    second = _new_challenge(client, "30-day squats", "2026-07-25", "2026-08-23")
+    item = _add_exercise_item(client, conn, second, "squat")
+
+    client.post("/api/challenge/toggle", json={"item_id": item})
+    views = {c["name"]: c for c in client.get("/api/challenges").get_json()}
+
+    assert views["30-day squats"]["complete_today"] is True
+    # Ticking one challenge says nothing about the other.
+    assert views["Daily challenge"]["complete_today"] is False
+    assert len(views["30-day squats"]["items"]) == 1
+
+
+def test_a_time_boxed_challenge_reports_its_day_number(client):
+    from datetime import date, timedelta
+
+    start = (date.today() - timedelta(days=3)).isoformat()
+    end = (date.today() + timedelta(days=26)).isoformat()
+    cid = _new_challenge(client, "30-day squats", start, end)
+
+    view = next(c for c in client.get("/api/challenges").get_json() if c["id"] == cid)
+    assert view["total_days"] == 30
+    assert view["day_number"] == 4
+    assert view["finished"] is False
+
+
+def test_a_challenge_past_its_end_date_is_finished(client):
+    cid = _new_challenge(client, "June push-ups", "2026-06-01", "2026-06-30")
+    view = next(c for c in client.get("/api/challenges").get_json() if c["id"] == cid)
+    assert view["finished"] is True
+
+
+def test_end_date_must_not_precede_the_start(client):
+    r = client.post("/api/challenges", json={
+        "name": "Backwards", "start_date": "2026-07-10", "end_date": "2026-07-01",
+    })
+    assert r.status_code == 400
+    assert "end_date" in r.get_json()["error"]
+
+
+def test_a_challenge_is_archived_not_deleted(client, conn):
+    cid = _new_challenge(client, "Temp", "2026-07-01")
+    assert client.delete(f"/api/challenges/{cid}").status_code == 200
+    assert [c for c in client.get("/api/challenges").get_json() if c["id"] == cid] == []
+    # The record survives, so its completions stay meaningful.
+    assert conn.execute("SELECT archived FROM challenges WHERE id = ?", (cid,)).fetchone()[0] == 1
+
+
+# --- Statistics -------------------------------------------------------------
+
+
+def test_stats_report_completion_streaks_and_items(client, conn):
+    from datetime import date, timedelta
+
+    start = (date.today() - timedelta(days=4)).isoformat()
+    cid = _new_challenge(client, "Squats", start)
+    item = _add_exercise_item(client, conn, cid, "squat")
+
+    # Done on 3 of the 5 days, the last two consecutive.
+    for offset in (4, 1, 0):
+        day = (date.today() - timedelta(days=offset)).isoformat()
+        client.post("/api/challenge/toggle", json={"item_id": item, "day": day})
+
+    stats = next(s for s in client.get("/api/challenges/stats").get_json() if s["id"] == cid)
+    assert stats["days_elapsed"] == 5
+    assert stats["days_complete"] == 3
+    assert stats["completion_pct"] == 60.0
+    assert stats["current_streak"] == 2
+    assert stats["longest_streak"] == 2
+    assert len(stats["days"]) == 5
+    assert stats["items"][0]["days_done"] == 3
+    assert stats["items"][0]["rate_pct"] == 60.0
+
+
+def test_stats_only_count_days_the_challenge_was_running(client, conn):
+    from datetime import date, timedelta
+
+    # Ends in the past: elapsed days stop at the end date, not today.
+    start = (date.today() - timedelta(days=10)).isoformat()
+    end = (date.today() - timedelta(days=6)).isoformat()
+    cid = _new_challenge(client, "Short run", start, end)
+    _add_exercise_item(client, conn, cid, "squat")
+
+    stats = next(s for s in client.get("/api/challenges/stats").get_json() if s["id"] == cid)
+    assert stats["days_elapsed"] == 5
+    assert stats["finished"] is True
+
+
+def test_stats_include_volume_from_the_challenge(client, conn):
+    from datetime import date
+
+    cid = _new_challenge(client, "Squats", date.today().isoformat())
+    item = _add_exercise_item(client, conn, cid, "squat")
+    client.post("/api/challenge/toggle", json={"item_id": item})
+    conn.execute(
+        "UPDATE workout_logs SET sets = 3, reps = 10, hr_avg = 130, hr_max = 150 "
+        "WHERE challenge_item_id = ?",
+        (item,),
+    )
+    conn.commit()
+
+    stats = next(s for s in client.get("/api/challenges/stats").get_json() if s["id"] == cid)
+    assert stats["volume"]["sessions"] == 1
+    assert stats["volume"]["reps"] == 30
+    assert stats["volume"]["hr_avg"] == 130 and stats["volume"]["hr_max"] == 150

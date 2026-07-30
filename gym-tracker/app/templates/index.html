@@ -57,19 +57,9 @@
     <button type="button" class="btn-primary full" id="log-weight-btn">Log weight</button>
   </section>
 
-  <!-- Daily challenge -->
-  <section class="card" id="challenge-card">
-    <div class="card-head">
-      <h2>Daily challenge</h2>
-      <span class="pill pill-streak" id="challenge-streak">🔥 0</span>
-    </div>
-    <ul class="challenge-list" id="challenge-list"></ul>
-    <div class="week-dots" id="challenge-week"></div>
-    <div class="card-actions">
-      <button type="button" class="link-btn" id="challenge-history-btn">History</button>
-      <button type="button" class="link-btn" id="challenge-manage-btn">Edit items</button>
-    </div>
-  </section>
+  <!-- Challenges: one card each, built by app.js -->
+  <div id="challenge-cards"></div>
+  <button type="button" class="btn-secondary full" id="challenge-new-btn">+ New challenge</button>
 
   <!-- Recent workouts -->
   <section class="card" id="recent-card">
@@ -118,6 +108,8 @@
       <span class="forecast-text" id="forecast-text"></span>
     </div>
   </section>
+
+  <div id="challenge-stats"></div>
  </div><!-- /panel-trends -->
 </main>
 
@@ -249,10 +241,38 @@
 </div>
 
 <!-- Challenge-items management sheet (typed builder) -->
+<!-- Create / edit a challenge -->
+<div class="sheet-backdrop" id="challenge-edit-backdrop">
+  <div class="sheet">
+    <h2 id="challenge-edit-title">New challenge</h2>
+    <p class="sheet-subtext">
+      A challenge is a set of items you tick off daily. Give it an end date to
+      time-box it — a 30-day run finishes on its own and keeps its statistics.
+      Leave the end date empty for an open-ended daily habit.
+    </p>
+    <form id="challenge-edit-form" class="inline-form">
+      <input type="hidden" id="challenge-edit-id">
+      <label class="full-label">Name<input type="text" id="challenge-edit-name" required placeholder="e.g. 30-day squats"></label>
+      <div class="field-row">
+        <label>Start<input type="date" id="challenge-edit-start" required></label>
+        <label>End<input type="date" id="challenge-edit-end" placeholder="optional"></label>
+      </div>
+      <div class="form-actions">
+        <button type="button" class="btn-secondary" id="challenge-edit-delete" hidden>Archive</button>
+        <button type="submit" class="btn-primary">Save</button>
+      </div>
+      <p class="result-line" id="challenge-edit-result"></p>
+    </form>
+    <div class="sheet-actions">
+      <button type="button" class="btn-secondary" id="challenge-edit-close">Close</button>
+    </div>
+  </div>
+</div>
+
 <div class="sheet-backdrop" id="challenge-items-backdrop">
   <div class="sheet">
-    <h2>Challenge items</h2>
-    <p class="sheet-subtext">Build your daily challenge from your exercises and supplements. Removing an item keeps your past streak intact.</p>
+    <h2 id="challenge-items-title">Challenge items</h2>
+    <p class="sheet-subtext">Build this challenge from your exercises and supplements. Removing an item keeps your past streak intact.</p>
     <ul class="items-list" id="challenge-items-list"></ul>
 
     <form id="challenge-item-form" class="inline-form">

@@ -18,7 +18,7 @@ from flask import Flask, Response, g, jsonify, render_template, request, send_fi
 
 import garmin_client
 
-APP_VERSION = "1.12.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.13.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("GYM_DB_PATH", "/data/gym.db")
 OPTIONS_PATH = os.environ.get("GYM_OPTIONS_PATH", "/data/options.json")
@@ -33,6 +33,7 @@ WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", 
 # Seeded on a fresh database so the app opens onto a populated, meaningful
 # home screen instead of empty state. All editable afterwards.
 SEED_START_DATE = "2026-07-03"
+DEFAULT_CHALLENGE_NAME = "Daily challenge"
 SEED_START_WEIGHT = 99.7
 SEED_GOAL = {
     "target_date": "2026-12-28",
@@ -313,6 +314,7 @@ def init_db():
             target_sets INTEGER,
             target_reps INTEGER,
             dose TEXT,
+            challenge_id INTEGER REFERENCES challenges(id),
             created_at TEXT,
             updated_at TEXT
         )
@@ -336,6 +338,23 @@ def init_db():
         CREATE TABLE IF NOT EXISTS app_state (
             key TEXT PRIMARY KEY,
             value TEXT
+        )
+        """
+    )
+    # A challenge is a named set of items you tick off daily. Several can run
+    # at once, and one can be time-boxed: start_date/end_date bound the period
+    # it counts over, so a 30-day challenge finishes rather than running on.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS challenges (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            start_date TEXT NOT NULL,
+            end_date TEXT,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            archived INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT,
+            updated_at TEXT
         )
         """
     )
@@ -478,6 +497,35 @@ def _migrate_columns(conn):
             if col not in cols:
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} TEXT")
 
+    # Items used to belong to a single implicit challenge; give them a real
+    # one so several can coexist. The default's start date is backdated to the
+    # earliest completion so its statistics cover the history that exists.
+    item_cols = {row[1] for row in conn.execute("PRAGMA table_info(challenge_items)")}
+    if "challenge_id" not in item_cols:
+        conn.execute("ALTER TABLE challenge_items ADD COLUMN challenge_id INTEGER")
+    orphans = conn.execute(
+        "SELECT COUNT(*) FROM challenge_items WHERE challenge_id IS NULL"
+    ).fetchone()[0]
+    if orphans:
+        existing = conn.execute(
+            "SELECT id FROM challenges ORDER BY id ASC LIMIT 1"
+        ).fetchone()
+        if existing:
+            default_id = existing["id"]
+        else:
+            first_day = conn.execute(
+                "SELECT MIN(day) AS d FROM challenge_completions"
+            ).fetchone()["d"]
+            cur = conn.execute(
+                "INSERT INTO challenges (name, start_date, end_date, sort_order, archived, "
+                "created_at, updated_at) VALUES (?, ?, NULL, 0, 0, ?, ?)",
+                (DEFAULT_CHALLENGE_NAME, first_day or SEED_START_DATE, _now_ts(), _now_ts()),
+            )
+            default_id = cur.lastrowid
+        conn.execute(
+            "UPDATE challenge_items SET challenge_id = ? WHERE challenge_id IS NULL", (default_id,)
+        )
+
     completion_cols = {row[1] for row in conn.execute("PRAGMA table_info(challenge_completions)")}
     if "ts" not in completion_cols:
         conn.execute("ALTER TABLE challenge_completions ADD COLUMN ts TEXT")
@@ -555,6 +603,23 @@ def _seed_defaults(conn):
     _seed_typed_challenge(conn)
 
 
+def _default_challenge_id(conn, start_date=None):
+    """The challenge new items land in when none is named: the first active
+    one, created on demand so a fresh database always has somewhere to put
+    them. It has no end date — the open-ended daily habit."""
+    row = conn.execute(
+        "SELECT id FROM challenges WHERE archived = 0 ORDER BY sort_order ASC, id ASC LIMIT 1"
+    ).fetchone()
+    if row:
+        return row["id"]
+    cur = conn.execute(
+        "INSERT INTO challenges (name, start_date, end_date, sort_order, archived, created_at, "
+        "updated_at) VALUES (?, ?, NULL, 0, 0, ?, ?)",
+        (DEFAULT_CHALLENGE_NAME, start_date or date.today().isoformat(), _now_ts(), _now_ts()),
+    )
+    return cur.lastrowid
+
+
 def _seed_typed_challenge(conn):
     """Seed the default typed challenge, once, referencing the seeded
     library rows. Also converts a 1.0.0 database: any legacy free-text
@@ -565,6 +630,7 @@ def _seed_typed_challenge(conn):
     if typed:
         return
     conn.execute("UPDATE challenge_items SET archived = 1 WHERE item_type IS NULL")
+    challenge_id = _default_challenge_id(conn, SEED_START_DATE)
     for order, spec in enumerate(SEED_CHALLENGE):
         if spec["type"] == "supplement":
             row = conn.execute(
@@ -575,9 +641,10 @@ def _seed_typed_challenge(conn):
             dose = spec.get("dose")
             conn.execute(
                 "INSERT INTO challenge_items (label, sort_order, archived, item_type, supplement_id, "
-                "dose, created_at, updated_at) VALUES (?, ?, 0, 'supplement', ?, ?, ?, ?)",
+                "dose, challenge_id, created_at, updated_at) "
+                "VALUES (?, ?, 0, 'supplement', ?, ?, ?, ?, ?)",
                 (f"{spec['name']}{' · ' + dose if dose else ''}", order, row["id"], dose,
-                 _now_ts(), _now_ts()),
+                 challenge_id, _now_ts(), _now_ts()),
             )
         else:
             row = conn.execute(
@@ -588,9 +655,10 @@ def _seed_typed_challenge(conn):
             reps = spec.get("target_reps")
             conn.execute(
                 "INSERT INTO challenge_items (label, sort_order, archived, item_type, exercise_id, "
-                "target_reps, created_at, updated_at) VALUES (?, ?, 0, 'exercise', ?, ?, ?, ?)",
+                "target_reps, challenge_id, created_at, updated_at) "
+                "VALUES (?, ?, 0, 'exercise', ?, ?, ?, ?, ?)",
                 (f"{spec['name']}{' × ' + str(reps) if reps else ''}", order, row["id"], reps,
-                 _now_ts(), _now_ts()),
+                 challenge_id, _now_ts(), _now_ts()),
             )
 
 
@@ -1188,17 +1256,83 @@ def _weight_forecast(logs, goal):
     }
 
 
-def _active_challenge_items(conn):
+def _active_challenge_items(conn, challenge_id=None):
+    """Active items, optionally for one challenge. Without a challenge id this
+    spans every challenge, which is what the reminder needs."""
+    where = "WHERE ci.archived = 0"
+    params = ()
+    if challenge_id is not None:
+        where += " AND ci.challenge_id = ?"
+        params = (challenge_id,)
     rows = conn.execute(
         "SELECT ci.id, ci.sort_order, ci.item_type, ci.exercise_id, ci.supplement_id, "
-        "ci.target_sets, ci.target_reps, ci.dose, ci.label AS stored_label, "
+        "ci.target_sets, ci.target_reps, ci.dose, ci.label AS stored_label, ci.challenge_id, "
         "e.name AS exercise_name, s.name AS supplement_name "
         "FROM challenge_items ci "
         "LEFT JOIN exercises e ON e.id = ci.exercise_id "
         "LEFT JOIN supplements s ON s.id = ci.supplement_id "
-        "WHERE ci.archived = 0 ORDER BY ci.sort_order ASC, ci.id ASC"
+        f"{where} ORDER BY ci.sort_order ASC, ci.id ASC",
+        params,
     ).fetchall()
     return [_challenge_item_view(r) for r in rows]
+
+
+def _challenges(conn, include_archived=False):
+    where = "" if include_archived else "WHERE archived = 0"
+    return [
+        dict(r)
+        for r in conn.execute(
+            f"SELECT * FROM challenges {where} ORDER BY sort_order ASC, id ASC"
+        )
+    ]
+
+
+def _challenge_day_range(ch, today=None):
+    """The days a challenge counts over: from its start to today, or to its end
+    date once that has passed. A challenge that hasn't started yet is empty."""
+    today = today or date.today()
+    try:
+        start = date.fromisoformat(ch["start_date"])
+    except (ValueError, TypeError):
+        return None, None
+    last = today
+    if ch.get("end_date"):
+        try:
+            last = min(today, date.fromisoformat(ch["end_date"]))
+        except ValueError:
+            pass
+    return start, last
+
+
+def _challenge_finished(ch, today=None):
+    today = today or date.today()
+    if not ch.get("end_date"):
+        return False
+    try:
+        return date.fromisoformat(ch["end_date"]) < today
+    except ValueError:
+        return False
+
+
+def _challenge_days(conn, ch, items=None):
+    """One entry per day the challenge has run: how many of its items were
+    ticked, and whether that completed the day."""
+    items = items if items is not None else _active_challenge_items(conn, ch["id"])
+    ids = {i["id"] for i in items}
+    by_day = _completions_by_day(conn, list(ids))
+    start, last = _challenge_day_range(ch)
+    days = []
+    if start is None:
+        return days
+    cursor = start
+    while cursor <= last:
+        iso = cursor.isoformat()
+        done = len(by_day.get(iso, set()) & ids)
+        days.append(
+            {"day": iso, "done": done, "total": len(ids), "complete": bool(ids) and done == len(ids)}
+        )
+        cursor += timedelta(days=1)
+    return days
 
 
 def _exercise_target_text(sets, reps):
@@ -1256,8 +1390,8 @@ def _completions_by_day(conn, item_ids):
     return by_day
 
 
-def _challenge_streak(conn):
-    items = _active_challenge_items(conn)
+def _challenge_streak(conn, challenge_id=None):
+    items = _active_challenge_items(conn, challenge_id)
     if not items:
         return 0
     active = {i["id"] for i in items}
@@ -1277,8 +1411,16 @@ def _challenge_streak(conn):
     return streak
 
 
-def _challenge_complete_on(conn, day_iso):
-    items = _active_challenge_items(conn)
+def _longest_streak(days):
+    best = run = 0
+    for entry in days:
+        run = run + 1 if entry["complete"] else 0
+        best = max(best, run)
+    return best
+
+
+def _challenge_complete_on(conn, day_iso, challenge_id=None):
+    items = _active_challenge_items(conn, challenge_id)
     if not items:
         return False
     active = {i["id"] for i in items}
@@ -1796,12 +1938,12 @@ def api_delete_workout(workout_id):
 # --- Routes: daily challenge ---
 
 
-@app.route("/api/challenge")
-def api_challenge():
-    db = get_db()
-    items = _active_challenge_items(db)
-    active_ids = [i["id"] for i in items]
-    by_day = _completions_by_day(db, active_ids)
+def _challenge_view(conn, ch):
+    """One challenge as the app shows it: its items with today's state, its
+    streak, and where it is in a fixed-length run."""
+    items = _active_challenge_items(conn, ch["id"])
+    ids = [i["id"] for i in items]
+    by_day = _completions_by_day(conn, ids)
     today = date.today()
     today_iso = today.isoformat()
     done_today = by_day.get(today_iso, set())
@@ -1811,18 +1953,189 @@ def api_challenge():
     last_7 = []
     for offset in range(6, -1, -1):
         d = (today - timedelta(days=offset)).isoformat()
-        complete = bool(active_ids) and set(active_ids) <= by_day.get(d, set())
-        last_7.append({"day": d, "complete": complete})
+        last_7.append({"day": d, "complete": bool(ids) and set(ids) <= by_day.get(d, set())})
 
-    return jsonify(
-        {
-            "today": today_iso,
-            "items": items,
-            "streak": _challenge_streak(db),
-            "complete_today": bool(active_ids) and set(active_ids) <= done_today,
-            "last_7_days": last_7,
+    start, _ = _challenge_day_range(ch)
+    total_days = None
+    day_number = None
+    if start and ch.get("end_date"):
+        try:
+            end = date.fromisoformat(ch["end_date"])
+            total_days = (end - start).days + 1
+            day_number = min(max((today - start).days + 1, 0), total_days)
+        except ValueError:
+            total_days = None
+    return {
+        "id": ch["id"],
+        "name": ch["name"],
+        "start_date": ch["start_date"],
+        "end_date": ch["end_date"],
+        "finished": _challenge_finished(ch),
+        "not_started": bool(start and today < start),
+        "day_number": day_number,
+        "total_days": total_days,
+        "today": today_iso,
+        "items": items,
+        "streak": _challenge_streak(conn, ch["id"]),
+        "complete_today": bool(ids) and set(ids) <= done_today,
+        "last_7_days": last_7,
+    }
+
+
+def _challenge_stats(conn, ch):
+    """Per-challenge statistics: how often it is completed, the streaks, the
+    day-by-day record, which items actually get done, and the volume logged
+    through it."""
+    items = _active_challenge_items(conn, ch["id"])
+    ids = {i["id"] for i in items}
+    days = _challenge_days(conn, ch, items)
+    by_day = _completions_by_day(conn, list(ids))
+    elapsed = len(days)
+    complete_days = sum(1 for d in days if d["complete"])
+
+    per_item = []
+    for i in items:
+        hits = sum(1 for d in days if i["id"] in by_day.get(d["day"], set()))
+        per_item.append(
+            {
+                "id": i["id"],
+                "label": i["label"],
+                "item_type": i["item_type"],
+                "days_done": hits,
+                "rate_pct": round(hits / elapsed * 100, 1) if elapsed else None,
+            }
+        )
+
+    volume = {"sessions": 0, "reps": 0, "hr_avg": None, "hr_max": None}
+    if ids:
+        placeholders = ",".join("?" for _ in ids)
+        row = conn.execute(
+            "SELECT COUNT(*) AS sessions, "
+            "SUM(COALESCE(sets, 1) * COALESCE(reps, 0)) AS reps, "
+            "AVG(hr_avg) AS hr_avg, MAX(hr_max) AS hr_max "
+            f"FROM workout_logs WHERE challenge_item_id IN ({placeholders})",
+            tuple(ids),
+        ).fetchone()
+        volume = {
+            "sessions": row["sessions"] or 0,
+            "reps": int(row["reps"]) if row["reps"] else 0,
+            "hr_avg": round(row["hr_avg"]) if row["hr_avg"] is not None else None,
+            "hr_max": row["hr_max"],
         }
+
+    return {
+        "id": ch["id"],
+        "name": ch["name"],
+        "start_date": ch["start_date"],
+        "end_date": ch["end_date"],
+        "finished": _challenge_finished(ch),
+        "days_elapsed": elapsed,
+        "days_complete": complete_days,
+        "completion_pct": round(complete_days / elapsed * 100, 1) if elapsed else None,
+        "current_streak": _challenge_streak(conn, ch["id"]),
+        "longest_streak": _longest_streak(days),
+        "item_count": len(items),
+        # Capped: the adherence chart only ever draws a window of this.
+        "days": days[-180:],
+        "items": per_item,
+        "volume": volume,
+    }
+
+
+@app.route("/api/challenges")
+def api_challenges():
+    db = get_db()
+    return jsonify([_challenge_view(db, ch) for ch in _challenges(db)])
+
+
+@app.route("/api/challenges/stats")
+def api_challenges_stats():
+    db = get_db()
+    return jsonify([_challenge_stats(db, ch) for ch in _challenges(db)])
+
+
+@app.route("/api/challenges", methods=["POST"])
+def api_add_challenge():
+    data = request.get_json(force=True, silent=True) or {}
+    name = (data.get("name") or "").strip()
+    if not name:
+        return jsonify({"error": "name is required"}), 400
+    start = (data.get("start_date") or "").strip() or date.today().isoformat()
+    end = (data.get("end_date") or "").strip() or None
+    err = _validate_challenge_dates(start, end)
+    if err:
+        return jsonify({"error": err}), 400
+    db = get_db()
+    order = db.execute("SELECT COALESCE(MAX(sort_order), -1) + 1 AS n FROM challenges").fetchone()["n"]
+    cur = db.execute(
+        "INSERT INTO challenges (name, start_date, end_date, sort_order, archived, created_at, "
+        "updated_at) VALUES (?, ?, ?, ?, 0, ?, ?)",
+        (name, start, end, order, _now_ts(), _now_ts()),
     )
+    db.commit()
+    return jsonify({"status": "created", "id": cur.lastrowid}), 201
+
+
+@app.route("/api/challenges/<int:challenge_id>", methods=["PUT"])
+def api_update_challenge(challenge_id):
+    data = request.get_json(force=True, silent=True) or {}
+    db = get_db()
+    existing = db.execute("SELECT * FROM challenges WHERE id = ?", (challenge_id,)).fetchone()
+    if existing is None:
+        return jsonify({"error": "no such challenge"}), 404
+    name = (data.get("name") or "").strip() or existing["name"]
+    start = (data.get("start_date") or "").strip() or existing["start_date"]
+    # An empty string clears the end date; a missing key leaves it alone.
+    end = data.get("end_date", existing["end_date"])
+    end = (end or "").strip() or None
+    err = _validate_challenge_dates(start, end)
+    if err:
+        return jsonify({"error": err}), 400
+    db.execute(
+        "UPDATE challenges SET name = ?, start_date = ?, end_date = ?, updated_at = ? WHERE id = ?",
+        (name, start, end, _now_ts(), challenge_id),
+    )
+    db.commit()
+    return jsonify({"status": "updated"})
+
+
+@app.route("/api/challenges/<int:challenge_id>", methods=["DELETE"])
+def api_delete_challenge(challenge_id):
+    db = get_db()
+    if db.execute("SELECT 1 FROM challenges WHERE id = ?", (challenge_id,)).fetchone() is None:
+        return jsonify({"error": "no such challenge"}), 404
+    # Archived, never deleted: its items and their completions are history.
+    db.execute(
+        "UPDATE challenges SET archived = 1, updated_at = ? WHERE id = ?", (_now_ts(), challenge_id)
+    )
+    db.commit()
+    return jsonify({"status": "archived"})
+
+
+def _validate_challenge_dates(start, end):
+    try:
+        start_d = date.fromisoformat(start)
+    except (ValueError, TypeError):
+        return "start_date must be YYYY-MM-DD"
+    if end:
+        try:
+            end_d = date.fromisoformat(end)
+        except (ValueError, TypeError):
+            return "end_date must be YYYY-MM-DD"
+        if end_d < start_d:
+            return "end_date must not be before start_date"
+    return None
+
+
+@app.route("/api/challenge")
+def api_challenge():
+    """The first active challenge, kept for callers that predate several."""
+    db = get_db()
+    active = _challenges(db)
+    if not active:
+        return jsonify({"today": date.today().isoformat(), "items": [], "streak": 0,
+                        "complete_today": False, "last_7_days": []})
+    return jsonify(_challenge_view(db, active[0]))
 
 
 @app.route("/api/challenge/toggle", methods=["POST"])
@@ -1887,7 +2200,8 @@ def api_challenge_toggle():
 
 @app.route("/api/challenge/items", methods=["GET"])
 def api_challenge_items():
-    return jsonify(_active_challenge_items(get_db()))
+    challenge_id = request.args.get("challenge_id")
+    return jsonify(_active_challenge_items(get_db(), int(challenge_id) if challenge_id else None))
 
 
 @app.route("/api/challenge/items", methods=["POST"])
@@ -1900,6 +2214,18 @@ def api_add_challenge_item():
     if item_type not in ("exercise", "supplement"):
         return jsonify({"error": "item_type must be 'exercise' or 'supplement'"}), 400
     db = get_db()
+    challenge_id = data.get("challenge_id")
+    if challenge_id in (None, ""):
+        challenge_id = _default_challenge_id(db)
+    else:
+        try:
+            challenge_id = int(challenge_id)
+        except (TypeError, ValueError):
+            return jsonify({"error": "challenge_id must be a number"}), 400
+        if db.execute(
+            "SELECT 1 FROM challenges WHERE id = ? AND archived = 0", (challenge_id,)
+        ).fetchone() is None:
+            return jsonify({"error": "no such challenge"}), 400
     try:
         target_sets, target_reps = _opt_int(data, "target_sets"), _opt_int(data, "target_reps")
     except ValueError as e:
@@ -1924,9 +2250,10 @@ def api_add_challenge_item():
             label += f" · {target}"
         cur = db.execute(
             "INSERT INTO challenge_items (label, sort_order, archived, item_type, exercise_id, "
-            "target_sets, target_reps, created_at, updated_at) "
-            "VALUES (?, ?, 0, 'exercise', ?, ?, ?, ?, ?)",
-            (label, next_order, exercise_id, target_sets, target_reps, _now_ts(), _now_ts()),
+            "target_sets, target_reps, challenge_id, created_at, updated_at) "
+            "VALUES (?, ?, 0, 'exercise', ?, ?, ?, ?, ?, ?)",
+            (label, next_order, exercise_id, target_sets, target_reps, challenge_id,
+             _now_ts(), _now_ts()),
         )
     else:
         try:
@@ -1942,8 +2269,9 @@ def api_add_challenge_item():
         label = f"{sup['name']}{' · ' + dose if dose else ''}"
         cur = db.execute(
             "INSERT INTO challenge_items (label, sort_order, archived, item_type, supplement_id, "
-            "dose, created_at, updated_at) VALUES (?, ?, 0, 'supplement', ?, ?, ?, ?)",
-            (label, next_order, supplement_id, dose, _now_ts(), _now_ts()),
+            "dose, challenge_id, created_at, updated_at) "
+            "VALUES (?, ?, 0, 'supplement', ?, ?, ?, ?, ?)",
+            (label, next_order, supplement_id, dose, challenge_id, _now_ts(), _now_ts()),
         )
     db.commit()
     return jsonify({"status": "created", "id": cur.lastrowid}), 201
@@ -2016,7 +2344,8 @@ def api_challenge_history():
     if (to_date - from_date).days > MAX_SPAN - 1:
         from_date = to_date - timedelta(days=MAX_SPAN - 1)
 
-    items = _active_challenge_items(db)
+    challenge_id = request.args.get("challenge_id")
+    items = _active_challenge_items(db, int(challenge_id) if challenge_id else None)
     active_ids = [i["id"] for i in items]
     by_day = _completions_by_day(db, active_ids)
     history = []
@@ -2303,10 +2632,22 @@ def _challenge_reminder_tick(now, conn):
     if _get_app_state(conn, "challenge_reminder_last_sent") == today_iso:
         return  # already evaluated today
     _set_app_state(conn, "challenge_reminder_last_sent", today_iso)
-    # Only nag if the challenge isn't already fully done for the day.
-    if not _challenge_complete_on(conn, today_iso):
+    # Only nag if something is still outstanding, across every challenge that
+    # is running today — a finished one shouldn't keep asking.
+    outstanding = []
+    for ch in _challenges(conn):
+        if _challenge_finished(ch) or not _active_challenge_items(conn, ch["id"]):
+            continue
+        start, _ = _challenge_day_range(ch, now.date())
+        if start and now.date() < start:
+            continue
+        # Judged for the day being evaluated, which is not necessarily today.
+        if not _challenge_complete_on(conn, today_iso, ch["id"]):
+            outstanding.append(ch["name"])
+    if outstanding:
+        names = ", ".join(outstanding)
         send_notification(
-            "Daily challenge time — knock out your creatine, push-ups and squats 💪",
+            f"Still to do today: {names} 💪",
             title="Gym Tracker",
         )
 

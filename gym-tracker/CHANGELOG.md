@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.13.0
+
+- **Run several challenges at once.** A challenge is now a named thing with its
+  own items, its own streak and its own card on Home. Your existing items were
+  moved into one called **Daily challenge**, backdated to your earliest tick so
+  its statistics cover the history you already have.
+- **Challenges can be time-boxed.** Give one a **start** and an optional **end
+  date** — a 30-day run shows *day 12 of 30*, finishes on its own, and drops off
+  Home while keeping its statistics. Leave the end date empty for an open-ended
+  daily habit, which is how the existing one behaves.
+- **Per-challenge statistics on Trends**: completion rate, current and longest
+  streak, an adherence bar per day for the last 30 (all done / partly / missed,
+  where a missed day is an empty track rather than a zero-height bar), a
+  per-item breakdown showing which items you actually keep up with, and the
+  volume logged through the challenge including heart rate.
+- The daily reminder now names whichever challenges are still outstanding, and
+  stays quiet about ones that have finished or haven't started.
+
 ## 1.12.0
 
 - **Exercises, supplements and challenge items now record when they were

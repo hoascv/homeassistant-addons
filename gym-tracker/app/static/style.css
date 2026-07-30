@@ -150,6 +150,25 @@ body {
 }
 .garmin-asof { font-size: 0.75rem; color: var(--text-muted); margin: 0.1rem 0 0.5rem; }
 
+/* Challenge cards + adherence */
+.challenge-progress { font-size: 0.78rem; color: var(--text-muted); margin: 0.4rem 0 0; }
+.adherence {
+  display: flex; align-items: flex-end; gap: 2px; height: 46px; width: 100%;
+}
+.adh-slot { flex: 1; height: 100%; display: flex; align-items: flex-end; min-width: 3px; }
+.adh-bar { display: block; width: 100%; border-radius: 2px; }
+.adh-full { background: var(--accent); }
+.adh-part { background: var(--accent-soft); }
+/* A missed day is a full-height empty track, not a bar of zero height: the
+   difference between "nothing done" and "no data" has to stay visible. */
+.adh-none { background: var(--surface-2); border: 1px solid var(--border); }
+.adh-legend {
+  display: flex; gap: 0.75rem; margin-top: 0.35rem;
+  font-size: 0.72rem; color: var(--text-muted);
+}
+.adh-legend span { display: inline-flex; align-items: center; gap: 0.25rem; }
+.adh-key { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
+
 /* Garmin daily history */
 .ghist-head {
   display: flex; align-items: center; justify-content: space-between;
@@ -321,7 +340,9 @@ input:focus, select:focus { outline: 2px solid var(--accent-soft); border-color:
 }
 .btn-primary { background: var(--accent); color: #fff; }
 .btn-secondary { background: var(--surface-2); color: var(--text); border-color: var(--border); }
-.btn-primary.full { width: 100%; margin-top: 0.4rem; }
+.btn-primary.full, .btn-secondary.full { width: 100%; margin-top: 0.4rem; }
+/* Sits between cards rather than inside one, so it needs the card's rhythm. */
+#challenge-new-btn { margin-bottom: 0.9rem; }
 .link-btn { border: none; background: none; color: var(--accent); font: inherit; font-size: 0.85rem; font-weight: 600; cursor: pointer; padding: 0; }
 .file-label { cursor: pointer; text-align: center; }
 

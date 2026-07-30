@@ -86,7 +86,34 @@ Add, **rename** (✎), or remove entries in either tab. Tap an exercise to
 **log a set** (sets × reps, with optional weight or duration); each exercise
 keeps a short history of what you logged.
 
-## The daily challenge
+## Challenges
+
+You can run **several challenges at once**. Each is a named set of items you
+tick off daily, with its own streak and its own card on Home. **+ New
+challenge** creates one; **Edit challenge** renames it or changes its dates.
+
+A challenge has a **start date** and an optional **end date**. With an end date
+it is time-boxed: the card shows *day 12 of 30*, and once the end date passes it
+finishes — it drops off Home but keeps its statistics. Leave the end date empty
+for an open-ended daily habit.
+
+Archiving a challenge hides it without deleting anything: its items and every
+tick you made stay in the database.
+
+### Statistics
+
+The **Trends** tab shows, for each challenge:
+
+- **Completion rate** — days where every item was ticked, out of days the
+  challenge has been running.
+- **Current and longest streak**.
+- **Adherence**, one bar per day for the last 30: all done, partly done, or
+  missed. A missed day is drawn as an empty track rather than a flat bar, so
+  it never looks like data that's simply absent.
+- **Per item** — how often you actually do each one, which is where you find
+  out that the creatine is at 95% and the squats at 40%.
+- **Volume** — sessions and reps logged through the challenge, with heart rate
+  where Garmin has it.
 
 The challenge is a checklist you complete each day, **built from your
 library** — every item is either an exercise (with a rep/set target) or a

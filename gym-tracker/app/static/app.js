@@ -67,7 +67,9 @@ function showTab(panelId) {
 
 document.getElementById("main-tabs").addEventListener("click", (e) => {
   const btn = e.target.closest(".tab");
-  if (btn) showTab(btn.dataset.panel);
+  if (!btn) return;
+  showTab(btn.dataset.panel);
+  if (btn.dataset.panel === "panel-trends") loadChallengeStats();
 });
 
 (function restoreTab() {
@@ -468,21 +470,44 @@ function renderWeightChart(logs, goal, forecast, opts) {
 
 // --- Daily challenge -------------------------------------------------------
 
-// Last /api/challenge payload — the source for optimistic toggles between
+// Last /api/challenges payload — the source for optimistic toggles between
 // server round-trips. Rendering reads from here so an optimistic tweak to the
 // cache shows up the moment we re-render, before the network answers.
-let challengeData = null;
+let challengeData = [];
+// Which challenge the items sheet is editing.
+let challengeItemsFor = null;
 
 async function loadChallenge() {
-  try { challengeData = await fetchJSON("api/challenge"); } catch (e) { return; }
+  try { challengeData = await fetchJSON("api/challenges"); } catch (e) { return; }
   renderChallenge(challengeData);
 }
 
-function renderChallenge(data) {
-  document.getElementById("challenge-streak").textContent = `🔥 ${data.streak}`;
+function challengeById(id) {
+  return (challengeData || []).find((c) => c.id === id) || null;
+}
 
-  const list = document.getElementById("challenge-list");
-  list.innerHTML = (data.items || [])
+function findChallengeItem(itemId) {
+  for (const ch of challengeData || []) {
+    const item = (ch.items || []).find((it) => it.id === itemId);
+    if (item) return { challenge: ch, item };
+  }
+  return null;
+}
+
+function renderChallenge(list) {
+  const host = document.getElementById("challenge-cards");
+  // A finished challenge drops off Home; its statistics stay on Trends.
+  const running = (list || []).filter((c) => !c.finished);
+  if (!running.length) {
+    host.innerHTML =
+      '<section class="card"><p class="empty-state">No challenges running. Create one to start a streak.</p></section>';
+    return;
+  }
+  host.innerHTML = running.map(challengeCardHtml).join("");
+}
+
+function challengeCardHtml(ch) {
+  const items = (ch.items || [])
     .map(
       (it) => `
       <li class="challenge-item ${it.done_today ? "done" : ""}" data-id="${it.id}">
@@ -491,27 +516,48 @@ function renderChallenge(data) {
       </li>`
     )
     .join("");
-
-  const week = document.getElementById("challenge-week");
-  week.innerHTML = (data.last_7_days || [])
+  const dots = (ch.last_7_days || [])
     .map(
-      (d) => `<span class="week-dot ${d.complete ? "on" : ""} ${d.day === data.today ? "today" : ""}" title="${d.day}"></span>`
+      (d) => `<span class="week-dot ${d.complete ? "on" : ""} ${d.day === ch.today ? "today" : ""}" title="${d.day}"></span>`
     )
     .join("");
+  const progress = ch.not_started
+    ? `starts ${escapeHtml(fmtDate(ch.start_date))}`
+    : ch.total_days
+    ? `day ${ch.day_number} of ${ch.total_days}`
+    : "";
+  const empty = items ? "" : '<p class="empty-state">No items yet — add some to start ticking.</p>';
+  return `
+    <section class="card challenge-card" data-challenge="${ch.id}">
+      <div class="card-head">
+        <h2>${escapeHtml(ch.name)}</h2>
+        <span class="pill pill-streak">🔥 ${ch.streak}</span>
+      </div>
+      <ul class="challenge-list">${items}</ul>
+      ${empty}
+      <div class="week-dots">${dots}</div>
+      ${progress ? `<p class="challenge-progress">${progress}</p>` : ""}
+      <div class="card-actions">
+        <button type="button" class="link-btn ch-edit" data-challenge="${ch.id}">Edit challenge</button>
+        <button type="button" class="link-btn ch-history" data-challenge="${ch.id}">History</button>
+        <button type="button" class="link-btn ch-items" data-challenge="${ch.id}">Edit items</button>
+      </div>
+    </section>`;
 }
 
-document.getElementById("challenge-list").addEventListener("click", (e) => {
+document.getElementById("challenge-cards").addEventListener("click", (e) => {
   const el = e.target.closest(".challenge-item");
-  if (!el || !challengeData) return;
-  const item = (challengeData.items || []).find((it) => it.id === Number(el.dataset.id));
-  if (!item) return;
+  if (!el) return;
+  const found = findChallengeItem(Number(el.dataset.id));
+  if (!found) return;
+  const item = found.item;
 
   // Optimistic update: flip the check now (and, for exercise items, the Recent
   // workouts card, since ticking one logs a workout) so the UI reacts instantly
   // like a live app. The POST reconciles against the server; on failure we roll
   // the same change back and tell the user.
   const nextDone = !item.done_today;
-  applyChallengeToggle(item, nextDone);
+  applyChallengeToggle(item, nextDone, found.challenge);
 
   fetchJSON("api/challenge/toggle", {
     method: "POST",
@@ -525,7 +571,7 @@ document.getElementById("challenge-list").addEventListener("click", (e) => {
       refreshWorkoutViews();
     })
     .catch(() => {
-      applyChallengeToggle(item, !nextDone);
+      applyChallengeToggle(item, !nextDone, found.challenge);
       toast("Couldn't update — check your connection.");
     });
 });
@@ -533,12 +579,12 @@ document.getElementById("challenge-list").addEventListener("click", (e) => {
 // Apply a challenge toggle to the local caches and re-render — no network. For
 // exercise items this also mirrors the auto-logged workout in the Recent
 // workouts card so it tracks the check optimistically.
-function applyChallengeToggle(item, done) {
+function applyChallengeToggle(item, done, challenge) {
   item.done_today = done;
   renderChallenge(challengeData);
 
   if (item.item_type !== "exercise") return;
-  const day = challengeData.today;
+  const day = challenge.today;
   const key = `challenge-${item.id}-${day}`;
   // Remove any existing row for this exercise+day (an earlier optimistic row, or
   // the real server row when un-ticking), then re-add if the item is now done.
@@ -575,7 +621,8 @@ function refreshWorkoutViews() {
 async function loadChallengeItems() {
   const list = document.getElementById("challenge-items-list");
   let items;
-  try { items = await fetchJSON("api/challenge/items"); } catch (e) { return; }
+  const qs = challengeItemsFor ? `?challenge_id=${challengeItemsFor}` : "";
+  try { items = await fetchJSON(`api/challenge/items${qs}`); } catch (e) { return; }
   list.innerHTML = items
     .map((it) => {
       const icon = it.item_type === "supplement" ? "💊" : "🏋️";
@@ -616,11 +663,77 @@ function syncChallengeItemFields() {
 }
 document.getElementById("ci-type").addEventListener("change", syncChallengeItemFields);
 
-document.getElementById("challenge-manage-btn").addEventListener("click", async () => {
-  openSheet("challenge-items-backdrop");
-  await populateChallengeItemForm();
-  syncChallengeItemFields();
-  loadChallengeItems();
+// Card actions are delegated: the cards are rebuilt on every render.
+document.getElementById("challenge-cards").addEventListener("click", async (e) => {
+  const btn = e.target.closest(".ch-edit, .ch-items, .ch-history");
+  if (!btn) return;
+  const id = Number(btn.dataset.challenge);
+  if (btn.classList.contains("ch-edit")) {
+    openChallengeEditor(challengeById(id));
+  } else if (btn.classList.contains("ch-items")) {
+    challengeItemsFor = id;
+    const ch = challengeById(id);
+    document.getElementById("challenge-items-title").textContent =
+      ch ? `Items · ${ch.name}` : "Challenge items";
+    openSheet("challenge-items-backdrop");
+    await populateChallengeItemForm();
+    syncChallengeItemFields();
+    loadChallengeItems();
+  } else {
+    challengeItemsFor = id;
+    openChallengeHistory();
+  }
+});
+
+document.getElementById("challenge-new-btn").addEventListener("click", () => openChallengeEditor(null));
+
+function openChallengeEditor(ch) {
+  document.getElementById("challenge-edit-title").textContent = ch ? "Edit challenge" : "New challenge";
+  document.getElementById("challenge-edit-id").value = ch ? ch.id : "";
+  document.getElementById("challenge-edit-name").value = ch ? ch.name : "";
+  document.getElementById("challenge-edit-start").value = ch ? ch.start_date : todayISO();
+  document.getElementById("challenge-edit-end").value = ch && ch.end_date ? ch.end_date : "";
+  document.getElementById("challenge-edit-delete").hidden = !ch;
+  document.getElementById("challenge-edit-result").textContent = "";
+  openSheet("challenge-edit-backdrop");
+}
+
+document.getElementById("challenge-edit-close").addEventListener("click", () => {
+  closeSheet("challenge-edit-backdrop");
+});
+
+document.getElementById("challenge-edit-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const id = document.getElementById("challenge-edit-id").value;
+  const result = document.getElementById("challenge-edit-result");
+  const payload = {
+    name: document.getElementById("challenge-edit-name").value.trim(),
+    start_date: document.getElementById("challenge-edit-start").value,
+    // Sent even when empty: that is how an end date gets cleared.
+    end_date: document.getElementById("challenge-edit-end").value,
+  };
+  try {
+    await fetchJSON(id ? `api/challenges/${id}` : "api/challenges", {
+      method: id ? "PUT" : "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    closeSheet("challenge-edit-backdrop");
+    loadChallenge();
+    loadChallengeStats();
+  } catch (err) { result.textContent = err.message; }
+});
+
+document.getElementById("challenge-edit-delete").addEventListener("click", async () => {
+  const id = document.getElementById("challenge-edit-id").value;
+  if (!id) return;
+  if (!confirm("Archive this challenge? Its history and statistics are kept.")) return;
+  try {
+    await fetchJSON(`api/challenges/${id}`, { method: "DELETE" });
+    closeSheet("challenge-edit-backdrop");
+    loadChallenge();
+    loadChallengeStats();
+  } catch (err) { toast(err.message); }
 });
 document.getElementById("challenge-items-close-btn").addEventListener("click", () => {
   closeSheet("challenge-items-backdrop");
@@ -634,7 +747,8 @@ document.getElementById("challenge-item-form").addEventListener("submit", async 
   if (type === "supplement") {
     const supplement_id = document.getElementById("ci-supplement").value;
     if (!supplement_id) { toast("Add a supplement in the Library first."); return; }
-    payload = { item_type: "supplement", supplement_id, dose: document.getElementById("ci-dose").value };
+    payload = { item_type: "supplement", supplement_id, dose: document.getElementById("ci-dose").value,
+                challenge_id: challengeItemsFor };
   } else {
     const exercise_id = document.getElementById("ci-exercise").value;
     if (!exercise_id) { toast("Add an exercise in the Library first."); return; }
@@ -643,6 +757,7 @@ document.getElementById("challenge-item-form").addEventListener("submit", async 
       exercise_id,
       target_sets: document.getElementById("ci-sets").value,
       target_reps: document.getElementById("ci-reps").value,
+      challenge_id: challengeItemsFor,
     };
   }
   try {
@@ -682,9 +797,88 @@ document.getElementById("challenge-items-list").addEventListener("change", async
   } catch (err) { toast(err.message); }
 });
 
+// --- Trends: per-challenge statistics ---------------------------------------
+
+const ADHERENCE_DAYS = 30;
+
+async function loadChallengeStats() {
+  const host = document.getElementById("challenge-stats");
+  let stats;
+  try { stats = await fetchJSON("api/challenges/stats"); } catch (e) { return; }
+  if (!stats.length) { host.innerHTML = ""; return; }
+  host.innerHTML = stats.map(challengeStatsHtml).join("");
+}
+
+function challengeStatsHtml(st) {
+  const period = st.end_date
+    ? `${fmtDate(st.start_date)} – ${fmtDate(st.end_date)}`
+    : `since ${fmtDate(st.start_date)}`;
+  const pct = st.completion_pct == null ? "—" : `${st.completion_pct}%`;
+
+  // One bar per day: complete, partly done, or missed. A missed day is drawn
+  // as an empty track rather than a zero-height bar, so it reads as "nothing
+  // done" instead of "no data".
+  const days = (st.days || []).slice(-ADHERENCE_DAYS);
+  const bars = days
+    .map((d) => {
+      const state = d.complete ? "full" : d.done > 0 ? "part" : "none";
+      const height = d.total ? Math.round((d.done / d.total) * 100) : 0;
+      return `<span class="adh-slot" title="${d.day} · ${d.done}/${d.total}">
+        <span class="adh-bar adh-${state}" style="height:${state === "none" ? 100 : Math.max(height, 8)}%"></span>
+      </span>`;
+    })
+    .join("");
+
+  const items = (st.items || [])
+    .map(
+      (it) => `
+      <div class="ghist-row">
+        <span class="ghist-day">${escapeHtml(it.label)}</span>
+        <span class="ghist-bar"><span class="ghist-fill" style="width:${it.rate_pct || 0}%"></span></span>
+        <span class="ghist-val">${it.rate_pct == null ? "—" : it.rate_pct + "%"}</span>
+      </div>`
+    )
+    .join("");
+
+  const v = st.volume || {};
+  const volumeBits = [];
+  if (v.sessions) volumeBits.push(`${v.sessions} logged`);
+  if (v.reps) volumeBits.push(`${v.reps} reps`);
+  if (v.hr_avg != null) volumeBits.push(`♥ ${v.hr_avg} avg${v.hr_max != null ? ` · ${v.hr_max} max` : ""}`);
+
+  return `
+    <section class="card">
+      <div class="card-head">
+        <h2>${escapeHtml(st.name)}</h2>
+        <span class="pill">${st.finished ? "Finished" : escapeHtml(period)}</span>
+      </div>
+      ${st.finished ? `<p class="challenge-progress">${escapeHtml(period)}</p>` : ""}
+
+      <div class="mini-stats">
+        <div class="mini-stat"><span class="mini-value">${pct}</span><span class="mini-label">Completed</span></div>
+        <div class="mini-stat"><span class="mini-value">🔥 ${st.current_streak}</span><span class="mini-label">Streak</span></div>
+        <div class="mini-stat"><span class="mini-value">${st.longest_streak}</span><span class="mini-label">Longest</span></div>
+      </div>
+      <p class="challenge-progress">${st.days_complete} of ${st.days_elapsed} days</p>
+
+      <figure class="chart-figure">
+        <figcaption>Last ${Math.min(ADHERENCE_DAYS, days.length)} days</figcaption>
+        <div class="adherence">${bars}</div>
+        <div class="adh-legend">
+          <span><i class="adh-key adh-full"></i>all done</span>
+          <span><i class="adh-key adh-part"></i>partly</span>
+          <span><i class="adh-key adh-none"></i>missed</span>
+        </div>
+      </figure>
+
+      ${items ? `<h3 class="subhead">Per item</h3><div class="ghist">${items}</div>` : ""}
+      ${volumeBits.length ? `<p class="challenge-progress">${escapeHtml(volumeBits.join(" · "))}</p>` : ""}
+    </section>`;
+}
+
 // --- Challenge history (edit past days) ------------------------------------
 
-document.getElementById("challenge-history-btn").addEventListener("click", () => {
+function openChallengeHistory() {
   openSheet("challenge-history-backdrop");
   // Default to the last two weeks; the user widens "From" to backfill older.
   const to = new Date();
@@ -693,7 +887,7 @@ document.getElementById("challenge-history-btn").addEventListener("click", () =>
   document.getElementById("history-to").value = to.toISOString().slice(0, 10);
   document.getElementById("history-from").value = from.toISOString().slice(0, 10);
   loadChallengeHistory();
-});
+}
 document.getElementById("challenge-history-close-btn").addEventListener("click", () => {
   closeSheet("challenge-history-backdrop");
   loadChallenge();
@@ -707,7 +901,8 @@ let challengeHistoryData = null;
 async function loadChallengeHistory() {
   const from = document.getElementById("history-from").value;
   const to = document.getElementById("history-to").value;
-  const qs = from && to ? `from=${from}&to=${to}` : "days=14";
+  let qs = from && to ? `from=${from}&to=${to}` : "days=14";
+  if (challengeItemsFor) qs += `&challenge_id=${challengeItemsFor}`;
   try { challengeHistoryData = await fetchJSON(`api/challenge/history?${qs}`); } catch (e) { return; }
   renderChallengeHistory(challengeHistoryData);
 }
@@ -1678,6 +1873,7 @@ async function pingStatus() {
 
 loadHome();
 loadChallenge();
+loadChallengeStats();
 loadRecentWorkouts();
 loadGarminCard();
 pingStatus();
