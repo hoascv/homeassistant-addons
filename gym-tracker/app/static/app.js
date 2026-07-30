@@ -636,11 +636,46 @@ async function loadChallengeItems() {
           <span class="ci-icon">${icon}</span>
           <span class="ci-name">${escapeHtml(it.name)}</span>
           ${editField}
+          ${moveSelectHtml(it)}
           <button type="button" class="list-del ci-del" data-id="${it.id}" aria-label="Remove">✕</button>
         </li>`;
     })
     .join("");
 }
+
+// Offered only when there is somewhere to move to.
+function moveSelectHtml(it) {
+  const others = (challengeData || []).filter((c) => c.id !== challengeItemsFor && !c.finished);
+  if (!others.length) return "";
+  const options = others
+    .map((c) => `<option value="${c.id}">${escapeHtml(c.name)}</option>`)
+    .join("");
+  return `<select class="ci-move" data-id="${it.id}" aria-label="Move to another challenge">
+      <option value="">Move to…</option>${options}
+    </select>`;
+}
+
+document.getElementById("challenge-items-list").addEventListener("change", async (e) => {
+  const sel = e.target.closest(".ci-move");
+  if (!sel || !sel.value) return;
+  const name = sel.options[sel.selectedIndex].textContent;
+  // Spelled out because it is not a rename: the days already ticked stay with
+  // the challenge they were earned in.
+  if (!confirm(`Move this item to "${name}"? Days already ticked stay with this challenge.`)) {
+    sel.value = "";
+    return;
+  }
+  try {
+    await fetchJSON(`api/challenge/items/${sel.dataset.id}/move`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ challenge_id: Number(sel.value) }),
+    });
+    await loadChallenge();
+    loadChallengeItems();
+    loadChallengeStats();
+  } catch (err) { toast(err.message); sel.value = ""; }
+});
 
 async function populateChallengeItemForm() {
   // Fill the exercise + supplement dropdowns from the libraries.
@@ -809,6 +844,42 @@ async function loadChallengeStats() {
   host.innerHTML = stats.map(challengeStatsHtml).join("");
 }
 
+// Weigh-ins over exactly the days the adherence bars cover, on the same
+// x-positions, so the two can be read against each other. Deliberately not
+// presented as cause and effect: a handful of weigh-ins over a few weeks says
+// nothing about what moved what.
+function weightStripHtml(st, days) {
+  const w = (st.weight || {}).points || [];
+  if (!days.length || w.length < 2) return "";
+  const index = new Map(days.map((d, i) => [d.day, i]));
+  const points = w
+    .filter((p) => index.has(p.day) && p.weight_kg != null)
+    .map((p) => ({ i: index.get(p.day), y: p.weight_kg }));
+  if (points.length < 2) return "";
+
+  const W = 300, H = 42, pad = 4;
+  const lo = Math.min(...points.map((p) => p.y));
+  const hi = Math.max(...points.map((p) => p.y));
+  const span = hi - lo || 1;
+  // Slot centres, matching how the bars above are laid out.
+  const sx = (i) => ((i + 0.5) / days.length) * W;
+  const sy = (y) => pad + (1 - (y - lo) / span) * (H - pad * 2);
+  const line = points.map((p) => `${sx(p.i).toFixed(1)},${sy(p.y).toFixed(1)}`).join(" ");
+  const dots = points
+    .map((p) => `<circle cx="${sx(p.i).toFixed(1)}" cy="${sy(p.y).toFixed(1)}" r="2.5" class="wstrip-dot"/>`)
+    .join("");
+
+  const delta = st.weight.delta_kg;
+  const deltaText =
+    delta == null ? "" : ` · ${delta > 0 ? "+" : ""}${delta} kg over these days`;
+  return `
+    <figcaption class="wstrip-caption">Weight${escapeHtml(deltaText)}</figcaption>
+    <svg class="wstrip" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img"
+         aria-label="Weight over the same days">
+      <polyline points="${line}" class="wstrip-line"/>${dots}
+    </svg>`;
+}
+
 function challengeStatsHtml(st) {
   const period = st.end_date
     ? `${fmtDate(st.start_date)} – ${fmtDate(st.end_date)}`
@@ -869,6 +940,7 @@ function challengeStatsHtml(st) {
           <span><i class="adh-key adh-part"></i>partly</span>
           <span><i class="adh-key adh-none"></i>missed</span>
         </div>
+        ${weightStripHtml(st, days)}
       </figure>
 
       ${items ? `<h3 class="subhead">Per item</h3><div class="ghist">${items}</div>` : ""}

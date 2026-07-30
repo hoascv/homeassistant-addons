@@ -528,3 +528,111 @@ def test_a_finished_challenge_keeps_the_streak_it_ended_on(client, conn):
     # streak of zero just because the challenge is over.
     assert stats["current_streak"] == 7
     assert stats["longest_streak"] == 7
+
+
+# --- Moving an item between challenges --------------------------------------
+
+
+def test_moving_an_item_leaves_its_earned_days_behind(client, conn):
+    from datetime import date, timedelta
+
+    today = date.today()
+    start = (today - timedelta(days=5)).isoformat()
+    origin = _new_challenge(client, "Morning", start)
+    item = _add_exercise_item(client, conn, origin, "squat")
+    _backdate_setup(conn, origin, start)
+    for off in range(1, 6):
+        client.post("/api/challenge/toggle", json={
+            "item_id": item, "day": (today - timedelta(days=off)).isoformat(),
+        })
+    target = _new_challenge(client, "Evening", today.isoformat())
+
+    r = client.post(f"/api/challenge/items/{item}/move", json={"challenge_id": target})
+    assert r.status_code == 200
+    new_id = r.get_json()["id"]
+
+    stats = {s["id"]: s for s in client.get("/api/challenges/stats").get_json()}
+    # The days were earned under the old challenge and stay there.
+    assert stats[origin]["days_complete"] == 5
+    old_item = next(i for i in stats[origin]["items"] if i["id"] == item)
+    assert old_item["archived"] is True and old_item["days_done"] == 5
+    # The new challenge starts clean rather than inheriting them.
+    assert stats[target]["days_complete"] == 0
+    moved = next(i for i in stats[target]["items"] if i["id"] == new_id)
+    assert moved["days_done"] == 0
+
+    # The item is gone from the old challenge's live list, present in the new.
+    assert item not in [i["id"] for i in client.get(f"/api/challenge/items?challenge_id={origin}").get_json()]
+    assert new_id in [i["id"] for i in client.get(f"/api/challenge/items?challenge_id={target}").get_json()]
+
+
+def test_a_moved_item_keeps_its_target_and_records_its_origin(client, conn):
+    from datetime import date
+
+    origin = _new_challenge(client, "Morning", date.today().isoformat())
+    ex = conn.execute("SELECT id FROM exercises WHERE archived = 0 LIMIT 1").fetchone()["id"]
+    item = client.post("/api/challenge/items", json={
+        "item_type": "exercise", "exercise_id": ex, "target_sets": 4, "target_reps": 12,
+        "challenge_id": origin,
+    }).get_json()["id"]
+    target = _new_challenge(client, "Evening", date.today().isoformat())
+
+    new_id = client.post(f"/api/challenge/items/{item}/move", json={
+        "challenge_id": target,
+    }).get_json()["id"]
+
+    row = conn.execute("SELECT * FROM challenge_items WHERE id = ?", (new_id,)).fetchone()
+    assert row["target_sets"] == 4 and row["target_reps"] == 12
+    assert row["moved_from"] == item  # the lineage is recorded
+    assert row["challenge_id"] == target
+
+
+def test_moving_rejects_a_bad_destination(client, conn):
+    from datetime import date
+
+    origin = _new_challenge(client, "Morning", date.today().isoformat())
+    item = _add_exercise_item(client, conn, origin, "squat")
+
+    assert client.post(f"/api/challenge/items/{item}/move", json={"challenge_id": origin}).status_code == 400
+    assert client.post(f"/api/challenge/items/{item}/move", json={"challenge_id": 9999}).status_code == 400
+    assert client.post(f"/api/challenge/items/{item}/move", json={}).status_code == 400
+    assert client.post("/api/challenge/items/9999/move", json={"challenge_id": origin}).status_code == 404
+
+
+# --- Weight alongside adherence ---------------------------------------------
+
+
+def test_stats_include_weigh_ins_from_the_challenge_period(client, conn):
+    from datetime import date, timedelta
+
+    today = date.today()
+    start = (today - timedelta(days=6)).isoformat()
+    cid = _new_challenge(client, "Cut", start)
+    _add_exercise_item(client, conn, cid, "squat")
+    # One before the challenge began, two inside it.
+    for day, kg, bf in ((today - timedelta(days=20), 103.0, 22.0),
+                        (today - timedelta(days=5), 102.0, 21.0),
+                        (today - timedelta(days=1), 101.2, 20.4)):
+        conn.execute(
+            "INSERT INTO weight_logs (ts, weight_kg, body_fat_pct, ts_exact) VALUES (?, ?, ?, 0)",
+            (f"{day.isoformat()}T12:00:00", kg, bf),
+        )
+    conn.commit()
+
+    stats = next(s for s in client.get("/api/challenges/stats").get_json() if s["id"] == cid)
+    weight = stats["weight"]
+    assert [p["day"] for p in weight["points"]] == [
+        (today - timedelta(days=5)).isoformat(), (today - timedelta(days=1)).isoformat(),
+    ]
+    assert weight["start_kg"] == 102.0 and weight["end_kg"] == 101.2
+    assert weight["delta_kg"] == -0.8
+    assert weight["delta_bf"] == -0.6
+
+
+def test_stats_weight_is_empty_without_weigh_ins_in_the_period(client, conn):
+    from datetime import date, timedelta
+
+    cid = _new_challenge(client, "Cut", (date.today() + timedelta(days=2)).isoformat())
+    stats = next(s for s in client.get("/api/challenges/stats").get_json() if s["id"] == cid)
+    assert stats["weight"]["points"] == []
+    assert stats["weight"]["delta_kg"] is None

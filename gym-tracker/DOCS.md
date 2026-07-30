@@ -100,6 +100,11 @@ for an open-ended daily habit.
 Archiving a challenge hides it without deleting anything: its items and every
 tick you made stay in the database.
 
+**Edit items** also lets you **move** an item to another challenge. The days you
+already ticked stay with the challenge you earned them in — a move ends the
+item's membership there and starts a new one in the destination, so neither
+challenge's statistics are rewritten by it.
+
 ### Statistics
 
 The **Trends** tab shows, for each challenge:
@@ -114,6 +119,10 @@ The **Trends** tab shows, for each challenge:
   out that the creatine is at 95% and the squats at 40%.
 - **Volume** — sessions and reps logged through the challenge, with heart rate
   where Garmin has it.
+- **Weight** over the same days as the adherence bars, aligned to them, with
+  the change across the period. It sits next to the adherence deliberately —
+  the point is to see what the scale did while you were keeping the challenge —
+  but a few weigh-ins over a few weeks show a coincidence, not a cause.
 
 Each day is scored against the items that were part of the challenge **that
 day**. An item you add later counts only from the day you added it, so adding

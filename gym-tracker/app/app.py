@@ -18,7 +18,7 @@ from flask import Flask, Response, g, jsonify, render_template, request, send_fi
 
 import garmin_client
 
-APP_VERSION = "1.14.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.15.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("GYM_DB_PATH", "/data/gym.db")
 OPTIONS_PATH = os.environ.get("GYM_OPTIONS_PATH", "/data/options.json")
@@ -324,7 +324,8 @@ def init_db():
             challenge_id INTEGER REFERENCES challenges(id),
             created_at TEXT,
             updated_at TEXT,
-            archived_at TEXT
+            archived_at TEXT,
+            moved_from INTEGER REFERENCES challenge_items(id)
         )
         """
     )
@@ -511,6 +512,9 @@ def _migrate_columns(conn):
     item_cols = {row[1] for row in conn.execute("PRAGMA table_info(challenge_items)")}
     if "challenge_id" not in item_cols:
         conn.execute("ALTER TABLE challenge_items ADD COLUMN challenge_id INTEGER")
+    if "moved_from" not in item_cols:
+        # Which item this one continues, when it was moved between challenges.
+        conn.execute("ALTER TABLE challenge_items ADD COLUMN moved_from INTEGER")
     if "archived_at" not in item_cols:
         # When an item stopped being part of its challenge. Needed to judge a
         # past day by the items that existed then; updated_at can't stand in
@@ -2128,6 +2132,43 @@ def _challenge_view(conn, ch):
     }
 
 
+def _challenge_weight(conn, ch):
+    """Weigh-ins over the challenge's own period, so its adherence can be read
+    against what the scale did. Reported side by side, never as cause: a few
+    weigh-ins over a few weeks can't establish that one moved the other.
+    """
+    start, last = _challenge_day_range(ch)
+    empty = {"points": [], "start_kg": None, "end_kg": None, "delta_kg": None, "delta_bf": None}
+    if start is None:
+        return empty
+    rows = conn.execute(
+        "SELECT substr(ts, 1, 10) AS day, weight_kg, body_fat_pct FROM weight_logs "
+        "WHERE substr(ts, 1, 10) BETWEEN ? AND ? ORDER BY ts ASC, id ASC",
+        (start.isoformat(), last.isoformat()),
+    ).fetchall()
+    points = [
+        {"day": r["day"], "weight_kg": r["weight_kg"], "body_fat_pct": r["body_fat_pct"]}
+        for r in rows
+    ]
+    if not points:
+        return empty
+    first_bf = next((p["body_fat_pct"] for p in points if p["body_fat_pct"] is not None), None)
+    last_bf = next(
+        (p["body_fat_pct"] for p in reversed(points) if p["body_fat_pct"] is not None), None
+    )
+    return {
+        "points": points,
+        "start_kg": points[0]["weight_kg"],
+        "end_kg": points[-1]["weight_kg"],
+        "delta_kg": round(points[-1]["weight_kg"] - points[0]["weight_kg"], 1),
+        "delta_bf": (
+            round(last_bf - first_bf, 1)
+            if first_bf is not None and last_bf is not None and len(points) > 1
+            else None
+        ),
+    }
+
+
 def _challenge_stats(conn, ch):
     """Per-challenge statistics: how often it is completed, the streaks, the
     day-by-day record, which items actually get done, and the volume logged
@@ -2189,6 +2230,7 @@ def _challenge_stats(conn, ch):
         "start_date": ch["start_date"],
         "end_date": ch["end_date"],
         "finished": _challenge_finished(ch),
+        "weight": _challenge_weight(conn, ch),
         "days_elapsed": elapsed,
         "days_complete": complete_days,
         "completion_pct": round(complete_days / elapsed * 100, 1) if elapsed else None,
@@ -2528,6 +2570,56 @@ def api_challenge_history():
     return jsonify(
         {"items": items, "days": history, "from": from_date.isoformat(), "to": to_date.isoformat()}
     )
+
+
+@app.route("/api/challenge/items/<int:item_id>/move", methods=["POST"])
+def api_move_challenge_item(item_id):
+    """Move an item to another challenge.
+
+    Ticks belong to the item they were made against, and they happened under
+    the old challenge — so this ends the item's membership there and starts a
+    fresh one in the target, rather than dragging its history across. Each
+    challenge then keeps the days it actually earned.
+    """
+    data = request.get_json(force=True, silent=True) or {}
+    db = get_db()
+    item = db.execute(
+        "SELECT * FROM challenge_items WHERE id = ? AND archived = 0", (item_id,)
+    ).fetchone()
+    if item is None:
+        return jsonify({"error": "no such challenge item"}), 404
+    try:
+        target_id = int(data.get("challenge_id"))
+    except (TypeError, ValueError):
+        return jsonify({"error": "challenge_id is required"}), 400
+    if target_id == item["challenge_id"]:
+        return jsonify({"error": "already in that challenge"}), 400
+    if db.execute(
+        "SELECT 1 FROM challenges WHERE id = ? AND archived = 0", (target_id,)
+    ).fetchone() is None:
+        return jsonify({"error": "no such challenge"}), 400
+
+    now = _now_ts()
+    db.execute(
+        "UPDATE challenge_items SET archived = 1, archived_at = ?, updated_at = ? WHERE id = ?",
+        (now, now, item_id),
+    )
+    order = db.execute(
+        "SELECT COALESCE(MAX(sort_order), -1) + 1 AS n FROM challenge_items "
+        "WHERE challenge_id = ? AND archived = 0",
+        (target_id,),
+    ).fetchone()["n"]
+    cur = db.execute(
+        "INSERT INTO challenge_items (label, sort_order, archived, item_type, exercise_id, "
+        "supplement_id, target_sets, target_reps, dose, challenge_id, created_at, updated_at, "
+        "moved_from) VALUES (?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            item["label"], order, item["item_type"], item["exercise_id"], item["supplement_id"],
+            item["target_sets"], item["target_reps"], item["dose"], target_id, now, now, item_id,
+        ),
+    )
+    db.commit()
+    return jsonify({"status": "moved", "id": cur.lastrowid})
 
 
 @app.route("/api/challenge/items/<int:item_id>", methods=["DELETE"])

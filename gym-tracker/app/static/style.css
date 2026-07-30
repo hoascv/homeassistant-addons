@@ -169,6 +169,19 @@ body {
 .adh-legend span { display: inline-flex; align-items: center; gap: 0.25rem; }
 .adh-key { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
 
+.ci-move { font-size: 0.75rem; max-width: 7.5rem; }
+
+/* Weight, aligned under a challenge's adherence bars */
+.wstrip-caption { margin-top: 0.6rem; }
+.wstrip { display: block; width: 100%; height: 42px; overflow: visible; }
+/* preserveAspectRatio="none" stretches the box to match the bars above, so the
+   stroke has to opt out of being stretched with it. */
+.wstrip-line {
+  fill: none; stroke: var(--accent); stroke-width: 2;
+  stroke-linejoin: round; stroke-linecap: round; vector-effect: non-scaling-stroke;
+}
+.wstrip-dot { fill: var(--surface); stroke: var(--accent); stroke-width: 2; vector-effect: non-scaling-stroke; }
+
 /* Garmin daily history */
 .ghist-head {
   display: flex; align-items: center; justify-content: space-between;

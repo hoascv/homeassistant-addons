@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.15.0
+
+- **Weight under each challenge's adherence bars.** The Trends card now draws
+  your weigh-ins over exactly the days the bars cover, on the same positions,
+  with the change across the period — so you can see what the scale did while
+  you were (or weren't) keeping the challenge. Shown side by side, never as
+  cause and effect: a handful of weigh-ins over a few weeks can't establish
+  that one moved the other.
+- **Items can be moved between challenges**, from the items sheet. A move ends
+  the item's membership where it was and starts a fresh one in the destination,
+  so the days you already ticked stay with the challenge that earned them
+  rather than being dragged across. Targets and doses come with it, and the new
+  item records which one it continues.
+
 ## 1.14.0
 
 - **A weigh-in's date can be edited.** The date field in the edit form was
