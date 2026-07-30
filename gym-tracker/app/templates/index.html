@@ -267,6 +267,28 @@
         <label>Start<input type="date" id="challenge-edit-start" required></label>
         <label>End<input type="date" id="challenge-edit-end" placeholder="optional"></label>
       </div>
+      <label class="full-label">Repeats
+        <select id="challenge-edit-kind">
+          <option value="daily">Every day</option>
+          <option value="interval">Every N days</option>
+          <option value="weekdays">Certain days of the week</option>
+        </select>
+      </label>
+      <label class="full-label" id="challenge-edit-interval-field" hidden>Every
+        <input type="number" id="challenge-edit-interval" min="2" max="30" value="2"> days
+      </label>
+      <div id="challenge-edit-weekdays-field" hidden>
+        <span class="field-label">On these days</span>
+        <div class="weekday-picker" id="challenge-edit-weekdays" role="group" aria-label="Days of the week">
+          <button type="button" data-day="0">M</button>
+          <button type="button" data-day="1">T</button>
+          <button type="button" data-day="2">W</button>
+          <button type="button" data-day="3">T</button>
+          <button type="button" data-day="4">F</button>
+          <button type="button" data-day="5">S</button>
+          <button type="button" data-day="6">S</button>
+        </div>
+      </div>
       <div class="form-actions">
         <button type="button" class="btn-secondary" id="challenge-edit-delete" hidden>Archive</button>
         <button type="submit" class="btn-primary">Save</button>

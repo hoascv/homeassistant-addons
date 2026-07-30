@@ -92,6 +92,14 @@ You can run **several challenges at once**. Each is a named set of items you
 tick off daily, with its own streak and its own card on Home. **+ New
 challenge** creates one; **Edit challenge** renames it or changes its dates.
 
+A challenge also has a **schedule**: every day (the default), **every N days**,
+or **certain days of the week**. Days it isn't scheduled are **rest days** — the
+card still shows, marked *Rest day* with the next due date, and its items stay
+tickable, but nothing is owed. Rest days don't break your streak, don't trigger
+the reminder, and aren't counted in the statistics, so a Mon/Wed/Fri challenge
+kept perfectly reads 100%. Ticking on a rest day is recorded but doesn't change
+any of the numbers.
+
 A challenge has a **start date** and an optional **end date**. With an end date
 it is time-boxed: the card shows *day 12 of 30*, and once the end date passes it
 finishes — it drops off Home but keeps its statistics. Leave the end date empty
@@ -113,11 +121,11 @@ challenge's statistics are rewritten by it.
 
 The **Trends** tab shows, for each challenge:
 
-- **Completion rate** — days where every item was ticked, out of days the
-  challenge has been running.
+- **Completion rate** — days where every item was ticked, out of the days the
+  challenge was actually due (rest days don't count against you).
 - **Current and longest streak**.
-- **Adherence**, one bar per day for the last 30: all done, partly done, or
-  missed. A missed day is drawn as an empty track rather than a flat bar, so
+- **Adherence**, one bar per day for the last 30: all done, partly done,
+  missed, or a rest day. A missed day is drawn as an empty track rather than a flat bar, so
   it never looks like data that's simply absent.
 - **Per item** — how often you actually do each one, which is where you find
   out that the creatine is at 95% and the squats at 40%.

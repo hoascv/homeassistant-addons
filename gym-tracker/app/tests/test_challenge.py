@@ -700,3 +700,196 @@ def test_repeating_accepts_explicit_dates_and_a_name(client, conn):
 
 def test_repeating_a_missing_challenge_is_a_404(client):
     assert client.post("/api/challenges/9999/repeat", json={}).status_code == 404
+
+
+# --- Schedules --------------------------------------------------------------
+
+
+def _scheduled_challenge(client, name, start, **schedule):
+    body = {"name": name, "start_date": start, **schedule}
+    r = client.post("/api/challenges", json=body)
+    assert r.status_code == 201, r.get_json()
+    return r.get_json()["id"]
+
+
+def test_predicate_every_n_days_is_anchored_on_the_start(client):
+    from datetime import date, timedelta
+
+    import app as gymapp
+
+    ch = {"schedule_kind": "interval", "schedule_interval": 2, "start_date": "2026-08-03"}
+    start = date(2026, 8, 3)
+    due = [gymapp._challenge_scheduled_on(ch, start + timedelta(days=i)) for i in range(5)]
+    assert due == [True, False, True, False, True]
+
+
+def test_predicate_weekdays(client):
+    from datetime import date
+
+    import app as gymapp
+
+    ch = {"schedule_kind": "weekdays", "schedule_weekdays": "0,2,4", "start_date": "2026-08-03"}
+    # Mon 3 Aug 2026 through Sun 9 Aug.
+    week = [gymapp._challenge_scheduled_on(ch, date(2026, 8, 3 + i)) for i in range(7)]
+    assert week == [True, False, True, False, True, False, False]
+
+
+def test_a_broken_schedule_falls_back_to_daily(client):
+    from datetime import date
+
+    import app as gymapp
+
+    for ch in (
+        {"schedule_kind": "interval", "schedule_interval": None, "start_date": "2026-08-03"},
+        {"schedule_kind": "weekdays", "schedule_weekdays": "", "start_date": "2026-08-03"},
+        {"schedule_kind": "nonsense", "start_date": "2026-08-03"},
+    ):
+        assert gymapp._challenge_scheduled_on(ch, date(2026, 8, 4)) is True
+
+
+def test_a_weekday_challenge_kept_perfectly_is_a_hundred_percent(client, conn):
+    from datetime import date, timedelta
+
+    # Four weeks back, so every weekday appears several times.
+    today = date.today()
+    start = (today - timedelta(days=27)).isoformat()
+    weekdays = ",".join(str(d) for d in (today.weekday(), (today.weekday() + 2) % 7))
+    cid = _scheduled_challenge(
+        client, "Gym days", start, schedule_kind="weekdays", schedule_weekdays=weekdays,
+    )
+    item = _add_exercise_item(client, conn, cid, "squat")
+    _backdate_setup(conn, cid, start)
+
+    due = [
+        (today - timedelta(days=off))
+        for off in range(28)
+        if str((today - timedelta(days=off)).weekday()) in weekdays.split(",")
+    ]
+    for day in due:
+        client.post("/api/challenge/toggle", json={"item_id": item, "day": day.isoformat()})
+
+    stats = next(s for s in client.get("/api/challenges/stats").get_json() if s["id"] == cid)
+    assert stats["days_elapsed"] == len(due)  # not 28
+    assert stats["completion_pct"] == 100.0
+    assert stats["schedule"]["kind"] == "weekdays"
+
+
+def test_a_rest_day_does_not_break_the_streak(client, conn):
+    from datetime import date, timedelta
+
+    today = date.today()
+    start = (today - timedelta(days=8)).isoformat()
+    cid = _scheduled_challenge(
+        client, "Every other day", start, schedule_kind="interval", schedule_interval=2,
+    )
+    item = _add_exercise_item(client, conn, cid, "squat")
+    _backdate_setup(conn, cid, start)
+
+    anchor = date.fromisoformat(start)
+    due = [anchor + timedelta(days=i) for i in range(0, 9, 2)]
+    for day in due:
+        client.post("/api/challenge/toggle", json={"item_id": item, "day": day.isoformat()})
+
+    stats = next(s for s in client.get("/api/challenges/stats").get_json() if s["id"] == cid)
+    # Five due days in a row, with rest days in between that don't count.
+    assert stats["days_elapsed"] == len(due)
+    assert stats["current_streak"] == len(due)
+    assert stats["longest_streak"] == len(due)
+
+
+def test_a_missed_due_day_still_breaks_the_streak(client, conn):
+    from datetime import date, timedelta
+
+    today = date.today()
+    start = (today - timedelta(days=8)).isoformat()
+    cid = _scheduled_challenge(
+        client, "Every other day", start, schedule_kind="interval", schedule_interval=2,
+    )
+    item = _add_exercise_item(client, conn, cid, "squat")
+    _backdate_setup(conn, cid, start)
+
+    anchor = date.fromisoformat(start)
+    due = [anchor + timedelta(days=i) for i in range(0, 9, 2)]
+    for day in due[:-2] + due[-1:]:  # skip the second-to-last due day
+        client.post("/api/challenge/toggle", json={"item_id": item, "day": day.isoformat()})
+
+    stats = next(s for s in client.get("/api/challenges/stats").get_json() if s["id"] == cid)
+    assert stats["current_streak"] == 1
+    assert stats["days_complete"] == len(due) - 1
+
+
+def test_a_tick_on_a_rest_day_changes_nothing(client, conn):
+    from datetime import date, timedelta
+
+    today = date.today()
+    start = (today - timedelta(days=6)).isoformat()
+    cid = _scheduled_challenge(
+        client, "Every other day", start, schedule_kind="interval", schedule_interval=2,
+    )
+    item = _add_exercise_item(client, conn, cid, "squat")
+    _backdate_setup(conn, cid, start)
+    anchor = date.fromisoformat(start)
+    for i in range(0, 7, 2):
+        client.post("/api/challenge/toggle", json={"item_id": item, "day": (anchor + timedelta(days=i)).isoformat()})
+    before = next(s for s in client.get("/api/challenges/stats").get_json() if s["id"] == cid)
+
+    # A bonus session on a rest day: recorded, but it can't move the numbers.
+    client.post("/api/challenge/toggle", json={
+        "item_id": item, "day": (anchor + timedelta(days=1)).isoformat(),
+    })
+    after = next(s for s in client.get("/api/challenges/stats").get_json() if s["id"] == cid)
+
+    assert after["completion_pct"] == before["completion_pct"]
+    assert after["days_elapsed"] == before["days_elapsed"]
+    assert after["current_streak"] == before["current_streak"]
+
+
+def test_the_view_says_whether_it_is_due_today(client, conn):
+    from datetime import date, timedelta
+
+    today = date.today()
+    tomorrow_only = str((today.weekday() + 1) % 7)
+    cid = _scheduled_challenge(
+        client, "Tomorrow only", today.isoformat(),
+        schedule_kind="weekdays", schedule_weekdays=tomorrow_only,
+    )
+    _add_exercise_item(client, conn, cid, "squat")
+
+    view = next(c for c in client.get("/api/challenges").get_json() if c["id"] == cid)
+    assert view["due_today"] is False
+    assert view["next_due"] == (today + timedelta(days=1)).isoformat()
+    assert [d["scheduled"] for d in view["last_7_days"]].count(True) == 1
+
+
+def test_repeat_carries_the_schedule(client, conn):
+    cid = _scheduled_challenge(
+        client, "Gym days", "2026-06-01", schedule_kind="weekdays", schedule_weekdays="0,2,4",
+    )
+    _add_exercise_item(client, conn, cid, "squat")
+
+    new_id = client.post(f"/api/challenges/{cid}/repeat", json={}).get_json()["id"]
+    fresh = next(c for c in client.get("/api/challenges").get_json() if c["id"] == new_id)
+    assert fresh["schedule"] == {"kind": "weekdays", "interval": None, "weekdays": [0, 2, 4]}
+
+
+def test_schedule_validation(client):
+    bad = [
+        {"schedule_kind": "interval", "schedule_interval": 1},
+        {"schedule_kind": "interval", "schedule_interval": 0},
+        {"schedule_kind": "interval", "schedule_interval": "abc"},
+        {"schedule_kind": "interval", "schedule_interval": 400},
+        {"schedule_kind": "weekdays", "schedule_weekdays": ""},
+        {"schedule_kind": "weekdays", "schedule_weekdays": "9"},
+        {"schedule_kind": "sometimes"},
+    ]
+    for schedule in bad:
+        r = client.post("/api/challenges", json={
+            "name": "Bad", "start_date": "2026-08-01", **schedule,
+        })
+        assert r.status_code == 400, schedule
+
+
+def test_existing_challenges_are_daily(client):
+    view = client.get("/api/challenges").get_json()[0]
+    assert view["schedule"] == {"kind": "daily", "interval": None, "weekdays": []}
+    assert view["due_today"] is True

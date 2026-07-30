@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.17.0
+
+- **Challenges can have a schedule.** As well as every day, a challenge can run
+  **every N days** or on **certain days of the week** — Mon/Wed/Fri, weekdays,
+  whatever you pick. Existing challenges are unchanged: they stay daily.
+- Days it isn't scheduled are **rest days**. Nothing is owed, the streak
+  survives them, the reminder stays quiet, and they're left out of the
+  statistics. A Mon/Wed/Fri challenge kept perfectly now reads **100%** where
+  it used to read 43% and nag four times a week.
+- The card stays on Home on a rest day, marked **Rest day · next Wed**, with
+  its items still tickable — a bonus session is recorded but can't move the
+  numbers in either direction.
+- Rest days are drawn as hatched gaps in the week dots and the adherence chart,
+  the same way a Garmin day with no data is: nothing owed is not the same as
+  nothing done.
+
 ## 1.16.0
 
 - **Repeat a challenge.** Finished a 30-day run and want another? **Repeat this

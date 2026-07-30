@@ -518,11 +518,14 @@ function challengeCardHtml(ch) {
     .join("");
   const dots = (ch.last_7_days || [])
     .map(
-      (d) => `<span class="week-dot ${d.complete ? "on" : ""} ${d.day === ch.today ? "today" : ""}" title="${d.day}"></span>`
+      (d) => `<span class="week-dot ${d.complete ? "on" : ""} ${d.scheduled === false ? "rest" : ""} ${d.day === ch.today ? "today" : ""}" title="${d.day}${d.scheduled === false ? " · rest day" : ""}"></span>`
     )
     .join("");
+  // A rest day says so, and says when it is next due — nothing is owed today.
   const progress = ch.not_started
     ? `starts ${escapeHtml(fmtDate(ch.start_date))}`
+    : ch.due_today === false
+    ? `Rest day${ch.next_due ? ` · next ${escapeHtml(fmtDate(ch.next_due))}` : ""}`
     : ch.total_days
     ? `day ${ch.day_number} of ${ch.total_days}`
     : "";
@@ -722,8 +725,46 @@ document.getElementById("challenge-cards").addEventListener("click", async (e) =
 
 document.getElementById("challenge-new-btn").addEventListener("click", () => openChallengeEditor(null));
 
+function syncScheduleFields() {
+  const kind = document.getElementById("challenge-edit-kind").value;
+  document.getElementById("challenge-edit-interval-field").hidden = kind !== "interval";
+  document.getElementById("challenge-edit-weekdays-field").hidden = kind !== "weekdays";
+}
+document.getElementById("challenge-edit-kind").addEventListener("change", syncScheduleFields);
+
+document.getElementById("challenge-edit-weekdays").addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-day]");
+  if (btn) btn.classList.toggle("on");
+});
+
+function setScheduleFields(schedule) {
+  const kind = (schedule && schedule.kind) || "daily";
+  document.getElementById("challenge-edit-kind").value = kind;
+  document.getElementById("challenge-edit-interval").value =
+    (schedule && schedule.interval) || 2;
+  const days = new Set((schedule && schedule.weekdays) || []);
+  document.querySelectorAll("#challenge-edit-weekdays [data-day]").forEach((b) => {
+    b.classList.toggle("on", days.has(Number(b.dataset.day)));
+  });
+  syncScheduleFields();
+}
+
+function readScheduleFields() {
+  const kind = document.getElementById("challenge-edit-kind").value;
+  if (kind === "interval") {
+    return { schedule_kind: kind, schedule_interval: document.getElementById("challenge-edit-interval").value };
+  }
+  if (kind === "weekdays") {
+    const days = [...document.querySelectorAll("#challenge-edit-weekdays [data-day].on")]
+      .map((b) => Number(b.dataset.day));
+    return { schedule_kind: kind, schedule_weekdays: days.join(",") };
+  }
+  return { schedule_kind: "daily" };
+}
+
 function openChallengeEditor(ch) {
   delete document.getElementById("challenge-edit-form").dataset.repeatOf;
+  setScheduleFields(ch && ch.schedule);
   document.getElementById("challenge-edit-title").textContent = ch ? "Edit challenge" : "New challenge";
   document.getElementById("challenge-edit-id").value = ch ? ch.id : "";
   document.getElementById("challenge-edit-name").value = ch ? ch.name : "";
@@ -748,6 +789,7 @@ document.getElementById("challenge-edit-form").addEventListener("submit", async 
     start_date: document.getElementById("challenge-edit-start").value,
     // Sent even when empty: that is how an end date gets cleared.
     end_date: document.getElementById("challenge-edit-end").value,
+    ...readScheduleFields(),
   };
   const url = repeatOf
     ? `api/challenges/${repeatOf}/repeat`
@@ -900,6 +942,7 @@ async function openChallengeRepeat(sourceId) {
     end = to.toISOString().slice(0, 10);
   }
   openChallengeEditor(null);
+  setScheduleFields(src.schedule);
   document.getElementById("challenge-edit-title").textContent = `Repeat · ${src.name}`;
   document.getElementById("challenge-edit-name").value = src.name;
   document.getElementById("challenge-edit-start").value = todayISO();
@@ -951,10 +994,20 @@ function weightStripHtml(st, days) {
     </svg>`;
 }
 
+const WEEKDAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+// Empty for a daily challenge: "every day" is the assumption, not news.
+function describeSchedule(schedule) {
+  if (!schedule || schedule.kind === "daily") return "";
+  if (schedule.kind === "interval") return `every ${schedule.interval} days`;
+  return (schedule.weekdays || []).map((d) => WEEKDAY_NAMES[d]).join(", ");
+}
+
 function challengeStatsHtml(st) {
   const period = st.end_date
     ? `${fmtDate(st.start_date)} – ${fmtDate(st.end_date)}`
     : `since ${fmtDate(st.start_date)}`;
+  const schedule = describeSchedule(st.schedule);
   const pct = st.completion_pct == null ? "—" : `${st.completion_pct}%`;
 
   // One bar per day: complete, partly done, or missed. A missed day is drawn
@@ -963,13 +1016,17 @@ function challengeStatsHtml(st) {
   const days = (st.days || []).slice(-ADHERENCE_DAYS);
   const bars = days
     .map((d) => {
-      const state = d.complete ? "full" : d.done > 0 ? "part" : "none";
+      // A rest day owed nothing, so it is neither a hit nor a miss.
+      const rest = d.scheduled === false;
+      const state = rest ? "rest" : d.complete ? "full" : d.done > 0 ? "part" : "none";
       const height = d.total ? Math.round((d.done / d.total) * 100) : 0;
-      return `<span class="adh-slot" title="${d.day} · ${d.done}/${d.total}">
-        <span class="adh-bar adh-${state}" style="height:${state === "none" ? 100 : Math.max(height, 8)}%"></span>
+      const label = rest ? "rest day" : `${d.done}/${d.total}`;
+      return `<span class="adh-slot" title="${d.day} · ${label}">
+        <span class="adh-bar adh-${state}" style="height:${state === "none" || rest ? 100 : Math.max(height, 8)}%"></span>
       </span>`;
     })
     .join("");
+  const hasRest = days.some((d) => d.scheduled === false);
 
   const items = (st.items || [])
     .map(
@@ -1001,7 +1058,7 @@ function challengeStatsHtml(st) {
         <div class="mini-stat"><span class="mini-value">🔥 ${st.current_streak}</span><span class="mini-label">Streak</span></div>
         <div class="mini-stat"><span class="mini-value">${st.longest_streak}</span><span class="mini-label">Longest</span></div>
       </div>
-      <p class="challenge-progress">${st.days_complete} of ${st.days_elapsed} days</p>
+      <p class="challenge-progress">${st.days_complete} of ${st.days_elapsed} ${schedule ? "due " : ""}days${schedule ? ` · ${escapeHtml(schedule)}` : ""}</p>
 
       <figure class="chart-figure">
         <figcaption>Last ${Math.min(ADHERENCE_DAYS, days.length)} days</figcaption>
@@ -1010,6 +1067,7 @@ function challengeStatsHtml(st) {
           <span><i class="adh-key adh-full"></i>all done</span>
           <span><i class="adh-key adh-part"></i>partly</span>
           <span><i class="adh-key adh-none"></i>missed</span>
+          ${hasRest ? '<span><i class="adh-key adh-rest"></i>rest</span>' : ""}
         </div>
         ${weightStripHtml(st, days)}
       </figure>

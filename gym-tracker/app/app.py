@@ -18,7 +18,7 @@ from flask import Flask, Response, g, jsonify, render_template, request, send_fi
 
 import garmin_client
 
-APP_VERSION = "1.16.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.17.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("GYM_DB_PATH", "/data/gym.db")
 OPTIONS_PATH = os.environ.get("GYM_OPTIONS_PATH", "/data/options.json")
@@ -364,7 +364,10 @@ def init_db():
             archived INTEGER NOT NULL DEFAULT 0,
             created_at TEXT,
             updated_at TEXT,
-            repeat_of INTEGER REFERENCES challenges(id)
+            repeat_of INTEGER REFERENCES challenges(id),
+            schedule_kind TEXT NOT NULL DEFAULT 'daily',
+            schedule_interval INTEGER,
+            schedule_weekdays TEXT
         )
         """
     )
@@ -514,6 +517,14 @@ def _migrate_columns(conn):
     if "repeat_of" not in challenge_cols:
         # Which challenge this one is another run of.
         conn.execute("ALTER TABLE challenges ADD COLUMN repeat_of INTEGER")
+    if "schedule_kind" not in challenge_cols:
+        # Which days a challenge is actually due. Existing ones are daily,
+        # which is exactly how they behaved before.
+        conn.execute(
+            "ALTER TABLE challenges ADD COLUMN schedule_kind TEXT NOT NULL DEFAULT 'daily'"
+        )
+        conn.execute("ALTER TABLE challenges ADD COLUMN schedule_interval INTEGER")
+        conn.execute("ALTER TABLE challenges ADD COLUMN schedule_weekdays TEXT")
 
     item_cols = {row[1] for row in conn.execute("PRAGMA table_info(challenge_items)")}
     if "challenge_id" not in item_cols:
@@ -1514,6 +1525,67 @@ def _challenge_day_range(ch, today=None):
     return start, last
 
 
+SCHEDULE_KINDS = ("daily", "interval", "weekdays")
+
+
+def _parse_weekdays(raw):
+    """"0,2,4" -> {0, 2, 4}. Mon=0 … Sun=6, matching date.weekday()."""
+    out = set()
+    for part in str(raw or "").split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            value = int(part)
+        except ValueError:
+            continue
+        if 0 <= value <= 6:
+            out.add(value)
+    return out
+
+
+def _challenge_scheduled_on(ch, day):
+    """Whether the challenge is due on `day`.
+
+    Anything unrecognised falls back to daily: a challenge that quietly stopped
+    asking for anything would be worse than one that asks too often.
+    """
+    kind = (ch.get("schedule_kind") or "daily") if hasattr(ch, "get") else "daily"
+    if kind == "weekdays":
+        wanted = _parse_weekdays(ch.get("schedule_weekdays"))
+        return day.weekday() in wanted if wanted else True
+    if kind == "interval":
+        try:
+            every = int(ch.get("schedule_interval") or 0)
+            start = date.fromisoformat(ch["start_date"])
+        except (TypeError, ValueError):
+            return True
+        if every < 2:
+            return True
+        # Anchored on the start date, so the pattern moves with it.
+        return (day - start).days % every == 0
+    return True
+
+
+def _challenge_next_due(ch, from_day=None):
+    """The next day the challenge is due, or None if it ends first. Looks two
+    weeks ahead, which covers every schedule this supports."""
+    cursor = (from_day or date.today()) + timedelta(days=1)
+    end = None
+    if ch.get("end_date"):
+        try:
+            end = date.fromisoformat(ch["end_date"])
+        except ValueError:
+            end = None
+    for _ in range(14):
+        if end and cursor > end:
+            return None
+        if _challenge_scheduled_on(ch, cursor):
+            return cursor.isoformat()
+        cursor += timedelta(days=1)
+    return None
+
+
 def _challenge_finished(ch, today=None):
     today = today or date.today()
     if not ch.get("end_date"):
@@ -1525,8 +1597,13 @@ def _challenge_finished(ch, today=None):
 
 
 def _challenge_days(conn, ch, membership=None):
-    """One entry per day the challenge has run: how many of the items that were
-    part of it *that day* were ticked, and whether that completed the day."""
+    """One entry per calendar day the challenge has run: how many of the items
+    that were part of it *that day* were ticked, whether that completed the day,
+    and whether the day was one the challenge was due at all.
+
+    Rest days are still emitted so the adherence chart can show them; every
+    figure derived from this filters on `scheduled`.
+    """
     membership = membership if membership is not None else _challenge_membership(conn, ch["id"])
     by_day = _completions_by_day(conn, [row["id"] for row, _, _ in membership])
     start, last = _challenge_day_range(ch)
@@ -1538,12 +1615,15 @@ def _challenge_days(conn, ch, membership=None):
         iso = cursor.isoformat()
         members = _members_on(membership, iso)
         done = len(by_day.get(iso, set()) & members)
+        scheduled = _challenge_scheduled_on(ch, cursor)
         days.append(
             {
                 "day": iso,
                 "done": done,
                 "total": len(members),
-                "complete": bool(members) and done == len(members),
+                # Only meaningful on a day the challenge was actually due.
+                "complete": scheduled and bool(members) and done == len(members),
+                "scheduled": scheduled,
             }
         )
         cursor += timedelta(days=1)
@@ -1625,17 +1705,37 @@ def _challenge_streak(conn, challenge_id=None):
     # Counted from the challenge's last day, which for one that has finished is
     # its end date — otherwise a challenge that ended on a perfect run would
     # report a streak of zero, today being past it.
-    cursor = last if complete(last.isoformat()) else last - timedelta(days=1)
+    challenge_map = dict(challenge) if challenge else {}
+
+    def due(day):
+        return _challenge_scheduled_on(challenge_map, day)
+
+    # Rest days are stepped over: they neither extend the streak nor break it.
+    cursor = last
+    while cursor >= start and not due(cursor):
+        cursor -= timedelta(days=1)
+    if cursor >= start and not complete(cursor.isoformat()):
+        # An unfinished due day doesn't break the run behind it.
+        cursor -= timedelta(days=1)
     streak = 0
-    while cursor >= start and complete(cursor.isoformat()):
+    while cursor >= start:
+        if not due(cursor):
+            cursor -= timedelta(days=1)
+            continue
+        if not complete(cursor.isoformat()):
+            break
         streak += 1
         cursor -= timedelta(days=1)
     return streak
 
 
 def _longest_streak(days):
+    """Longest run of completed due days. A rest day is skipped rather than
+    treated as a miss, so a schedule can't cap the streak at its interval."""
     best = run = 0
     for entry in days:
+        if not entry.get("scheduled", True):
+            continue
         run = run + 1 if entry["complete"] else 0
         best = max(best, run)
     return best
@@ -2230,6 +2330,14 @@ def api_delete_workout(workout_id):
 # --- Routes: daily challenge ---
 
 
+def _schedule_view(ch):
+    return {
+        "kind": ch.get("schedule_kind") or "daily",
+        "interval": ch.get("schedule_interval"),
+        "weekdays": sorted(_parse_weekdays(ch.get("schedule_weekdays"))),
+    }
+
+
 def _challenge_view(conn, ch):
     """One challenge as the app shows it: its items with today's state, its
     streak, and where it is in a fixed-length run."""
@@ -2244,8 +2352,15 @@ def _challenge_view(conn, ch):
 
     last_7 = []
     for offset in range(6, -1, -1):
-        d = (today - timedelta(days=offset)).isoformat()
-        last_7.append({"day": d, "complete": bool(ids) and set(ids) <= by_day.get(d, set())})
+        day = today - timedelta(days=offset)
+        d = day.isoformat()
+        last_7.append(
+            {
+                "day": d,
+                "complete": bool(ids) and set(ids) <= by_day.get(d, set()),
+                "scheduled": _challenge_scheduled_on(ch, day),
+            }
+        )
 
     start, _ = _challenge_day_range(ch)
     total_days = None
@@ -2267,6 +2382,10 @@ def _challenge_view(conn, ch):
         "day_number": day_number,
         "total_days": total_days,
         "today": today_iso,
+        "schedule": _schedule_view(ch),
+        # Rest days still show the card, with nothing owed.
+        "due_today": _challenge_scheduled_on(ch, today),
+        "next_due": _challenge_next_due(ch, today),
         "items": items,
         "streak": _challenge_streak(conn, ch["id"]),
         "complete_today": bool(ids) and set(ids) <= done_today,
@@ -2319,8 +2438,10 @@ def _challenge_stats(conn, ch):
     ids = {row["id"] for row, _, _ in membership}
     days = _challenge_days(conn, ch, membership)
     by_day = _completions_by_day(conn, list(ids))
-    elapsed = len(days)
-    complete_days = sum(1 for d in days if d["complete"])
+    # Rest days are in `days` for the chart, but every figure counts due days.
+    due_days = [d for d in days if d["scheduled"]]
+    elapsed = len(due_days)
+    complete_days = sum(1 for d in due_days if d["complete"])
 
     # Each item is scored over the days it was actually part of the challenge,
     # so one added late isn't marked down for the days before it existed.
@@ -2328,7 +2449,7 @@ def _challenge_stats(conn, ch):
     for row, joined, left in membership:
         member_days = [
             d["day"]
-            for d in days
+            for d in due_days
             if (not joined or d["day"] >= joined) and (not left or d["day"] <= left)
         ]
         hits = sum(1 for day in member_days if row["id"] in by_day.get(day, set()))
@@ -2373,6 +2494,7 @@ def _challenge_stats(conn, ch):
         "end_date": ch["end_date"],
         "finished": _challenge_finished(ch),
         "weight": _challenge_weight(conn, ch),
+        "schedule": _schedule_view(ch),
         "days_elapsed": elapsed,
         "days_complete": complete_days,
         "completion_pct": round(complete_days / elapsed * 100, 1) if elapsed else None,
@@ -2409,12 +2531,16 @@ def api_add_challenge():
     err = _validate_challenge_dates(start, end)
     if err:
         return jsonify({"error": err}), 400
+    kind, interval, weekdays, err = _resolve_schedule(data)
+    if err:
+        return jsonify({"error": err}), 400
     db = get_db()
     order = db.execute("SELECT COALESCE(MAX(sort_order), -1) + 1 AS n FROM challenges").fetchone()["n"]
     cur = db.execute(
         "INSERT INTO challenges (name, start_date, end_date, sort_order, archived, created_at, "
-        "updated_at) VALUES (?, ?, ?, ?, 0, ?, ?)",
-        (name, start, end, order, _now_ts(), _now_ts()),
+        "updated_at, schedule_kind, schedule_interval, schedule_weekdays) "
+        "VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?)",
+        (name, start, end, order, _now_ts(), _now_ts(), kind, interval, weekdays),
     )
     db.commit()
     return jsonify({"status": "created", "id": cur.lastrowid}), 201
@@ -2435,9 +2561,13 @@ def api_update_challenge(challenge_id):
     err = _validate_challenge_dates(start, end)
     if err:
         return jsonify({"error": err}), 400
+    kind, interval, weekdays, err = _resolve_schedule(data, dict(existing))
+    if err:
+        return jsonify({"error": err}), 400
     db.execute(
-        "UPDATE challenges SET name = ?, start_date = ?, end_date = ?, updated_at = ? WHERE id = ?",
-        (name, start, end, _now_ts(), challenge_id),
+        "UPDATE challenges SET name = ?, start_date = ?, end_date = ?, updated_at = ?, "
+        "schedule_kind = ?, schedule_interval = ?, schedule_weekdays = ? WHERE id = ?",
+        (name, start, end, _now_ts(), kind, interval, weekdays, challenge_id),
     )
     db.commit()
     return jsonify({"status": "updated"})
@@ -2478,10 +2608,14 @@ def api_repeat_challenge(challenge_id):
 
     now = _now_ts()
     order = db.execute("SELECT COALESCE(MAX(sort_order), -1) + 1 AS n FROM challenges").fetchone()["n"]
+    kind, interval, weekdays, err = _resolve_schedule(data, dict(source))
+    if err:
+        return jsonify({"error": err}), 400
     cur = db.execute(
         "INSERT INTO challenges (name, start_date, end_date, sort_order, archived, created_at, "
-        "updated_at, repeat_of) VALUES (?, ?, ?, ?, 0, ?, ?, ?)",
-        (name, start, end, order, now, now, challenge_id),
+        "updated_at, repeat_of, schedule_kind, schedule_interval, schedule_weekdays) "
+        "VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)",
+        (name, start, end, order, now, now, challenge_id, kind, interval, weekdays),
     )
     new_id = cur.lastrowid
     for item in db.execute(
@@ -2514,6 +2648,35 @@ def api_delete_challenge(challenge_id):
     )
     db.commit()
     return jsonify({"status": "archived"})
+
+
+def _resolve_schedule(data, existing=None):
+    """Pull a schedule out of a request body. Returns (kind, interval, weekdays,
+    error). Falls back to the existing schedule, then to daily."""
+    base = existing or {}
+    kind = (data.get("schedule_kind") or base.get("schedule_kind") or "daily").strip()
+    if kind not in SCHEDULE_KINDS:
+        return None, None, None, f"schedule_kind must be one of {', '.join(SCHEDULE_KINDS)}"
+    if kind == "interval":
+        raw = data.get("schedule_interval", base.get("schedule_interval"))
+        try:
+            interval = int(raw)
+        except (TypeError, ValueError):
+            return None, None, None, "schedule_interval must be a number"
+        if not 2 <= interval <= 30:
+            # 1 is just "daily" spelled oddly, and beyond a month it stops
+            # being a habit.
+            return None, None, None, "schedule_interval must be between 2 and 30"
+        return kind, interval, None, None
+    if kind == "weekdays":
+        raw = data.get("schedule_weekdays", base.get("schedule_weekdays"))
+        if isinstance(raw, (list, tuple)):
+            raw = ",".join(str(v) for v in raw)
+        days = _parse_weekdays(raw)
+        if not days:
+            return None, None, None, "schedule_weekdays must name at least one day (0=Mon…6=Sun)"
+        return kind, None, ",".join(str(d) for d in sorted(days)), None
+    return "daily", None, None, None
 
 
 def _validate_challenge_dates(start, end):
@@ -3101,6 +3264,8 @@ def _challenge_reminder_tick(now, conn):
         start, _ = _challenge_day_range(ch, now.date())
         if start and now.date() < start:
             continue
+        if not _challenge_scheduled_on(ch, now.date()):
+            continue  # a rest day owes nothing
         # Judged for the day being evaluated, which is not necessarily today.
         if not _challenge_complete_on(conn, today_iso, ch["id"]):
             outstanding.append(ch["name"])

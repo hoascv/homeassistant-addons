@@ -171,3 +171,18 @@ def test_notify_test_endpoint(client, set_options, fake_ha_server):
     res = client.post("/api/notify-test", json={})
     assert res.status_code == 200
     assert len(fake_ha_server) == 1
+
+
+def test_challenge_reminder_is_silent_on_a_rest_day(conn, set_options, fake_ha_server):
+    set_options(notify_service=NOTIFY, challenge_reminder_enabled=True, challenge_reminder_time="18:00")
+    # 22 July 2026 is a Wednesday; schedule the challenge for Mondays only.
+    conn.execute("UPDATE challenges SET schedule_kind = 'weekdays', schedule_weekdays = '0'")
+    conn.commit()
+
+    gymapp._challenge_reminder_tick(datetime(2026, 7, 22, 18, 30), conn)
+    assert fake_ha_server == []
+
+    # ...and still fires on a day it is due.
+    gymapp._set_app_state(conn, "challenge_reminder_last_sent", "")
+    gymapp._challenge_reminder_tick(datetime(2026, 7, 20, 18, 30), conn)  # a Monday
+    assert len(fake_ha_server) == 1
