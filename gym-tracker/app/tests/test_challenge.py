@@ -636,3 +636,67 @@ def test_stats_weight_is_empty_without_weigh_ins_in_the_period(client, conn):
     stats = next(s for s in client.get("/api/challenges/stats").get_json() if s["id"] == cid)
     assert stats["weight"]["points"] == []
     assert stats["weight"]["delta_kg"] is None
+
+
+# --- Repeating a challenge --------------------------------------------------
+
+
+def test_repeating_clones_the_items_with_fresh_dates(client, conn):
+    from datetime import date, timedelta
+
+    cid = _new_challenge(client, "30-day squats", "2026-06-01", "2026-06-30")
+    _add_exercise_item(client, conn, cid, "squat")
+
+    r = client.post(f"/api/challenges/{cid}/repeat", json={})
+    assert r.status_code == 201
+    new_id = r.get_json()["id"]
+
+    fresh = next(c for c in client.get("/api/challenges").get_json() if c["id"] == new_id)
+    assert fresh["name"] == "30-day squats"
+    assert fresh["start_date"] == date.today().isoformat()
+    # 30 days again, counted from today rather than reusing the old dates.
+    assert fresh["end_date"] == (date.today() + timedelta(days=29)).isoformat()
+    assert fresh["total_days"] == 30
+    assert len(fresh["items"]) == 1
+
+    row = conn.execute("SELECT repeat_of FROM challenges WHERE id = ?", (new_id,)).fetchone()
+    assert row["repeat_of"] == cid
+
+
+def test_repeating_leaves_the_original_alone(client, conn):
+    from datetime import date, timedelta
+
+    today = date.today()
+    start = (today - timedelta(days=4)).isoformat()
+    cid = _new_challenge(client, "Squats", start)
+    item = _add_exercise_item(client, conn, cid, "squat")
+    _backdate_setup(conn, cid, start)
+    for off in range(1, 5):
+        client.post("/api/challenge/toggle", json={
+            "item_id": item, "day": (today - timedelta(days=off)).isoformat(),
+        })
+
+    new_id = client.post(f"/api/challenges/{cid}/repeat", json={}).get_json()["id"]
+    stats = {s["id"]: s for s in client.get("/api/challenges/stats").get_json()}
+
+    assert stats[cid]["days_complete"] == 4  # untouched
+    assert stats[new_id]["days_complete"] == 0  # a fresh run, not a reset
+    # The clone is its own item, so ticking it can't affect the original.
+    assert {i["id"] for i in stats[cid]["items"]}.isdisjoint({i["id"] for i in stats[new_id]["items"]})
+
+
+def test_repeating_accepts_explicit_dates_and_a_name(client, conn):
+    cid = _new_challenge(client, "30-day squats", "2026-06-01", "2026-06-30")
+    _add_exercise_item(client, conn, cid, "squat")
+
+    new_id = client.post(f"/api/challenges/{cid}/repeat", json={
+        "name": "60-day squats", "start_date": "2026-09-01", "end_date": "2026-10-30",
+    }).get_json()["id"]
+
+    fresh = next(c for c in client.get("/api/challenges").get_json() if c["id"] == new_id)
+    assert fresh["name"] == "60-day squats"
+    assert fresh["start_date"] == "2026-09-01" and fresh["end_date"] == "2026-10-30"
+
+
+def test_repeating_a_missing_challenge_is_a_404(client):
+    assert client.post("/api/challenges/9999/repeat", json={}).status_code == 404

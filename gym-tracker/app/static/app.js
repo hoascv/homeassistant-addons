@@ -69,7 +69,7 @@ document.getElementById("main-tabs").addEventListener("click", (e) => {
   const btn = e.target.closest(".tab");
   if (!btn) return;
   showTab(btn.dataset.panel);
-  if (btn.dataset.panel === "panel-trends") loadChallengeStats();
+  if (btn.dataset.panel === "panel-trends") { loadChallengeStats(); loadSessions(); }
 });
 
 (function restoreTab() {
@@ -723,6 +723,7 @@ document.getElementById("challenge-cards").addEventListener("click", async (e) =
 document.getElementById("challenge-new-btn").addEventListener("click", () => openChallengeEditor(null));
 
 function openChallengeEditor(ch) {
+  delete document.getElementById("challenge-edit-form").dataset.repeatOf;
   document.getElementById("challenge-edit-title").textContent = ch ? "Edit challenge" : "New challenge";
   document.getElementById("challenge-edit-id").value = ch ? ch.id : "";
   document.getElementById("challenge-edit-name").value = ch ? ch.name : "";
@@ -740,6 +741,7 @@ document.getElementById("challenge-edit-close").addEventListener("click", () => 
 document.getElementById("challenge-edit-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const id = document.getElementById("challenge-edit-id").value;
+  const repeatOf = e.target.dataset.repeatOf;
   const result = document.getElementById("challenge-edit-result");
   const payload = {
     name: document.getElementById("challenge-edit-name").value.trim(),
@@ -747,9 +749,14 @@ document.getElementById("challenge-edit-form").addEventListener("submit", async 
     // Sent even when empty: that is how an end date gets cleared.
     end_date: document.getElementById("challenge-edit-end").value,
   };
+  const url = repeatOf
+    ? `api/challenges/${repeatOf}/repeat`
+    : id
+    ? `api/challenges/${id}`
+    : "api/challenges";
   try {
-    await fetchJSON(id ? `api/challenges/${id}` : "api/challenges", {
-      method: id ? "PUT" : "POST",
+    await fetchJSON(url, {
+      method: id && !repeatOf ? "PUT" : "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
@@ -832,9 +839,73 @@ document.getElementById("challenge-items-list").addEventListener("change", async
   } catch (err) { toast(err.message); }
 });
 
+// --- Trends: training sessions ----------------------------------------------
+
+function fmtClock(iso) {
+  const d = new Date(iso);
+  return isNaN(d) ? "" : `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
+async function loadSessions() {
+  const card = document.getElementById("sessions-card");
+  let sessions;
+  try { sessions = await fetchJSON("api/sessions?days=14"); } catch (e) { return; }
+  card.hidden = !sessions.length;
+  if (!sessions.length) return;
+  document.getElementById("sessions-count").textContent = `${sessions.length} in 14 days`;
+  document.getElementById("sessions-list").innerHTML = sessions
+    .map((s) => {
+      const names = s.exercises.map((e) => e.name).join(", ");
+      const bits = [];
+      // Zero means the exercises were logged in one go, so how long they
+      // actually took is unknown — better omitted than asserted as nothing.
+      if (s.minutes) bits.push(`${s.minutes} min`);
+      if (s.reps) bits.push(`${s.reps} reps`);
+      // Absent until the watch has uploaded, rather than shown as zero.
+      if (s.hr_avg != null) bits.push(`♥ ${s.hr_avg} avg${s.hr_max != null ? ` · ${s.hr_max} max` : ""}`);
+      return `
+        <li>
+          <div class="list-main">${escapeHtml(fmtDate(s.day))} · ${escapeHtml(fmtClock(s.start))}–${escapeHtml(fmtClock(s.end))}</div>
+          <div class="list-sub">${escapeHtml(names)}</div>
+          <div class="list-sub">${escapeHtml(bits.join(" · "))}</div>
+        </li>`;
+    })
+    .join("");
+}
+
 // --- Trends: per-challenge statistics ---------------------------------------
 
 const ADHERENCE_DAYS = 30;
+
+document.getElementById("challenge-stats").addEventListener("click", (e) => {
+  const btn = e.target.closest(".ch-repeat");
+  if (!btn) return;
+  openChallengeRepeat(Number(btn.dataset.challenge));
+});
+
+// Repeating opens the same editor, pre-filled with a fresh run of the same
+// length, so the dates can be adjusted before anything is created.
+async function openChallengeRepeat(sourceId) {
+  let stats;
+  try { stats = await fetchJSON("api/challenges/stats"); } catch (e) { return; }
+  const src = stats.find((s) => s.id === sourceId);
+  if (!src) return;
+  let end = "";
+  if (src.end_date) {
+    const days = Math.round(
+      (new Date(src.end_date) - new Date(src.start_date)) / 86400000
+    );
+    const to = new Date();
+    to.setDate(to.getDate() + days);
+    end = to.toISOString().slice(0, 10);
+  }
+  openChallengeEditor(null);
+  document.getElementById("challenge-edit-title").textContent = `Repeat · ${src.name}`;
+  document.getElementById("challenge-edit-name").value = src.name;
+  document.getElementById("challenge-edit-start").value = todayISO();
+  document.getElementById("challenge-edit-end").value = end;
+  document.getElementById("challenge-edit-form").dataset.repeatOf = sourceId;
+}
 
 async function loadChallengeStats() {
   const host = document.getElementById("challenge-stats");
@@ -945,6 +1016,9 @@ function challengeStatsHtml(st) {
 
       ${items ? `<h3 class="subhead">Per item</h3><div class="ghist">${items}</div>` : ""}
       ${volumeBits.length ? `<p class="challenge-progress">${escapeHtml(volumeBits.join(" · "))}</p>` : ""}
+      <div class="card-actions">
+        <button type="button" class="link-btn ch-repeat" data-challenge="${st.id}">Repeat this challenge</button>
+      </div>
     </section>`;
 }
 
@@ -1949,6 +2023,7 @@ async function pingStatus() {
 loadHome();
 loadChallenge();
 loadChallengeStats();
+loadSessions();
 loadRecentWorkouts();
 loadGarminCard();
 pingStatus();

@@ -18,7 +18,7 @@ from flask import Flask, Response, g, jsonify, render_template, request, send_fi
 
 import garmin_client
 
-APP_VERSION = "1.15.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.16.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("GYM_DB_PATH", "/data/gym.db")
 OPTIONS_PATH = os.environ.get("GYM_OPTIONS_PATH", "/data/options.json")
@@ -363,7 +363,8 @@ def init_db():
             sort_order INTEGER NOT NULL DEFAULT 0,
             archived INTEGER NOT NULL DEFAULT 0,
             created_at TEXT,
-            updated_at TEXT
+            updated_at TEXT,
+            repeat_of INTEGER REFERENCES challenges(id)
         )
         """
     )
@@ -509,9 +510,20 @@ def _migrate_columns(conn):
     # Items used to belong to a single implicit challenge; give them a real
     # one so several can coexist. The default's start date is backdated to the
     # earliest completion so its statistics cover the history that exists.
+    challenge_cols = {row[1] for row in conn.execute("PRAGMA table_info(challenges)")}
+    if "repeat_of" not in challenge_cols:
+        # Which challenge this one is another run of.
+        conn.execute("ALTER TABLE challenges ADD COLUMN repeat_of INTEGER")
+
     item_cols = {row[1] for row in conn.execute("PRAGMA table_info(challenge_items)")}
     if "challenge_id" not in item_cols:
         conn.execute("ALTER TABLE challenge_items ADD COLUMN challenge_id INTEGER")
+    if "session_start" not in workout_cols:
+        # The extent of the training session an entry belongs to, so heart rate
+        # is read over the session rather than per exercise.
+        conn.execute("ALTER TABLE workout_logs ADD COLUMN session_start TEXT")
+        conn.execute("ALTER TABLE workout_logs ADD COLUMN session_end TEXT")
+
     if "moved_from" not in item_cols:
         # Which item this one continues, when it was moved between challenges.
         conn.execute("ALTER TABLE challenge_items ADD COLUMN moved_from INTEGER")
@@ -924,6 +936,54 @@ GARMIN_HR_ATTEMPTS = 3
 GARMIN_HR_MIN_SAMPLES = 2
 
 
+# Exercises logged more than this far apart are separate sessions. Logging five
+# exercises after one workout should be one heart-rate window, not five
+# overlapping ones over the same period.
+SESSION_GAP_MINUTES = 90
+
+
+def _session_groups(rows, gap_minutes=SESSION_GAP_MINUTES):
+    """Split entries (ordered by ts, real times only) into training sessions on
+    the gaps between them."""
+    sessions, current, previous = [], [], None
+    for row in rows:
+        try:
+            at = datetime.fromisoformat(row["ts"])
+        except (ValueError, TypeError):
+            continue
+        if previous is not None and (at - previous).total_seconds() > gap_minutes * 60:
+            sessions.append(current)
+            current = []
+        current.append(row)
+        previous = at
+    if current:
+        sessions.append(current)
+    return sessions
+
+
+def _session_extent(session, default_minutes):
+    """(start, end) of a session: back from the first exercise by its own
+    duration, forward to when the last one was logged."""
+    first, last = session[0], session[-1]
+    window = _hr_window(first, default_minutes)
+    if window is None:
+        return None
+    start, _ = window
+    try:
+        end = datetime.fromisoformat(last["ts"])
+    except (ValueError, TypeError):
+        return None
+    return start, max(end, start)
+
+
+def _exact_workouts_on(conn, day):
+    return conn.execute(
+        "SELECT id, ts, duration_sec FROM workout_logs "
+        "WHERE substr(ts, 1, 10) = ? AND ts_exact = 1 ORDER BY ts ASC, id ASC",
+        (day,),
+    ).fetchall()
+
+
 def _hr_window(row, default_minutes):
     """The window an exercise was performed in: it ends when the entry was
     logged (you log after finishing) and runs back by the entry's own duration,
@@ -976,36 +1036,53 @@ def _garmin_sync_heart_rates(conn, client, today, device_upload):
     """
     filled = 0
     by_day = {}
-    # Read once: get_garmin_config() parses options.json off disk, and this
-    # loop runs per logged exercise.
+    # Read once: get_garmin_config() parses options.json off disk.
     window_minutes = get_garmin_config()["hr_window_minutes"]
+
+    wanted = {}
     for row in _garmin_hr_candidates(conn, today):
         if row["hr_attempts"] >= GARMIN_HR_ATTEMPTS and (row["hr_upload"] or "") == (
             device_upload or ""
         ):
             continue
-        window = _hr_window(row, window_minutes)
-        if window is None:
-            continue
-        day = row["ts"][:10]
-        if day not in by_day:
-            by_day[day] = garmin_client.fetch_heart_rate_series(client, day)
-        summary = _hr_summary(by_day[day], *window)
-        if summary:
-            conn.execute(
-                "UPDATE workout_logs SET hr_avg = ?, hr_max = ?, hr_min = ?, hr_samples = ?, "
-                "hr_synced_at = ?, hr_attempts = hr_attempts + 1, hr_upload = ? WHERE id = ?",
-                (
-                    summary["hr_avg"], summary["hr_max"], summary["hr_min"], summary["hr_samples"],
-                    datetime.now().isoformat(timespec="seconds"), device_upload, row["id"],
-                ),
-            )
-            filled += 1
-        else:
-            conn.execute(
-                "UPDATE workout_logs SET hr_attempts = hr_attempts + 1, hr_upload = ? WHERE id = ?",
-                (device_upload, row["id"]),
-            )
+        wanted.setdefault(row["ts"][:10], set()).add(row["id"])
+
+    for day, ids in wanted.items():
+        # Sessions are built from every exercise logged that day, not only the
+        # ones missing a heart rate, so a session's extent is the real one.
+        for session in _session_groups(_exact_workouts_on(conn, day)):
+            member_ids = [row["id"] for row in session]
+            if not ids.intersection(member_ids):
+                continue
+            extent = _session_extent(session, window_minutes)
+            if extent is None:
+                continue
+            if day not in by_day:
+                by_day[day] = garmin_client.fetch_heart_rate_series(client, day)
+            summary = _hr_summary(by_day[day], *extent)
+            placeholders = ",".join("?" for _ in member_ids)
+            start_iso = extent[0].isoformat(timespec="seconds")
+            end_iso = extent[1].isoformat(timespec="seconds")
+            if summary:
+                # Written to every exercise in the session: they share the
+                # window, so they share the reading.
+                conn.execute(
+                    f"UPDATE workout_logs SET hr_avg = ?, hr_max = ?, hr_min = ?, hr_samples = ?, "
+                    f"hr_synced_at = ?, hr_attempts = hr_attempts + 1, hr_upload = ?, "
+                    f"session_start = ?, session_end = ? WHERE id IN ({placeholders})",
+                    (
+                        summary["hr_avg"], summary["hr_max"], summary["hr_min"], summary["hr_samples"],
+                        datetime.now().isoformat(timespec="seconds"), device_upload,
+                        start_iso, end_iso, *member_ids,
+                    ),
+                )
+                filled += len(member_ids)
+            else:
+                conn.execute(
+                    f"UPDATE workout_logs SET hr_attempts = hr_attempts + 1, hr_upload = ?, "
+                    f"session_start = ?, session_end = ? WHERE id IN ({placeholders})",
+                    (device_upload, start_iso, end_iso, *member_ids),
+                )
     return filled
 
 
@@ -2018,6 +2095,71 @@ def api_workouts():
     return jsonify(rows)
 
 
+@app.route("/api/sessions")
+def api_sessions():
+    """Training sessions: exercises logged close together, grouped, with the
+    time under load and the heart rate over the whole session.
+
+    Only entries with a real time can be grouped — a midday placeholder says
+    nothing about what was done alongside what.
+    """
+    db = get_db()
+    try:
+        days = max(1, min(90, int(request.args.get("days", 14))))
+    except (TypeError, ValueError):
+        days = 14
+    since = (date.today() - timedelta(days=days - 1)).isoformat()
+    rows = db.execute(
+        "SELECT w.id, w.ts, w.duration_sec, w.sets, w.reps, w.hr_avg, w.hr_max, w.hr_min, "
+        "w.session_start, w.session_end, e.name AS exercise_name "
+        "FROM workout_logs w JOIN exercises e ON e.id = w.exercise_id "
+        "WHERE w.ts_exact = 1 AND substr(w.ts, 1, 10) >= ? ORDER BY w.ts ASC, w.id ASC",
+        (since,),
+    ).fetchall()
+
+    by_day = defaultdict(list)
+    for row in rows:
+        by_day[row["ts"][:10]].append(row)
+
+    out = []
+    for day, day_rows in by_day.items():
+        for session in _session_groups(day_rows):
+            first, last = session[0], session[-1]
+            start = first["session_start"] or first["ts"]
+            end = last["session_end"] or last["ts"]
+            try:
+                minutes = round(
+                    (datetime.fromisoformat(end) - datetime.fromisoformat(start)).total_seconds() / 60
+                )
+            except (ValueError, TypeError):
+                minutes = None
+            hr = next((r for r in session if r["hr_avg"] is not None), None)
+            out.append(
+                {
+                    "day": day,
+                    "start": start,
+                    "end": end,
+                    "minutes": minutes,
+                    "exercises": [
+                        {
+                            "id": r["id"],
+                            "name": r["exercise_name"],
+                            "sets": r["sets"],
+                            "reps": r["reps"],
+                        }
+                        for r in session
+                    ],
+                    "reps": sum((r["sets"] or 1) * (r["reps"] or 0) for r in session),
+                    # One reading for the session: every exercise in it shares
+                    # the same window, so they share the same numbers.
+                    "hr_avg": hr["hr_avg"] if hr else None,
+                    "hr_max": hr["hr_max"] if hr else None,
+                }
+            )
+    out.sort(key=lambda x: x["start"], reverse=True)
+    return jsonify(out)
+
+
 @app.route("/api/workouts", methods=["POST"])
 def api_add_workout():
     data = request.get_json(force=True, silent=True) or {}
@@ -2299,6 +2441,66 @@ def api_update_challenge(challenge_id):
     )
     db.commit()
     return jsonify({"status": "updated"})
+
+
+@app.route("/api/challenges/<int:challenge_id>/repeat", methods=["POST"])
+def api_repeat_challenge(challenge_id):
+    """Start another run of a challenge: same items, fresh dates.
+
+    A finished 30-day challenge repeats as another 30 days from today unless
+    told otherwise. The original is left exactly as it was — this is a new
+    challenge with its own record, not a reset of the old one.
+    """
+    data = request.get_json(force=True, silent=True) or {}
+    db = get_db()
+    source = db.execute("SELECT * FROM challenges WHERE id = ?", (challenge_id,)).fetchone()
+    if source is None:
+        return jsonify({"error": "no such challenge"}), 404
+
+    start = (data.get("start_date") or "").strip() or date.today().isoformat()
+    if "end_date" in data:
+        end = (data.get("end_date") or "").strip() or None
+    else:
+        # Keep the original's length, so "30-day" stays 30 days.
+        end = None
+        if source["end_date"]:
+            try:
+                length = (
+                    date.fromisoformat(source["end_date"]) - date.fromisoformat(source["start_date"])
+                ).days
+                end = (date.fromisoformat(start) + timedelta(days=length)).isoformat()
+            except ValueError:
+                end = None
+    err = _validate_challenge_dates(start, end)
+    if err:
+        return jsonify({"error": err}), 400
+    name = (data.get("name") or "").strip()[:80] or source["name"]
+
+    now = _now_ts()
+    order = db.execute("SELECT COALESCE(MAX(sort_order), -1) + 1 AS n FROM challenges").fetchone()["n"]
+    cur = db.execute(
+        "INSERT INTO challenges (name, start_date, end_date, sort_order, archived, created_at, "
+        "updated_at, repeat_of) VALUES (?, ?, ?, ?, 0, ?, ?, ?)",
+        (name, start, end, order, now, now, challenge_id),
+    )
+    new_id = cur.lastrowid
+    for item in db.execute(
+        "SELECT * FROM challenge_items WHERE challenge_id = ? AND archived = 0 "
+        "ORDER BY sort_order ASC, id ASC",
+        (challenge_id,),
+    ).fetchall():
+        db.execute(
+            "INSERT INTO challenge_items (label, sort_order, archived, item_type, exercise_id, "
+            "supplement_id, target_sets, target_reps, dose, challenge_id, created_at, updated_at) "
+            "VALUES (?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                item["label"], item["sort_order"], item["item_type"], item["exercise_id"],
+                item["supplement_id"], item["target_sets"], item["target_reps"], item["dose"],
+                new_id, now, now,
+            ),
+        )
+    db.commit()
+    return jsonify({"status": "created", "id": new_id}), 201
 
 
 @app.route("/api/challenges/<int:challenge_id>", methods=["DELETE"])

@@ -100,6 +100,10 @@ for an open-ended daily habit.
 Archiving a challenge hides it without deleting anything: its items and every
 tick you made stay in the database.
 
+**Repeat this challenge**, on its Trends card, starts another run of the same
+challenge: the same items, the same length, beginning today, with the dates
+editable before it is created. The original keeps its own record.
+
 **Edit items** also lets you **move** an item to another challenge. The days you
 already ticked stay with the challenge you earned them in — a move ends the
 item's membership there and starts a new one in the destination, so neither
@@ -204,10 +208,19 @@ it, shown next to it as `♥ 131 avg · 141 max`. You don't need to start a
 workout on the watch — this reads Garmin's all-day heart rate and takes the
 part that lines up with your exercise.
 
-The window **ends when you log the exercise**, so log it when you finish. It
-runs back by that entry's **duration** if it has one, otherwise by
-**garmin_hr_window_minutes** (default 30). Ticking a challenge item counts as
-logging it, and records the moment you ticked.
+Exercises logged within **90 minutes** of each other count as one **session**,
+and the heart rate is read over the whole session rather than per exercise —
+otherwise five exercises logged after one workout would give five overlapping
+windows over the same period. Every exercise in the session reports the
+session's reading.
+
+The window **ends when you log the last exercise**, so log as you finish. It
+starts by running back from the first exercise by its **duration** if it has
+one, otherwise by **garmin_hr_window_minutes** (default 30). Ticking a
+challenge item counts as logging it, and records the moment you ticked.
+
+The **Sessions** card on Trends lists your recent sessions with the exercises
+in each, how long it ran, the reps and the heart rate.
 
 If your watch hasn't uploaded yet there's simply no heart rate on the entry —
 never a zero — and a later sync fills it in, up to 21 days back.

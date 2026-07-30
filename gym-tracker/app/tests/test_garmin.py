@@ -745,3 +745,78 @@ def test_default_horizon_does_not_reach_beyond_sixty_days(conn, monkeypatch):
     assert conn.execute(
         "SELECT COUNT(*) FROM garmin_daily WHERE day = ?", (old_day,)
     ).fetchone()[0] == 0
+
+
+# --- Sessions ---------------------------------------------------------------
+
+
+def test_one_heart_rate_window_covers_the_whole_session(conn, monkeypatch):
+    from datetime import date
+
+    day = date.today().isoformat()
+    # Three exercises logged over 20 minutes: one session, one window.
+    a = _log_exercise(conn, f"{day}T18:45:00", duration_sec=15 * 60)
+    b = _log_exercise(conn, f"{day}T18:55:00")
+    c = _log_exercise(conn, f"{day}T19:05:00")
+    _patch_hr(monkeypatch, {day: _hr_series(day, [
+        ("18:20", 70),   # before the session
+        ("18:35", 120), ("18:45", 141), ("18:55", 150), ("19:05", 132),
+        ("19:30", 80),   # after it
+    ])})
+
+    gymapp._garmin_do_sync(conn)
+
+    rows = {r["id"]: r for r in conn.execute(
+        "SELECT id, hr_avg, hr_max, session_start, session_end FROM workout_logs"
+    )}
+    # Session runs 18:30 (15 min before the first) to 19:05 (the last log).
+    assert rows[a]["session_start"] == f"{day}T18:30:00"
+    assert rows[a]["session_end"] == f"{day}T19:05:00"
+    # Every exercise in it reports the session's heart rate, not its own slice.
+    assert rows[a]["hr_max"] == rows[b]["hr_max"] == rows[c]["hr_max"] == 150
+    assert rows[a]["hr_avg"] == round((120 + 141 + 150 + 132) / 4)
+
+
+def test_exercises_far_apart_are_separate_sessions(conn, monkeypatch):
+    from datetime import date
+
+    day = date.today().isoformat()
+    morning = _log_exercise(conn, f"{day}T07:30:00", duration_sec=10 * 60)
+    evening = _log_exercise(conn, f"{day}T19:30:00", duration_sec=10 * 60)
+    _patch_hr(monkeypatch, {day: _hr_series(day, [
+        ("07:22", 110), ("07:28", 118), ("19:22", 145), ("19:28", 152),
+    ])})
+
+    gymapp._garmin_do_sync(conn)
+
+    rows = {r["id"]: r for r in conn.execute("SELECT id, hr_avg, hr_max FROM workout_logs")}
+    assert rows[morning]["hr_max"] == 118
+    assert rows[evening]["hr_max"] == 152  # not merged into one all-day window
+
+
+def test_sessions_endpoint_groups_and_totals(client, conn, monkeypatch):
+    from datetime import date
+
+    day = date.today().isoformat()
+    _log_exercise(conn, f"{day}T18:45:00", duration_sec=15 * 60)
+    _log_exercise(conn, f"{day}T19:05:00")
+    _patch_hr(monkeypatch, {day: _hr_series(day, [("18:35", 120), ("19:00", 140)])})
+    gymapp._garmin_do_sync(conn)
+
+    sessions = client.get("/api/sessions?days=7").get_json()
+    assert len(sessions) == 1
+    s = sessions[0]
+    assert len(s["exercises"]) == 2
+    assert s["minutes"] == 35  # 18:30 to 19:05, the time under load
+    assert s["reps"] == 3 * 15 * 2
+    assert s["hr_avg"] == 130 and s["hr_max"] == 140
+
+
+def test_sessions_ignore_entries_with_a_placeholder_time(client, conn):
+    from datetime import date
+
+    day = date.today().isoformat()
+    _log_exercise(conn, f"{day}T12:00:00", ts_exact=0)
+    # Nothing to group: a midday placeholder says nothing about what was done
+    # alongside what.
+    assert client.get("/api/sessions").get_json() == []

@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.16.0
+
+- **Repeat a challenge.** Finished a 30-day run and want another? **Repeat this
+  challenge** on its Trends card clones its items into a new challenge of the
+  same length starting today, with the dates editable first. The original is
+  untouched — this is a new run with its own record, not a reset.
+- **Heart rate is now read over a training session, not per exercise.** Logging
+  five exercises after one workout used to produce five overlapping windows
+  over roughly the same period, each a slightly different answer to the same
+  question. Exercises logged within 90 minutes of each other are now one
+  session with one window, and every exercise in it reports that reading.
+- **New Sessions card on Trends**: your last 14 days of sessions, each with the
+  exercises in it, how long it ran, total reps and the session's heart rate.
+
 ## 1.15.0
 
 - **Weight under each challenge's adherence bars.** The Trends card now draws
