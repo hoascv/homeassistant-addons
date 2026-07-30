@@ -344,3 +344,112 @@ def test_stats_include_volume_from_the_challenge(client, conn):
     assert stats["volume"]["sessions"] == 1
     assert stats["volume"]["reps"] == 30
     assert stats["volume"]["hr_avg"] == 130 and stats["volume"]["hr_max"] == 150
+
+
+# --- Item membership windows ------------------------------------------------
+
+
+def _backdate_setup(conn, challenge_id, day):
+    """Make a challenge (and the items it already has) look as though it was
+    set up on `day`, so later additions are genuinely later."""
+    conn.execute("UPDATE challenges SET created_at = ? WHERE id = ?", (f"{day}T08:00:00", challenge_id))
+    conn.execute(
+        "UPDATE challenge_items SET created_at = ? WHERE challenge_id = ?",
+        (f"{day}T08:05:00", challenge_id),
+    )
+    conn.commit()
+
+
+def test_adding_an_item_does_not_invalidate_earlier_days(client, conn):
+    from datetime import date, timedelta
+
+    today = date.today()
+    start = (today - timedelta(days=9)).isoformat()
+    cid = _new_challenge(client, "Squats", start)
+    first = _add_exercise_item(client, conn, cid, "squat")
+    _backdate_setup(conn, cid, start)
+    for off in range(10):
+        client.post("/api/challenge/toggle", json={
+            "item_id": first, "day": (today - timedelta(days=off)).isoformat(),
+        })
+
+    before = next(s for s in client.get("/api/challenges/stats").get_json() if s["id"] == cid)
+    assert before["completion_pct"] == 100.0 and before["current_streak"] == 10
+
+    _add_exercise_item(client, conn, cid, "push-up")  # added today
+    after = next(s for s in client.get("/api/challenges/stats").get_json() if s["id"] == cid)
+
+    # Only today is affected: the nine days before the item existed still count.
+    assert after["days_complete"] == 9
+    assert after["completion_pct"] == 90.0
+    assert after["current_streak"] == 9
+    # And the newcomer is scored over its one day, not the whole run.
+    newcomer = next(i for i in after["items"] if i["days_member"] == 1)
+    assert newcomer["days_done"] == 0 and newcomer["rate_pct"] == 0.0
+
+
+def test_backfilling_an_item_pulls_its_membership_back(client, conn):
+    from datetime import date, timedelta
+
+    today = date.today()
+    start = (today - timedelta(days=5)).isoformat()
+    cid = _new_challenge(client, "Squats", start)
+    item = _add_exercise_item(client, conn, cid, "squat")
+    _backdate_setup(conn, cid, start)
+    later = _add_exercise_item(client, conn, cid, "push-up")  # added today
+
+    # Ticking the newcomer on an earlier day says it applied then, so that day
+    # starts requiring it.
+    day = (today - timedelta(days=3)).isoformat()
+    client.post("/api/challenge/toggle", json={"item_id": later, "day": day})
+    client.post("/api/challenge/toggle", json={"item_id": item, "day": day})
+
+    stats = next(s for s in client.get("/api/challenges/stats").get_json() if s["id"] == cid)
+    newcomer = next(i for i in stats["items"] if i["id"] == later)
+    assert newcomer["days_member"] == 4  # from that backfilled day to today
+    assert newcomer["days_done"] == 1
+    assert any(d["day"] == day and d["complete"] for d in stats["days"])
+
+
+def test_an_archived_item_keeps_the_days_it_was_part_of(client, conn):
+    from datetime import date, timedelta
+
+    today = date.today()
+    start = (today - timedelta(days=4)).isoformat()
+    cid = _new_challenge(client, "Squats", start)
+    item = _add_exercise_item(client, conn, cid, "squat")
+    _backdate_setup(conn, cid, start)
+    for off in range(5):
+        client.post("/api/challenge/toggle", json={
+            "item_id": item, "day": (today - timedelta(days=off)).isoformat(),
+        })
+
+    client.delete(f"/api/challenge/items/{item}")
+    stats = next(s for s in client.get("/api/challenges/stats").get_json() if s["id"] == cid)
+
+    # Removing it doesn't erase the record of the days it was done.
+    archived = next(i for i in stats["items"] if i["id"] == item)
+    assert archived["archived"] is True
+    assert archived["days_done"] == 5
+    assert stats["days_complete"] == 5
+    assert stats["item_count"] == 0  # nothing active left
+
+
+def test_items_archived_before_archive_times_were_recorded_are_left_out(client, conn):
+    from datetime import date, timedelta
+
+    today = date.today()
+    cid = _new_challenge(client, "Squats", (today - timedelta(days=2)).isoformat())
+    item = _add_exercise_item(client, conn, cid, "squat")
+    _backdate_setup(conn, cid, (today - timedelta(days=2)).isoformat())
+    # An upgrade leaves old archived rows with no archived_at.
+    conn.execute(
+        "UPDATE challenge_items SET archived = 1, archived_at = NULL WHERE id = ?", (item,)
+    )
+    conn.commit()
+
+    stats = next(s for s in client.get("/api/challenges/stats").get_json() if s["id"] == cid)
+    # It can't be placed in time, so it is excluded rather than allowed to
+    # rewrite days as incomplete.
+    assert stats["items"] == []
+    assert stats["days_complete"] == 0

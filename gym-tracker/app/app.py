@@ -18,7 +18,7 @@ from flask import Flask, Response, g, jsonify, render_template, request, send_fi
 
 import garmin_client
 
-APP_VERSION = "1.13.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.13.1"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("GYM_DB_PATH", "/data/gym.db")
 OPTIONS_PATH = os.environ.get("GYM_OPTIONS_PATH", "/data/options.json")
@@ -316,7 +316,8 @@ def init_db():
             dose TEXT,
             challenge_id INTEGER REFERENCES challenges(id),
             created_at TEXT,
-            updated_at TEXT
+            updated_at TEXT,
+            archived_at TEXT
         )
         """
     )
@@ -503,6 +504,11 @@ def _migrate_columns(conn):
     item_cols = {row[1] for row in conn.execute("PRAGMA table_info(challenge_items)")}
     if "challenge_id" not in item_cols:
         conn.execute("ALTER TABLE challenge_items ADD COLUMN challenge_id INTEGER")
+    if "archived_at" not in item_cols:
+        # When an item stopped being part of its challenge. Needed to judge a
+        # past day by the items that existed then; updated_at can't stand in
+        # for it because any edit moves that.
+        conn.execute("ALTER TABLE challenge_items ADD COLUMN archived_at TEXT")
     orphans = conn.execute(
         "SELECT COUNT(*) FROM challenge_items WHERE challenge_id IS NULL"
     ).fetchone()[0]
@@ -1287,6 +1293,87 @@ def _challenges(conn, include_archived=False):
     ]
 
 
+def _challenge_membership(conn, challenge_id, challenge=None):
+    """Every item that has ever belonged to the challenge, paired with the days
+    it was a member for: (row, joined_day, left_day). Either end can be None,
+    meaning open.
+
+    This is what stops a day being judged against items that didn't exist yet.
+    Without it, adding an item today makes every past day incomplete.
+    """
+    rows = conn.execute(
+        "SELECT ci.id, ci.sort_order, ci.item_type, ci.exercise_id, ci.supplement_id, "
+        "ci.target_sets, ci.target_reps, ci.dose, ci.label AS stored_label, ci.challenge_id, "
+        "ci.archived, ci.created_at, ci.archived_at, "
+        "e.name AS exercise_name, s.name AS supplement_name "
+        "FROM challenge_items ci "
+        "LEFT JOIN exercises e ON e.id = ci.exercise_id "
+        "LEFT JOIN supplements s ON s.id = ci.supplement_id "
+        "WHERE ci.challenge_id = ? ORDER BY ci.sort_order ASC, ci.id ASC",
+        (challenge_id,),
+    ).fetchall()
+    # Ticking an earlier day is a statement that the item belonged to the
+    # challenge then — backfilling history has to count, so membership starts
+    # at the earlier of "created" and "first ticked".
+    first_tick = {}
+    ids = [r["id"] for r in rows]
+    if ids:
+        placeholders = ",".join("?" for _ in ids)
+        first_tick = {
+            r["item_id"]: r["first_day"]
+            for r in conn.execute(
+                f"SELECT item_id, MIN(day) AS first_day FROM challenge_completions "
+                f"WHERE item_id IN ({placeholders}) GROUP BY item_id",
+                tuple(ids),
+            )
+        }
+    # Items that were there when the challenge was set up count from its start
+    # date, even if the challenge itself was backdated. Only an item added
+    # *later* has a join date of its own — that is the whole point, so that
+    # adding one today cannot make yesterday incomplete.
+    if challenge is None:
+        challenge = conn.execute(
+            "SELECT * FROM challenges WHERE id = ?", (challenge_id,)
+        ).fetchone()
+    setup_day = None
+    if challenge is not None:
+        setup_day = (challenge["created_at"] or challenge["start_date"] or "")[:10] or None
+
+    out = []
+    for row in rows:
+        # No creation time recorded (items predating 1.12.0): treat as having
+        # been there from the start, which is what they were.
+        created = (row["created_at"] or "")[:10] or None
+        if created and setup_day and created <= setup_day:
+            created = None
+        ticked = first_tick.get(row["id"])
+        # A tick on an earlier day is an explicit statement that the item
+        # applied then, so it pulls a known join date back — but it can never
+        # introduce one for an item that was there from the start.
+        if created is None:
+            joined = None
+        else:
+            joined = min(created, ticked) if ticked else created
+        left = (row["archived_at"] or "")[:10] or None
+        if row["archived"] and left is None:
+            # Archived before archive times were recorded — it can't be placed
+            # in time, so it is left out rather than allowed to rewrite days.
+            continue
+        out.append((row, joined, left))
+    return out
+
+
+def _members_on(membership, day):
+    ids = set()
+    for row, joined, left in membership:
+        if joined and day < joined:
+            continue
+        if left and day > left:
+            continue
+        ids.add(row["id"])
+    return ids
+
+
 def _challenge_day_range(ch, today=None):
     """The days a challenge counts over: from its start to today, or to its end
     date once that has passed. A challenge that hasn't started yet is empty."""
@@ -1314,12 +1401,11 @@ def _challenge_finished(ch, today=None):
         return False
 
 
-def _challenge_days(conn, ch, items=None):
-    """One entry per day the challenge has run: how many of its items were
-    ticked, and whether that completed the day."""
-    items = items if items is not None else _active_challenge_items(conn, ch["id"])
-    ids = {i["id"] for i in items}
-    by_day = _completions_by_day(conn, list(ids))
+def _challenge_days(conn, ch, membership=None):
+    """One entry per day the challenge has run: how many of the items that were
+    part of it *that day* were ticked, and whether that completed the day."""
+    membership = membership if membership is not None else _challenge_membership(conn, ch["id"])
+    by_day = _completions_by_day(conn, [row["id"] for row, _, _ in membership])
     start, last = _challenge_day_range(ch)
     days = []
     if start is None:
@@ -1327,9 +1413,15 @@ def _challenge_days(conn, ch, items=None):
     cursor = start
     while cursor <= last:
         iso = cursor.isoformat()
-        done = len(by_day.get(iso, set()) & ids)
+        members = _members_on(membership, iso)
+        done = len(by_day.get(iso, set()) & members)
         days.append(
-            {"day": iso, "done": done, "total": len(ids), "complete": bool(ids) and done == len(ids)}
+            {
+                "day": iso,
+                "done": done,
+                "total": len(members),
+                "complete": bool(members) and done == len(members),
+            }
         )
         cursor += timedelta(days=1)
     return days
@@ -1391,14 +1483,16 @@ def _completions_by_day(conn, item_ids):
 
 
 def _challenge_streak(conn, challenge_id=None):
-    items = _active_challenge_items(conn, challenge_id)
-    if not items:
+    if challenge_id is None:
+        challenge_id = _default_challenge_id(conn)
+    membership = _challenge_membership(conn, challenge_id)
+    if not membership:
         return 0
-    active = {i["id"] for i in items}
-    by_day = _completions_by_day(conn, list(active))
+    by_day = _completions_by_day(conn, [row["id"] for row, _, _ in membership])
 
     def complete(day):
-        return active <= by_day.get(day, set())
+        members = _members_on(membership, day)
+        return bool(members) and members <= by_day.get(day, set())
 
     today = date.today()
     # An unfinished today shouldn't break yesterday's streak — start
@@ -1420,12 +1514,14 @@ def _longest_streak(days):
 
 
 def _challenge_complete_on(conn, day_iso, challenge_id=None):
-    items = _active_challenge_items(conn, challenge_id)
-    if not items:
+    if challenge_id is None:
+        challenge_id = _default_challenge_id(conn)
+    membership = _challenge_membership(conn, challenge_id)
+    members = _members_on(membership, day_iso)
+    if not members:
         return False
-    active = {i["id"] for i in items}
-    by_day = _completions_by_day(conn, list(active))
-    return active <= by_day.get(day_iso, set())
+    by_day = _completions_by_day(conn, [row["id"] for row, _, _ in membership])
+    return members <= by_day.get(day_iso, set())
 
 
 def _weighed_in_on(conn, day_iso):
@@ -1986,23 +2082,33 @@ def _challenge_stats(conn, ch):
     """Per-challenge statistics: how often it is completed, the streaks, the
     day-by-day record, which items actually get done, and the volume logged
     through it."""
-    items = _active_challenge_items(conn, ch["id"])
-    ids = {i["id"] for i in items}
-    days = _challenge_days(conn, ch, items)
+    membership = _challenge_membership(conn, ch["id"])
+    ids = {row["id"] for row, _, _ in membership}
+    days = _challenge_days(conn, ch, membership)
     by_day = _completions_by_day(conn, list(ids))
     elapsed = len(days)
     complete_days = sum(1 for d in days if d["complete"])
 
+    # Each item is scored over the days it was actually part of the challenge,
+    # so one added late isn't marked down for the days before it existed.
     per_item = []
-    for i in items:
-        hits = sum(1 for d in days if i["id"] in by_day.get(d["day"], set()))
+    for row, joined, left in membership:
+        member_days = [
+            d["day"]
+            for d in days
+            if (not joined or d["day"] >= joined) and (not left or d["day"] <= left)
+        ]
+        hits = sum(1 for day in member_days if row["id"] in by_day.get(day, set()))
+        view = _challenge_item_view(row)
         per_item.append(
             {
-                "id": i["id"],
-                "label": i["label"],
-                "item_type": i["item_type"],
+                "id": row["id"],
+                "label": view["label"],
+                "item_type": row["item_type"],
+                "archived": bool(row["archived"]),
+                "days_member": len(member_days),
                 "days_done": hits,
-                "rate_pct": round(hits / elapsed * 100, 1) if elapsed else None,
+                "rate_pct": round(hits / len(member_days) * 100, 1) if member_days else None,
             }
         )
 
@@ -2034,7 +2140,7 @@ def _challenge_stats(conn, ch):
         "completion_pct": round(complete_days / elapsed * 100, 1) if elapsed else None,
         "current_streak": _challenge_streak(conn, ch["id"]),
         "longest_streak": _longest_streak(days),
-        "item_count": len(items),
+        "item_count": sum(1 for row, _, _ in membership if not row["archived"]),
         # Capped: the adherence chart only ever draws a window of this.
         "days": days[-180:],
         "items": per_item,
@@ -2371,8 +2477,9 @@ def api_delete_challenge_item(item_id):
     db = get_db()
     # Archive rather than delete so past streak/history stays intact.
     cur = db.execute(
-        "UPDATE challenge_items SET archived = 1, updated_at = ? WHERE id = ? AND archived = 0",
-        (_now_ts(), item_id),
+        "UPDATE challenge_items SET archived = 1, updated_at = ?, archived_at = ? "
+        "WHERE id = ? AND archived = 0",
+        (_now_ts(), _now_ts(), item_id),
     )
     db.commit()
     if cur.rowcount == 0:

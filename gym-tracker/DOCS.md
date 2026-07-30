@@ -115,6 +115,12 @@ The **Trends** tab shows, for each challenge:
 - **Volume** — sessions and reps logged through the challenge, with heart rate
   where Garmin has it.
 
+Each day is scored against the items that were part of the challenge **that
+day**. An item you add later counts only from the day you added it, so adding
+one never makes your earlier days look incomplete; an item you remove keeps the
+days it was there for. Ticking an item on an earlier day counts as saying it
+applied then.
+
 The challenge is a checklist you complete each day, **built from your
 library** — every item is either an exercise (with a rep/set target) or a
 supplement (with a dose), so there's no loose free text to keep tidy. It

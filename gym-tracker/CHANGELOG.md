@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.13.1
+
+- **Fix adding an item wiping a challenge's history.** Statistics judged every
+  past day against the challenge's *current* items, so adding one today made
+  every earlier day incomplete — a challenge with ten perfect days dropped from
+  100% to 0%. Each day is now judged against the items that were part of the
+  challenge *that day*.
+  - An item added after the challenge was set up counts only from the day it
+    was added. Items that were there at setup count from the start date, so a
+    backdated challenge still covers the history you backfill into it.
+  - Ticking an item on an earlier day says it applied then, and pulls its
+    membership back to that day.
+  - An **archived item keeps the days it was part of** instead of vanishing
+    from the record, via a new `archived_at`. Items archived before this
+    version have no archive time, so they stay excluded rather than being
+    allowed to rewrite past days.
+- Per-item rates are now measured over the days that item was actually part of
+  the challenge (`days_member`), not over the challenge's whole run.
+
 ## 1.13.0
 
 - **Run several challenges at once.** A challenge is now a named thing with its
