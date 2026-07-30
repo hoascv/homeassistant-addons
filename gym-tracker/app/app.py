@@ -18,7 +18,7 @@ from flask import Flask, Response, g, jsonify, render_template, request, send_fi
 
 import garmin_client
 
-APP_VERSION = "1.13.1"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.13.2"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("GYM_DB_PATH", "/data/gym.db")
 OPTIONS_PATH = os.environ.get("GYM_OPTIONS_PATH", "/data/options.json")
@@ -947,12 +947,15 @@ def _garmin_sync_heart_rates(conn, client, today, device_upload):
     """
     filled = 0
     by_day = {}
+    # Read once: get_garmin_config() parses options.json off disk, and this
+    # loop runs per logged exercise.
+    window_minutes = get_garmin_config()["hr_window_minutes"]
     for row in _garmin_hr_candidates(conn, today):
         if row["hr_attempts"] >= GARMIN_HR_ATTEMPTS and (row["hr_upload"] or "") == (
             device_upload or ""
         ):
             continue
-        window = _hr_window(row, get_garmin_config()["hr_window_minutes"])
+        window = _hr_window(row, window_minutes)
         if window is None:
             continue
         day = row["ts"][:10]
@@ -1262,6 +1265,18 @@ def _weight_forecast(logs, goal):
     }
 
 
+def _requested_challenge_id():
+    """The challenge_id query argument as an int. Returns (value, error) so a
+    junk value answers 400 rather than raising out of the view."""
+    raw = request.args.get("challenge_id")
+    if raw in (None, ""):
+        return None, None
+    try:
+        return int(raw), None
+    except (TypeError, ValueError):
+        return None, "challenge_id must be a number"
+
+
 def _active_challenge_items(conn, challenge_id=None):
     """Active items, optionally for one challenge. Without a challenge id this
     spans every challenge, which is what the reminder needs."""
@@ -1485,7 +1500,8 @@ def _completions_by_day(conn, item_ids):
 def _challenge_streak(conn, challenge_id=None):
     if challenge_id is None:
         challenge_id = _default_challenge_id(conn)
-    membership = _challenge_membership(conn, challenge_id)
+    challenge = conn.execute("SELECT * FROM challenges WHERE id = ?", (challenge_id,)).fetchone()
+    membership = _challenge_membership(conn, challenge_id, challenge)
     if not membership:
         return 0
     by_day = _completions_by_day(conn, [row["id"] for row, _, _ in membership])
@@ -1494,12 +1510,16 @@ def _challenge_streak(conn, challenge_id=None):
         members = _members_on(membership, day)
         return bool(members) and members <= by_day.get(day, set())
 
-    today = date.today()
-    # An unfinished today shouldn't break yesterday's streak — start
-    # counting from today only if it's already complete, else from yesterday.
-    cursor = today if complete(today.isoformat()) else today - timedelta(days=1)
+    # _challenge_day_range works on a mapping; a sqlite3.Row has no .get().
+    start, last = _challenge_day_range(dict(challenge)) if challenge else (None, date.today())
+    if start is None or last < start:
+        return 0  # hasn't started
+    # Counted from the challenge's last day, which for one that has finished is
+    # its end date — otherwise a challenge that ended on a perfect run would
+    # report a streak of zero, today being past it.
+    cursor = last if complete(last.isoformat()) else last - timedelta(days=1)
     streak = 0
-    while complete(cursor.isoformat()):
+    while cursor >= start and complete(cursor.isoformat()):
         streak += 1
         cursor -= timedelta(days=1)
     return streak
@@ -2113,14 +2133,18 @@ def _challenge_stats(conn, ch):
         )
 
     volume = {"sessions": 0, "reps": 0, "hr_avg": None, "hr_max": None}
-    if ids:
+    start, last = _challenge_day_range(ch)
+    if ids and start is not None:
         placeholders = ",".join("?" for _ in ids)
+        # Bounded by the challenge's own period, like every other figure here —
+        # otherwise a finished challenge keeps accruing volume.
         row = conn.execute(
             "SELECT COUNT(*) AS sessions, "
             "SUM(COALESCE(sets, 1) * COALESCE(reps, 0)) AS reps, "
             "AVG(hr_avg) AS hr_avg, MAX(hr_max) AS hr_max "
-            f"FROM workout_logs WHERE challenge_item_id IN ({placeholders})",
-            tuple(ids),
+            f"FROM workout_logs WHERE challenge_item_id IN ({placeholders}) "
+            "AND substr(ts, 1, 10) BETWEEN ? AND ?",
+            tuple(ids) + (start.isoformat(), last.isoformat()),
         ).fetchone()
         volume = {
             "sessions": row["sessions"] or 0,
@@ -2163,7 +2187,7 @@ def api_challenges_stats():
 @app.route("/api/challenges", methods=["POST"])
 def api_add_challenge():
     data = request.get_json(force=True, silent=True) or {}
-    name = (data.get("name") or "").strip()
+    name = (data.get("name") or "").strip()[:80]
     if not name:
         return jsonify({"error": "name is required"}), 400
     start = (data.get("start_date") or "").strip() or date.today().isoformat()
@@ -2189,7 +2213,7 @@ def api_update_challenge(challenge_id):
     existing = db.execute("SELECT * FROM challenges WHERE id = ?", (challenge_id,)).fetchone()
     if existing is None:
         return jsonify({"error": "no such challenge"}), 404
-    name = (data.get("name") or "").strip() or existing["name"]
+    name = (data.get("name") or "").strip()[:80] or existing["name"]
     start = (data.get("start_date") or "").strip() or existing["start_date"]
     # An empty string clears the end date; a missing key leaves it alone.
     end = data.get("end_date", existing["end_date"])
@@ -2306,8 +2330,10 @@ def api_challenge_toggle():
 
 @app.route("/api/challenge/items", methods=["GET"])
 def api_challenge_items():
-    challenge_id = request.args.get("challenge_id")
-    return jsonify(_active_challenge_items(get_db(), int(challenge_id) if challenge_id else None))
+    challenge_id, err = _requested_challenge_id()
+    if err:
+        return jsonify({"error": err}), 400
+    return jsonify(_active_challenge_items(get_db(), challenge_id))
 
 
 @app.route("/api/challenge/items", methods=["POST"])
@@ -2450,8 +2476,10 @@ def api_challenge_history():
     if (to_date - from_date).days > MAX_SPAN - 1:
         from_date = to_date - timedelta(days=MAX_SPAN - 1)
 
-    challenge_id = request.args.get("challenge_id")
-    items = _active_challenge_items(db, int(challenge_id) if challenge_id else None)
+    challenge_id, err = _requested_challenge_id()
+    if err:
+        return jsonify({"error": err}), 400
+    items = _active_challenge_items(db, challenge_id)
     active_ids = [i["id"] for i in items]
     by_day = _completions_by_day(db, active_ids)
     history = []

@@ -453,3 +453,78 @@ def test_items_archived_before_archive_times_were_recorded_are_left_out(client, 
     # rewrite days as incomplete.
     assert stats["items"] == []
     assert stats["days_complete"] == 0
+
+
+# --- Bad input answers, rather than crashing --------------------------------
+
+
+def test_junk_challenge_id_is_a_bad_request(client):
+    for url in ("/api/challenge/items?challenge_id=abc", "/api/challenge/history?challenge_id=abc"):
+        r = client.get(url)
+        assert r.status_code == 400, url
+        assert "challenge_id" in r.get_json()["error"]
+
+
+def test_an_absurd_name_is_trimmed_not_stored_whole(client):
+    cid = client.post("/api/challenges", json={
+        "name": "x" * 5000, "start_date": "2026-07-01",
+    }).get_json()["id"]
+    name = next(c for c in client.get("/api/challenges").get_json() if c["id"] == cid)["name"]
+    assert len(name) == 80
+
+
+def test_stats_volume_stops_at_the_end_date(client, conn):
+    from datetime import date, timedelta
+
+    today = date.today()
+    end = (today - timedelta(days=2)).isoformat()
+    cid = _new_challenge(client, "Finished", (today - timedelta(days=6)).isoformat(), end)
+    item = _add_exercise_item(client, conn, cid, "squat")
+    # One session inside the period, one logged after it ended.
+    for day, sets in (((today - timedelta(days=4)).isoformat(), 3), (today.isoformat(), 9)):
+        conn.execute(
+            "INSERT INTO workout_logs (ts, exercise_id, sets, reps, source, challenge_item_id, ts_exact) "
+            "SELECT ?, exercise_id, ?, 10, 'challenge', ?, 1 FROM challenge_items WHERE id = ?",
+            (f"{day}T09:00:00", sets, item, item),
+        )
+    conn.commit()
+
+    stats = next(s for s in client.get("/api/challenges/stats").get_json() if s["id"] == cid)
+    assert stats["volume"]["sessions"] == 1  # the later one is outside the challenge
+    assert stats["volume"]["reps"] == 30
+
+
+def test_a_future_challenge_has_not_started(client):
+    from datetime import date, timedelta
+
+    start = (date.today() + timedelta(days=3)).isoformat()
+    cid = _new_challenge(client, "Next week", start)
+    view = next(c for c in client.get("/api/challenges").get_json() if c["id"] == cid)
+    assert view["not_started"] is True
+    assert view["streak"] == 0
+
+    stats = next(s for s in client.get("/api/challenges/stats").get_json() if s["id"] == cid)
+    assert stats["days_elapsed"] == 0
+    assert stats["completion_pct"] is None  # no days yet, so no rate to report
+
+
+def test_a_finished_challenge_keeps_the_streak_it_ended_on(client, conn):
+    from datetime import date, timedelta
+
+    today = date.today()
+    start = (today - timedelta(days=9)).isoformat()
+    end = (today - timedelta(days=3)).isoformat()
+    cid = _new_challenge(client, "Done", start, end)
+    item = _add_exercise_item(client, conn, cid, "squat")
+    _backdate_setup(conn, cid, start)
+    for off in range(3, 10):  # every day it ran, perfectly
+        client.post("/api/challenge/toggle", json={
+            "item_id": item, "day": (today - timedelta(days=off)).isoformat(),
+        })
+
+    stats = next(s for s in client.get("/api/challenges/stats").get_json() if s["id"] == cid)
+    assert stats["completion_pct"] == 100.0
+    # Counted to its end date, not to today: a perfect run doesn't become a
+    # streak of zero just because the challenge is over.
+    assert stats["current_streak"] == 7
+    assert stats["longest_streak"] == 7

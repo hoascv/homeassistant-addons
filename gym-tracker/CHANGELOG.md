@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.13.2
+
+- **A challenge that finished on a perfect run no longer reports a streak of
+  zero.** The streak was counted back from today, which for a finished
+  challenge is past its end date; it is now counted from the challenge's last
+  day.
+- **Fix two crashes**: a non-numeric `challenge_id` on `/api/challenge/items`
+  or `/api/challenge/history` returned a 500 instead of a 400.
+- **Challenge volume is bounded by the challenge's own period**, like every
+  other figure on the card — a finished challenge no longer keeps accruing
+  reps from workouts logged after it ended.
+- Challenge names are capped at 80 characters, and the heart-rate sync no
+  longer re-reads the add-on options once per logged exercise.
+
 ## 1.13.1
 
 - **Fix adding an item wiping a challenge's history.** Statistics judged every

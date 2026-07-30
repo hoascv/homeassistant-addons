@@ -60,3 +60,26 @@ def test_resaving_the_same_goal_is_not_a_change(client):
         "target_date": goal["target_date"],
     })
     assert len(client.get("/api/goal/history").get_json()) == 1
+
+
+def test_goal_history_records_a_pre_existing_goal_as_migrated(db_path):
+    """A database that predates goal history contributes its current goal as
+    the baseline, flagged so its changed_at isn't mistaken for an edit time."""
+    import sqlite3
+
+    import app as gymapp
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    conn.execute("DELETE FROM goal_history")
+    conn.execute("UPDATE goal SET target_weight_kg = 88 WHERE id = 1")
+    conn.commit()
+
+    gymapp._seed_defaults(conn)
+    conn.commit()
+
+    rows = [dict(r) for r in conn.execute("SELECT * FROM goal_history")]
+    conn.close()
+    assert len(rows) == 1
+    assert rows[0]["source"] == "migrated"
+    assert rows[0]["target_weight_kg"] == 88
