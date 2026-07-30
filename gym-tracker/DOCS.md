@@ -170,6 +170,19 @@ logging it, and records the moment you ticked.
 If your watch hasn't uploaded yet there's simply no heart rate on the entry —
 never a zero — and a later sync fills it in, up to 21 days back.
 
+### When things are timestamped
+
+Logging a weigh-in or an exercise **today** records the moment. Filing one
+against an **earlier day** stores it at midday, because there's no way to know
+when it happened — those rows carry `ts_exact = 0` in the database, and are
+skipped when heart rate is worked out rather than being given one from the
+wrong window. Rows recorded before this behaviour existed are all marked
+`ts_exact = 0`: their times were placeholders too.
+
+If you export the database for your own analysis, `ts_exact` is what tells you
+whether a timestamp's time-of-day means anything. The date part is always
+reliable.
+
 ### History, and a watch that hasn't synced
 
 Every day pulled is kept, building up a history you can scroll back through —

@@ -541,12 +541,12 @@ def _patch_hr(monkeypatch, series_by_day, device_upload=None):
     monkeypatch.setattr(gymapp.garmin_client, "fetch_heart_rate_series", _series)
 
 
-def _log_exercise(conn, ts, duration_sec=None):
+def _log_exercise(conn, ts, duration_sec=None, ts_exact=1):
     conn.execute("INSERT OR IGNORE INTO exercises (id, name) VALUES (1, 'Push-up')")
     cur = conn.execute(
-        "INSERT INTO workout_logs (ts, exercise_id, sets, reps, duration_sec, source) "
-        "VALUES (?, 1, 3, 15, ?, 'manual')",
-        (ts, duration_sec),
+        "INSERT INTO workout_logs (ts, exercise_id, sets, reps, duration_sec, source, ts_exact) "
+        "VALUES (?, 1, 3, 15, ?, 'manual', ?)",
+        (ts, duration_sec, ts_exact),
     )
     conn.commit()
     return cur.lastrowid
@@ -686,3 +686,22 @@ def test_ticking_an_earlier_day_keeps_the_midday_placeholder(client, conn):
     client.post("/api/challenge/toggle", json={"item_id": 98, "day": "2026-07-01"})
     ts = conn.execute("SELECT ts FROM challenge_completions WHERE item_id = 98").fetchone()["ts"]
     assert ts == "2026-07-01T12:00:00"  # can't know when, so don't pretend
+
+
+def test_heart_rate_is_skipped_when_the_time_is_only_a_placeholder(conn, monkeypatch):
+    from datetime import date
+
+    # An entry filed against a past day carries a midday placeholder, so there
+    # is no real window — a heart rate here would be invented.
+    day = date.today().isoformat()
+    wid = _log_exercise(conn, f"{day}T12:00:00", duration_sec=30 * 60, ts_exact=0)
+    _patch_hr(
+        monkeypatch,
+        {day: _hr_series(day, [("11:40", 120), ("11:50", 130), ("11:58", 140)])},
+    )
+    result = gymapp._garmin_do_sync(conn)
+
+    assert result["heart_rates"] == 0
+    assert conn.execute(
+        "SELECT hr_avg FROM workout_logs WHERE id = ?", (wid,)
+    ).fetchone()["hr_avg"] is None

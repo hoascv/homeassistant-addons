@@ -148,3 +148,60 @@ def test_forecast_off_track_when_moving_away(client, conn):
     assert fc["status"] == "off_track"
     assert fc["slope_per_week"] < 0
     assert fc["projected_date"] is None
+
+
+# --- Timestamps: real moment vs day placeholder -----------------------------
+
+
+def test_logging_today_records_the_time_not_midday(client, conn):
+    from datetime import date, datetime
+
+    client.post("/api/weight", json={"weight_kg": 100.4, "date": date.today().isoformat()})
+    row = conn.execute("SELECT ts, ts_exact FROM weight_logs ORDER BY id DESC LIMIT 1").fetchone()
+
+    assert not row["ts"].endswith("T12:00:00")
+    assert row["ts_exact"] == 1
+    assert abs((datetime.now() - datetime.fromisoformat(row["ts"])).total_seconds()) < 60
+
+
+def test_backdated_entries_stay_marked_inexact(client, conn):
+    client.post("/api/weight", json={"weight_kg": 100.4, "date": "2026-07-10"})
+    row = conn.execute("SELECT ts, ts_exact FROM weight_logs ORDER BY id DESC LIMIT 1").fetchone()
+
+    # No way to know when it happened, so the placeholder stays and says so.
+    assert row["ts"] == "2026-07-10T12:00:00"
+    assert row["ts_exact"] == 0
+
+
+def test_migration_marks_old_midday_rows_inexact(db_path):
+    import sqlite3
+
+    import app as gymapp
+
+    conn = sqlite3.connect(db_path)
+    conn.execute("ALTER TABLE weight_logs DROP COLUMN ts_exact")
+    conn.execute(
+        "INSERT INTO weight_logs (ts, weight_kg) VALUES ('2026-07-02T12:00:00', 99.0)"
+    )
+    conn.execute(
+        "INSERT INTO weight_logs (ts, weight_kg) VALUES ('2026-07-02T07:41:12', 99.1)"
+    )
+    conn.commit()
+
+    gymapp._migrate_columns(conn)
+    conn.commit()
+
+    rows = {
+        r[0]: r[1]
+        for r in conn.execute("SELECT ts, ts_exact FROM weight_logs WHERE ts LIKE '2026-07-02%'")
+    }
+    conn.close()
+    assert rows["2026-07-02T12:00:00"] == 0  # the old placeholder
+    assert rows["2026-07-02T07:41:12"] == 1  # a real clock reading
+
+    conn2 = sqlite3.connect(db_path)
+    seeded = conn2.execute(
+        "SELECT ts_exact FROM weight_logs WHERE notes = 'Starting weight'"
+    ).fetchone()
+    conn2.close()
+    assert seeded[0] == 0  # the seeded starting weight is a stand-in, not a weigh-in

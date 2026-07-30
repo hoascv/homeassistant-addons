@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.11.0
+
+- **Weigh-ins and workouts logged today now record the time**, not a midday
+  placeholder. Both forms pre-fill today's date, and any entry carrying a date
+  was stored at `T12:00:00` — so in practice *every* entry had a made-up time,
+  which is no use for heart rate or for any analysis of when you train.
+- **Entries filed against an earlier day still keep the midday placeholder**,
+  because there's no way to know when they happened — and they're now marked as
+  such with a new **`ts_exact`** column on `weight_logs` and `workout_logs`
+  (`1` = the time is real, `0` = date only). Existing rows are marked on
+  upgrade: everything at midday becomes `0`, anything else `1`, and the seeded
+  starting weight `0` since it's a stand-in rather than a weigh-in.
+- **Heart rate is no longer guessed for entries with a placeholder time.**
+  Before, an entry stamped midday got a heart rate read from 11:30–12:00 — a
+  real number for the wrong window. Those entries are now skipped outright
+  rather than filled with something plausible but wrong.
+
 ## 1.10.0
 
 - **Heart rate for the exercises you log.** Each logged exercise now shows the

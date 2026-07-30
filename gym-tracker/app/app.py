@@ -18,7 +18,7 @@ from flask import Flask, Response, g, jsonify, render_template, request, send_fi
 
 import garmin_client
 
-APP_VERSION = "1.10.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.11.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("GYM_DB_PATH", "/data/gym.db")
 OPTIONS_PATH = os.environ.get("GYM_OPTIONS_PATH", "/data/options.json")
@@ -230,7 +230,8 @@ def init_db():
             weight_kg REAL NOT NULL,
             body_fat_pct REAL,
             notes TEXT,
-            device TEXT
+            device TEXT,
+            ts_exact INTEGER NOT NULL DEFAULT 0
         )
         """
     )
@@ -287,7 +288,8 @@ def init_db():
             duration_sec INTEGER,
             notes TEXT,
             source TEXT NOT NULL DEFAULT 'manual',
-            challenge_item_id INTEGER
+            challenge_item_id INTEGER,
+            ts_exact INTEGER NOT NULL DEFAULT 0
         )
         """
     )
@@ -409,12 +411,26 @@ def _migrate_columns(conn):
     weight_cols = {row[1] for row in conn.execute("PRAGMA table_info(weight_logs)")}
     if "device" not in weight_cols:
         conn.execute("ALTER TABLE weight_logs ADD COLUMN device TEXT")
+    if "ts_exact" not in weight_cols:
+        conn.execute("ALTER TABLE weight_logs ADD COLUMN ts_exact INTEGER NOT NULL DEFAULT 0")
+        # Every dated entry used to be stored at midday, so that is exactly the
+        # set whose time is unknown; anything else was a real clock reading.
+        conn.execute("UPDATE weight_logs SET ts_exact = 1 WHERE ts NOT LIKE '%T12:00:00'")
+        # ...except the seeded starting weight, which is a stand-in rather than
+        # a weigh-in anyone actually took at 08:00.
+        conn.execute(
+            "UPDATE weight_logs SET ts_exact = 0 WHERE ts = ? AND notes = 'Starting weight'",
+            (f"{SEED_START_DATE}T08:00:00",),
+        )
 
     workout_cols = {row[1] for row in conn.execute("PRAGMA table_info(workout_logs)")}
     if "source" not in workout_cols:
         conn.execute("ALTER TABLE workout_logs ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'")
     if "challenge_item_id" not in workout_cols:
         conn.execute("ALTER TABLE workout_logs ADD COLUMN challenge_item_id INTEGER")
+    if "ts_exact" not in workout_cols:
+        conn.execute("ALTER TABLE workout_logs ADD COLUMN ts_exact INTEGER NOT NULL DEFAULT 0")
+        conn.execute("UPDATE workout_logs SET ts_exact = 1 WHERE ts NOT LIKE '%T12:00:00'")
     # Heart rate for the window the exercise was done in, filled from Garmin
     # once the watch has uploaded. hr_attempts / hr_upload bound the retries
     # the same way garmin_day_probe does for whole days.
@@ -607,15 +623,25 @@ def _opt_float(data, key):
 
 def _resolve_ts(day):
     """Turn an optional YYYY-MM-DD into a stored timestamp. Returns
-    (ts, None) or (None, error-message)."""
+    (ts, exact, None) or (None, None, error-message).
+
+    `exact` records whether the time part is real. Logging against today reads
+    the clock; an entry filed against an earlier day cannot know when it
+    actually happened, so it keeps a midday placeholder and is marked inexact.
+    Anything that reads the clock — heart rate, time-of-day analysis — must
+    check this rather than trust the timestamp.
+    """
     day = (day or "").strip()
+    now = datetime.now()
     if not day:
-        return datetime.now().isoformat(timespec="seconds"), None
+        return now.isoformat(timespec="seconds"), 1, None
     try:
         date.fromisoformat(day)
     except ValueError:
-        return None, "date must be YYYY-MM-DD"
-    return f"{day}T12:00:00", None
+        return None, None, "date must be YYYY-MM-DD"
+    if day == now.date().isoformat():
+        return now.isoformat(timespec="seconds"), 1, None
+    return f"{day}T12:00:00", 0, None
 
 
 # --- Garmin Connect sync ---
@@ -787,7 +813,10 @@ def _garmin_hr_candidates(conn, today):
     since = (today - timedelta(days=GARMIN_HR_BACKFILL_DAYS)).isoformat()
     return conn.execute(
         "SELECT id, ts, duration_sec, hr_attempts, hr_upload FROM workout_logs "
-        "WHERE hr_avg IS NULL AND substr(ts, 1, 10) >= ? "
+        # ts_exact = 0 means the time is a midday placeholder, so there is no
+        # real window to read a heart rate from. Filling one in would be
+        # inventing data.
+        "WHERE hr_avg IS NULL AND ts_exact = 1 AND substr(ts, 1, 10) >= ? "
         "ORDER BY ts DESC LIMIT 200",
         (since,),
     ).fetchall()
@@ -1239,22 +1268,17 @@ def api_add_weight():
             return jsonify({"error": "body_fat_pct out of range"}), 400
     else:
         body_fat = None
-    day = (data.get("date") or "").strip()
-    if day:
-        try:
-            date.fromisoformat(day)
-            ts = f"{day}T12:00:00"
-        except ValueError:
-            return jsonify({"error": "date must be YYYY-MM-DD"}), 400
-    else:
-        ts = datetime.now().isoformat(timespec="seconds")
+    ts, ts_exact, err = _resolve_ts(data.get("date"))
+    if err:
+        return jsonify({"error": err}), 400
     notes = (data.get("notes") or "").strip() or None
     device = (data.get("device") or "").strip() or None
 
     db = get_db()
     cur = db.execute(
-        "INSERT INTO weight_logs (ts, weight_kg, body_fat_pct, notes, device) VALUES (?, ?, ?, ?, ?)",
-        (ts, weight, body_fat, notes, device),
+        "INSERT INTO weight_logs (ts, weight_kg, body_fat_pct, notes, device, ts_exact) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (ts, weight, body_fat, notes, device, ts_exact),
     )
     db.commit()
     return jsonify({"status": "created", "id": cur.lastrowid}), 201
@@ -1599,7 +1623,7 @@ def api_workouts():
         dict(r)
         for r in db.execute(
             "SELECT w.id, w.ts, w.exercise_id, w.sets, w.reps, w.weight_kg, w.duration_sec, "
-            "w.notes, w.source, w.hr_avg, w.hr_max, w.hr_min, w.hr_samples, "
+            "w.notes, w.source, w.ts_exact, w.hr_avg, w.hr_max, w.hr_min, w.hr_samples, "
             "e.name AS exercise_name, e.equipment "
             f"FROM workout_logs w JOIN exercises e ON e.id = w.exercise_id {where} "
             "ORDER BY w.ts DESC, w.id DESC LIMIT 200",
@@ -1625,15 +1649,15 @@ def api_add_workout():
         weight = _opt_float(data, "weight_kg")
     except ValueError as e:
         return jsonify({"error": f"{e} must be a number"}), 400
-    ts, err = _resolve_ts(data.get("date"))
+    ts, ts_exact, err = _resolve_ts(data.get("date"))
     if err:
         return jsonify({"error": err}), 400
     notes = (data.get("notes") or "").strip() or None
 
     cur = db.execute(
-        "INSERT INTO workout_logs (ts, exercise_id, sets, reps, weight_kg, duration_sec, notes, source) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, 'manual')",
-        (ts, exercise_id, sets, reps, weight, duration, notes),
+        "INSERT INTO workout_logs (ts, exercise_id, sets, reps, weight_kg, duration_sec, notes, "
+        "source, ts_exact) VALUES (?, ?, ?, ?, ?, ?, ?, 'manual', ?)",
+        (ts, exercise_id, sets, reps, weight, duration, notes, ts_exact),
     )
     db.commit()
     return jsonify({"status": "created", "id": cur.lastrowid}), 201
@@ -1643,7 +1667,9 @@ def api_add_workout():
 def api_update_workout(workout_id):
     data = request.get_json(force=True, silent=True) or {}
     db = get_db()
-    existing = db.execute("SELECT ts FROM workout_logs WHERE id = ?", (workout_id,)).fetchone()
+    existing = db.execute(
+        "SELECT ts, ts_exact FROM workout_logs WHERE id = ?", (workout_id,)
+    ).fetchone()
     if existing is None:
         return jsonify({"error": "no such workout"}), 404
     try:
@@ -1653,16 +1679,16 @@ def api_update_workout(workout_id):
         return jsonify({"error": f"{e} must be a number"}), 400
     # Keep the existing timestamp when no date is supplied.
     if (data.get("date") or "").strip():
-        ts, err = _resolve_ts(data.get("date"))
+        ts, ts_exact, err = _resolve_ts(data.get("date"))
         if err:
             return jsonify({"error": err}), 400
     else:
-        ts = existing["ts"]
+        ts, ts_exact = existing["ts"], existing["ts_exact"]
     notes = (data.get("notes") or "").strip() or None
     db.execute(
-        "UPDATE workout_logs SET ts = ?, sets = ?, reps = ?, weight_kg = ?, duration_sec = ?, notes = ? "
-        "WHERE id = ?",
-        (ts, sets, reps, weight, duration, notes, workout_id),
+        "UPDATE workout_logs SET ts = ?, ts_exact = ?, sets = ?, reps = ?, weight_kg = ?, "
+        "duration_sec = ?, notes = ? WHERE id = ?",
+        (ts, ts_exact, sets, reps, weight, duration, notes, workout_id),
     )
     db.commit()
     return jsonify({"status": "updated"})
@@ -1741,7 +1767,9 @@ def api_challenge_toggle():
         # Ticking today records the moment; ticking an earlier day can't know
         # when it happened, so it keeps the day's midday placeholder.
         now = datetime.now()
-        ts = now.isoformat(timespec="seconds") if day == now.date().isoformat() else f"{day}T12:00:00"
+        today = day == now.date().isoformat()
+        ts = now.isoformat(timespec="seconds") if today else f"{day}T12:00:00"
+        ts_exact = 1 if today else 0
         db.execute(
             "INSERT INTO challenge_completions (item_id, day, ts) VALUES (?, ?, ?)",
             (item_id, day, ts),
@@ -1754,9 +1782,9 @@ def api_challenge_toggle():
     if item["item_type"] == "exercise" and item["exercise_id"]:
         if done:
             db.execute(
-                "INSERT INTO workout_logs (ts, exercise_id, sets, reps, source, challenge_item_id) "
-                "VALUES (?, ?, ?, ?, 'challenge', ?)",
-                (ts, item["exercise_id"], item["target_sets"], item["target_reps"], item_id),
+                "INSERT INTO workout_logs (ts, exercise_id, sets, reps, source, challenge_item_id, "
+                "ts_exact) VALUES (?, ?, ?, ?, 'challenge', ?, ?)",
+                (ts, item["exercise_id"], item["target_sets"], item["target_reps"], item_id, ts_exact),
             )
         else:
             db.execute(
