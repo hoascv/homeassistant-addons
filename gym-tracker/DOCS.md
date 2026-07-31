@@ -352,7 +352,16 @@ changed rather than making you reload everything.
 
 Set **api_token** on the Configuration tab and send it as
 `Authorization: Bearer <token>` — a pipeline has no Home Assistant session, so
-this is how it authenticates. To reach the add-on from outside Home Assistant,
+this is how it authenticates.
+
+There's no required length or format: any text works, and surrounding spaces are
+ignored. But it is the only thing protecting the API once you publish the port,
+and nothing rate-limits guesses — so make it long and random rather than
+memorable. For example:
+
+```
+python3 -c "import secrets; print(secrets.token_urlsafe(32))"
+``` To reach the add-on from outside Home Assistant,
 publish its port in the add-on's Network section.
 
 - **`GET /api/export`** — every tracked table, plus the `max_seq` the snapshot

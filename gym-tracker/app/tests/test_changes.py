@@ -208,3 +208,18 @@ def test_export_names_the_key_column_for_every_table(client):
         assert all(key in row for row in rows), f"{table} rows lack {key}"
         ids = [str(row[key]) for row in rows]
         assert len(ids) == len(set(ids)), f"{table}: key column is not unique"
+
+
+def test_a_token_with_non_ascii_characters_still_works(client, set_options):
+    """compare_digest refuses non-ASCII str — a passphrase with an accent in it
+    used to raise inside before_request, turning every authenticated request
+    into a 500 instead of letting it through."""
+    set_options(restrict_to_user_ids="abc123", api_token="café-très-sécurisé")
+
+    assert client.get(
+        "/api/changes", headers={"Authorization": "Bearer café-très-sécurisé"}
+    ).status_code == 200
+    # A near miss is still a clean refusal, not an error.
+    assert client.get(
+        "/api/changes", headers={"Authorization": "Bearer cafe-tres-securise"}
+    ).status_code == 403

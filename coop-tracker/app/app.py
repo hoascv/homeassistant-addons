@@ -65,7 +65,7 @@ except ImportError as e:
     SKLEARN_AVAILABLE = False
     SKLEARN_ERROR = str(e)
 
-APP_VERSION = "1.38.1"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.38.2"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("COOP_DB_PATH", "/data/coop.db")
 OPTIONS_PATH = os.environ.get("COOP_OPTIONS_PATH", "/data/options.json")
@@ -341,7 +341,12 @@ def _request_has_api_token():
         return False
     header = request.headers.get("Authorization", "")
     presented = header[7:].strip() if header.lower().startswith("bearer ") else ""
-    return bool(presented) and hmac.compare_digest(presented, token)
+    if not presented:
+        return False
+    # Compared as bytes: compare_digest refuses non-ASCII str, so a token with
+    # an accent in it would raise rather than simply not match. Constant-time,
+    # because the comparison is against a secret.
+    return hmac.compare_digest(presented.encode("utf-8"), token.encode("utf-8"))
 
 
 @app.before_request

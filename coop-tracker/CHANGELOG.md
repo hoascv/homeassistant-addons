@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.38.2
+
+- **Fix a token with non-ASCII characters breaking authentication.** A
+  passphrase with an accent in it made every authenticated request fail with a
+  server error rather than being accepted, because of how the comparison was
+  done. Any characters work now.
+- Documented that the token has no required length or format, with a note on
+  generating a strong one — it's the only thing protecting the API if you
+  publish the port.
+
 ## 1.38.1
 
 - **The change feed's snapshot now names the column that identifies each row.**
