@@ -194,3 +194,17 @@ def test_no_token_configured_means_no_token_access(client, set_options):
     # An empty option must not turn into "any empty bearer works".
     assert client.get("/api/changes", headers={"Authorization": "Bearer "}).status_code == 403
     assert client.get("/api/changes").status_code == 403
+
+
+def test_export_names_the_key_column_for_every_table(client):
+    """A consumer can't infer which column identifies a row: jsonify sorts the
+    keys, so the id is rarely first — and for challenge_completions the first
+    key (day) repeats across rows, which would collapse them on merge."""
+    payload = client.get("/api/export").get_json()
+
+    assert payload["keys"] == dict(gymapp.TRACKED_TABLES)
+    for table, rows in payload["tables"].items():
+        key = payload["keys"][table]
+        assert all(key in row for row in rows), f"{table} rows lack {key}"
+        ids = [str(row[key]) for row in rows]
+        assert len(ids) == len(set(ids)), f"{table}: key column is not unique"

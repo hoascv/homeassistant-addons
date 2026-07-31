@@ -65,7 +65,7 @@ except ImportError as e:
     SKLEARN_AVAILABLE = False
     SKLEARN_ERROR = str(e)
 
-APP_VERSION = "1.38.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.38.1"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("COOP_DB_PATH", "/data/coop.db")
 OPTIONS_PATH = os.environ.get("COOP_OPTIONS_PATH", "/data/options.json")
@@ -3268,6 +3268,11 @@ def api_export():
             "app_version": APP_VERSION,
             "taken_at": datetime.now().isoformat(timespec="seconds"),
             "max_seq": max_seq,
+            # Which column identifies a row in each table. A consumer cannot
+            # infer this from the payload: jsonify sorts keys, so the id is
+            # rarely the first one and for challenge_completions the first key
+            # (day) repeats across rows.
+            "keys": dict(TRACKED_TABLES),
             "tables": {
                 table: [_serialisable_row(table, r) for r in db.execute(f"SELECT * FROM {table}")]
                 for table in TRACKED_TABLES

@@ -135,3 +135,16 @@ def test_no_token_configured_means_no_token_access(client, set_options):
     set_options(restrict_to_user_ids="abc123")
     assert client.get("/api/changes", headers={"Authorization": "Bearer "}).status_code == 403
     assert client.get("/api/changes").status_code == 403
+
+
+def test_export_names_the_key_column_for_every_table(client):
+    """A consumer can't infer which column identifies a row: jsonify sorts the
+    keys, so the id is rarely the first one in the payload."""
+    payload = client.get("/api/export").get_json()
+
+    assert payload["keys"] == dict(coopapp.TRACKED_TABLES)
+    for table, rows in payload["tables"].items():
+        key = payload["keys"][table]
+        assert all(key in row for row in rows), f"{table} rows lack {key}"
+        ids = [str(row[key]) for row in rows]
+        assert len(ids) == len(set(ids)), f"{table}: key column is not unique"

@@ -13,7 +13,8 @@ ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
 ENV SPARK_HOME=/opt/spark
 ENV PATH=$SPARK_HOME/bin:$PATH
 # hadolint ignore=DL4006
-RUN curl -fsSL https://archive.apache.org/dist/spark/spark-4.2.0/spark-4.2.0-bin-hadoop3.tgz -o /tmp/spark.tgz \
+# Must match the Spark add-on's version: this is the client that submits to it.
+RUN curl -fsSL https://archive.apache.org/dist/spark/spark-4.1.3/spark-4.1.3-bin-hadoop3.tgz -o /tmp/spark.tgz \
     && mkdir -p /opt/spark \
     && tar -xzf /tmp/spark.tgz -C /opt/spark --strip-components=1 \
     && rm /tmp/spark.tgz

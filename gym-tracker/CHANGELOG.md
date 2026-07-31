@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.23.1
+
+- **The change feed's snapshot now names the column that identifies each row.**
+  Without it a consumer had to guess, and guessing "the first column" is wrong:
+  the JSON has its keys sorted alphabetically, so the id is rarely first. Rows
+  would have been merged together on the wrong column.
+
 ## 1.23.0
 
 - **A change feed, for loading this data somewhere else.** Every insert, update

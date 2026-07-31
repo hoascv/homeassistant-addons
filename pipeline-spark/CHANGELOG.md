@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.1.0
+
+- **Delta Lake support.** `delta-spark` is pulled at first submit alongside
+  hadoop-aws, and the Delta SQL extension and catalog are configured by
+  default, so a job can read and write Delta tables with no extra setup.
+- **Spark pinned to 4.1.3** (from 4.2.0). Delta publishes no build for Spark
+  4.2 — its newest release declares Spark 4.1 as its provided dependency, and
+  Delta binds to internals a minor version can move.
+- New **trackers_merge** job: merges a Gym/Coop Tracker change batch into Delta
+  tables, keyed on the row id and guarded by the change sequence, so re-running
+  a batch converges instead of double-counting.
+
 ## 1.0.2
 
 - Fixed a start-up crash loop: the base image has no writable

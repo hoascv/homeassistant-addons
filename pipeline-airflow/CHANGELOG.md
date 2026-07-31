@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.1.0
+
+- New **gym_tracker_ingest** and **coop_tracker_ingest** DAGs: pull each
+  tracker's change feed, archive the raw responses to MinIO, and merge them
+  into Delta tables via Spark. Hourly, incremental, and idempotent — the
+  watermark only advances once the merge has succeeded.
+- The bundled Spark client is now **4.1.3**, matching the Spark add-on.
+
 ## 1.0.3
 
 - Added an **Open Web UI** button on the add-on page, so Airflow can be opened

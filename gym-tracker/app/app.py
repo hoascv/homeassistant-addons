@@ -19,7 +19,7 @@ from flask import Flask, Response, g, jsonify, render_template, request, send_fi
 
 import garmin_client
 
-APP_VERSION = "1.23.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.23.1"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("GYM_DB_PATH", "/data/gym.db")
 OPTIONS_PATH = os.environ.get("GYM_OPTIONS_PATH", "/data/options.json")
@@ -3462,6 +3462,11 @@ def api_export():
             "app_version": APP_VERSION,
             "taken_at": _now_ts(),
             "max_seq": max_seq,
+            # Which column identifies a row in each table. A consumer cannot
+            # infer this from the payload: jsonify sorts keys, so the id is
+            # rarely the first one and for challenge_completions the first key
+            # (day) repeats across rows.
+            "keys": dict(TRACKED_TABLES),
             "tables": {table: _table_rows(db, table) for table in TRACKED_TABLES},
         }
     )

@@ -75,3 +75,40 @@ slow, it's downloading `hadoop-aws` once (cached afterwards).
 >
 > **Security:** the web UI is published on the host network. Use a strong admin
 > password and don't expose the host to the internet.
+
+## Loading the trackers into Delta
+
+Two DAGs, `gym_tracker_ingest` and `coop_tracker_ingest`, pull each add-on's
+change feed and merge it into Delta tables on MinIO at
+`s3a://lakehouse/<source>/<table>`.
+
+Each run reads its watermark, fetches either a full snapshot (first run) or
+just the changes since, archives every raw response to `s3a://raw/<source>/`,
+and submits the `trackers_merge` Spark job. The watermark advances only once
+the merge succeeds, so a failure re-runs the batch — the merge is keyed on the
+row id and guarded by the change sequence, so that converges rather than
+double-counting.
+
+To set it up, for each tracker:
+
+1. In the tracker add-on's configuration, set an **api_token**.
+2. In its **Network** section, publish a host port (they both listen on 8099
+   internally, so give them different host ports).
+3. Add the Airflow Variables:
+
+   | Variable | Example |
+   |---|---|
+   | `gym_tracker_base_url` | `http://172.30.32.1:8099` |
+   | `gym_tracker_api_token` | the token you set |
+   | `coop_tracker_base_url` | `http://172.30.32.1:8098` |
+   | `coop_tracker_api_token` | the token you set |
+
+A source with no token set is skipped, so you can run one tracker without the
+other.
+
+Rows land with the payload as a JSON string plus `row_id`, `seq`, `changed_at`
+and `deleted_at`. Deletes are soft — the row keeps its last known state — since
+these apps do delete (un-ticking a challenge removes the tick *and* the workout
+it logged), and "logged then taken back" is worth keeping. The payload stays
+JSON rather than typed columns because both apps gain columns regularly; parse
+it downstream with `from_json` and an explicit schema for the tables you query.
