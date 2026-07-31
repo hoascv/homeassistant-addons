@@ -1,6 +1,7 @@
 import base64
 import binascii
 import csv
+import hmac
 import html
 import importlib.metadata
 import io
@@ -64,7 +65,7 @@ except ImportError as e:
     SKLEARN_AVAILABLE = False
     SKLEARN_ERROR = str(e)
 
-APP_VERSION = "1.37.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.38.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("COOP_DB_PATH", "/data/coop.db")
 OPTIONS_PATH = os.environ.get("COOP_OPTIONS_PATH", "/data/options.json")
@@ -328,8 +329,25 @@ def get_allowed_user_ids():
     return {uid.strip() for uid in raw.replace("\n", ",").replace(" ", ",").split(",") if uid.strip()}
 
 
+def get_api_token():
+    return (_read_options().get("api_token") or "").strip()
+
+
+def _request_has_api_token():
+    """A pipeline can't hold a Home Assistant session, so a bearer token is how
+    it authenticates. Inert unless a token is configured."""
+    token = get_api_token()
+    if not token:
+        return False
+    header = request.headers.get("Authorization", "")
+    presented = header[7:].strip() if header.lower().startswith("bearer ") else ""
+    return bool(presented) and hmac.compare_digest(presented, token)
+
+
 @app.before_request
 def _enforce_user_allowlist():
+    if _request_has_api_token():
+        return None  # authenticated as the pipeline, not as an ingress user
     allowed = get_allowed_user_ids()
     if not allowed:
         return None  # feature off — any authenticated ingress user may access
@@ -587,8 +605,84 @@ def init_db():
         """
     )
 
+    # Every insert, update and delete on a tracked table, in order. The
+    # sequence is the watermark an external pipeline reads from: monotonic,
+    # with none of a clock's ambiguity, and unlike a "last modified" column it
+    # records deletes.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS change_log (
+            seq INTEGER PRIMARY KEY AUTOINCREMENT,
+            table_name TEXT NOT NULL,
+            row_id TEXT NOT NULL,
+            op TEXT NOT NULL,
+            changed_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_change_log_table ON change_log(table_name, seq)"
+    )
+    _install_change_triggers(conn)
+
     conn.commit()
     conn.close()
+
+
+# --- Change data capture ---------------------------------------------------
+
+# What a downstream pipeline cares about, and the column identifying a row.
+# Deliberately absent: app_state (internal bookkeeping that churns on every
+# tick), and egg_vision_samples / egg_vision_models — training material and
+# pickled classifiers, which are this app's own machinery rather than anything
+# to analyse.
+TRACKED_TABLES = {
+    "logs": "id",
+    "chickens": "id",
+    "breeds": "id",
+    "food_types": "id",
+    "health_events": "id",
+    "nesting_boxes": "id",
+}
+# Never serialised into the feed. A chicken's photo is fetched from its own
+# endpoint; nothing downstream wants it inline.
+BLOB_COLUMNS = {("chickens", "photo")}
+CHANGE_LOG_KEEP_DAYS = 90
+
+
+def _install_change_triggers(conn):
+    """Recreate the triggers that record every insert, update and delete.
+
+    Dropped and recreated on each start rather than created IF NOT EXISTS, so a
+    trigger can never survive from an older definition. Triggers rather than
+    stamping a column at each write site: a missed site fails silently, and no
+    column can express a delete.
+    """
+    for table, pk in TRACKED_TABLES.items():
+        if not conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)
+        ).fetchone():
+            continue  # a table this version doesn't have yet
+        for op, when, ref in (("I", "INSERT", "NEW"), ("U", "UPDATE", "NEW"), ("D", "DELETE", "OLD")):
+            name = f"trg_{table}_{op.lower()}_changelog"
+            conn.execute(f"DROP TRIGGER IF EXISTS {name}")
+            conn.execute(
+                f"CREATE TRIGGER {name} AFTER {when} ON {table} BEGIN "
+                f"INSERT INTO change_log (table_name, row_id, op, changed_at) "
+                f"VALUES ('{table}', CAST({ref}.{pk} AS TEXT), '{op}', "
+                f"strftime('%Y-%m-%dT%H:%M:%S', 'now', 'localtime')); END"
+            )
+
+
+def _prune_change_log(conn, keep_days=CHANGE_LOG_KEEP_DAYS):
+    """Drop entries past the retention window, but never a row's most recent
+    one — a consumer rebuilding from the feed still needs its latest state."""
+    cutoff = (date.today() - timedelta(days=keep_days)).isoformat()
+    conn.execute(
+        "DELETE FROM change_log WHERE changed_at < ? AND seq NOT IN "
+        "(SELECT MAX(seq) FROM change_log GROUP BY table_name, row_id)",
+        (cutoff,),
+    )
 
 
 def _db_connect_standalone():
@@ -802,6 +896,8 @@ def _background_loop():
             try:
                 _reminder_tick(datetime.now(), conn)
                 _push_ha_sensors(conn)
+                _prune_change_log(conn)
+                conn.commit()
             finally:
                 conn.close()
         except Exception:  # noqa: BLE001 - keep the loop alive across any single failure
@@ -3137,7 +3233,103 @@ def api_backup():
     db = get_db()
     db.commit()
     filename = f"coop-tracker-backup-{datetime.now().strftime('%Y%m%d-%H%M%S')}.db"
-    return send_file(DB_PATH, as_attachment=True, download_name=filename)
+    # Copied through SQLite's own backup API rather than streamed off disk: the
+    # background loop writes on its own connection, so sending the file could
+    # hand out a snapshot caught mid-write.
+    snapshot = f"{DB_PATH}.snapshot"
+    target = sqlite3.connect(snapshot)
+    try:
+        db.backup(target)
+    finally:
+        target.close()
+    response = send_file(snapshot, as_attachment=True, download_name=filename)
+    response.call_on_close(lambda: os.path.exists(snapshot) and os.remove(snapshot))
+    return response
+
+
+# --- Routes: change feed (for an external pipeline) ---
+
+
+def _serialisable_row(table, row):
+    return {k: row[k] for k in row.keys() if (table, k) not in BLOB_COLUMNS}
+
+
+@app.route("/api/export")
+def api_export():
+    """A full snapshot plus the sequence it corresponds to.
+
+    Installing the triggers doesn't backfill rows that already existed, so a
+    consumer starts here and follows /api/changes from `max_seq`.
+    """
+    db = get_db()
+    max_seq = db.execute("SELECT COALESCE(MAX(seq), 0) AS n FROM change_log").fetchone()["n"]
+    return jsonify(
+        {
+            "app_version": APP_VERSION,
+            "taken_at": datetime.now().isoformat(timespec="seconds"),
+            "max_seq": max_seq,
+            "tables": {
+                table: [_serialisable_row(table, r) for r in db.execute(f"SELECT * FROM {table}")]
+                for table in TRACKED_TABLES
+            },
+        }
+    )
+
+
+@app.route("/api/changes")
+def api_changes():
+    """Everything after `since`, oldest first. Each entry carries the row's
+    current state for an insert or update and null for a delete, so one request
+    applies a batch. `min_seq` tells a consumer whether its watermark has
+    fallen off the retained window and it needs /api/export again."""
+    db = get_db()
+    try:
+        since = max(0, int(request.args.get("since", 0)))
+    except (TypeError, ValueError):
+        return jsonify({"error": "since must be a number"}), 400
+    try:
+        limit = max(1, min(5000, int(request.args.get("limit", 1000))))
+    except (TypeError, ValueError):
+        return jsonify({"error": "limit must be a number"}), 400
+
+    bounds = db.execute(
+        "SELECT COALESCE(MIN(seq), 0) AS lo, COALESCE(MAX(seq), 0) AS hi FROM change_log"
+    ).fetchone()
+    rows = db.execute(
+        "SELECT seq, table_name, row_id, op, changed_at FROM change_log "
+        "WHERE seq > ? ORDER BY seq ASC LIMIT ?",
+        (since, limit),
+    ).fetchall()
+
+    changes = []
+    for r in rows:
+        table = r["table_name"]
+        payload = None
+        if r["op"] != "D" and table in TRACKED_TABLES:
+            current = db.execute(
+                f"SELECT * FROM {table} WHERE CAST({TRACKED_TABLES[table]} AS TEXT) = ?",
+                (r["row_id"],),
+            ).fetchone()
+            payload = _serialisable_row(table, current) if current else None
+        changes.append(
+            {
+                "seq": r["seq"],
+                "table": table,
+                "row_id": r["row_id"],
+                "op": r["op"],
+                "changed_at": r["changed_at"],
+                "row": payload,
+            }
+        )
+    return jsonify(
+        {
+            "changes": changes,
+            "since": since,
+            "min_seq": bounds["lo"],
+            "max_seq": bounds["hi"],
+            "full_reload_required": bool(since and bounds["lo"] and since < bounds["lo"] - 1),
+        }
+    )
 
 
 # Mirrors the logs table's columns exactly — the export is a faithful dump

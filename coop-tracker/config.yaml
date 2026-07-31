@@ -1,5 +1,5 @@
 name: "Coop Tracker"
-version: "1.37.0"
+version: "1.38.0"
 slug: "coop-tracker"
 description: "Log egg collection, coop cleaning, and feeding for your chickens"
 url: "https://github.com/hoascv/homeassistant-addons/tree/main/coop-tracker"
@@ -14,6 +14,12 @@ boot: auto
 init: false
 ingress: true
 ingress_port: 8099
+# Not published unless you set a port. Only needed to let something outside
+# Home Assistant — a data pipeline — reach the API with api_token.
+ports:
+  8099/tcp: null
+ports_description:
+  8099/tcp: "Direct API access for a data pipeline (requires api_token)"
 panel_icon: mdi:egg
 panel_title: "Coop Tracker"
 # Only Home Assistant admin-group users get the sidebar menu entry. This
@@ -36,6 +42,7 @@ options:
   egg_vision_training_enabled: false
   egg_vision_training_retention_count: 200
   restrict_to_user_ids: ""
+  api_token: ""
 schema:
   currency: "list(USD|EUR|GBP|DKK|SEK|NOK|CHF|CAD|AUD|JPY)"
   reminder_enabled: "bool"
@@ -51,3 +58,4 @@ schema:
   egg_vision_training_enabled: "bool"
   egg_vision_training_retention_count: "int(20,500)"
   restrict_to_user_ids: "str?"
+  api_token: "str?"

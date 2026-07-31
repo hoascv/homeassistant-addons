@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.38.0
+
+- **A change feed, for loading this data somewhere else.** Every insert,
+  update and delete on the tables worth analysing — collections, chickens,
+  breeds, food types, health events, nesting boxes — is recorded with a
+  sequence number, so an external pipeline can ask "what changed since X?"
+  instead of reloading everything. `/api/export` gives a full snapshot to start
+  from, `/api/changes` the deltas after it.
+- Deletes are included, which a "last modified" column can't do.
+- Reading it needs an **api_token** (Configuration tab) sent as
+  `Authorization: Bearer …`, since a pipeline has no Home Assistant session.
+  Optionally publish the port to reach it from outside Home Assistant.
+- **Backups are now taken through SQLite's own snapshot mechanism** rather than
+  streaming the file off disk, which could catch the background loop mid-write.
+- Egg-vision training samples and models stay out of the feed, as does internal
+  bookkeeping — they're the app's machinery, not data to analyse.
+
 ## 1.37.0
 
 - New **Eggs per day, recently** chart at the top of the Trends tab: a
