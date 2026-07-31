@@ -345,6 +345,28 @@ the next sync usually recovers.
   in days from before you installed the add-on; they fill in over the next few
   syncs rather than all at once.
 
+## Reading the data elsewhere
+
+If you want this data in a warehouse or notebook, the add-on can tell you what
+changed rather than making you reload everything.
+
+Set **api_token** on the Configuration tab and send it as
+`Authorization: Bearer <token>` — a pipeline has no Home Assistant session, so
+this is how it authenticates. To reach the add-on from outside Home Assistant,
+publish its port in the add-on's Network section.
+
+- **`GET /api/export`** — every tracked table, plus the `max_seq` the snapshot
+  corresponds to. Start here.
+- **`GET /api/changes?since=<seq>&limit=<n>`** — everything after `seq`, oldest
+  first. Each entry has the row's current state for an insert or update, and
+  `null` for a delete. Apply them in order.
+
+Deletes are in the feed, which matters here: un-ticking a challenge item
+removes both the tick and the workout it created. Watch `full_reload_required`
+— entries are pruned after 90 days, so a pipeline that has been away longer
+should call `/api/export` again. Picture bytes aren't in the feed; fetch those
+from the image endpoint.
+
 ## Backup & restore
 
 The ⚙️ settings sheet can **download a backup** of the whole database (a

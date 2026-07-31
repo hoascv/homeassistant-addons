@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.23.0
+
+- **A change feed, for loading this data somewhere else.** Every insert, update
+  and delete on the tables worth analysing is recorded with a sequence number,
+  so an external pipeline can ask "what changed since X?" instead of reloading
+  everything. `/api/export` gives a full snapshot to start from, `/api/changes`
+  the deltas after it.
+- Deletes are included, which is the part a "last modified" column can't do —
+  and this data deletes plenty: un-ticking a challenge item removes both the
+  tick and the workout it logged.
+- Reading it needs an **api_token** (Configuration tab) sent as
+  `Authorization: Bearer …`, since a pipeline has no Home Assistant session.
+  Optionally publish the port to reach it from outside Home Assistant.
+- **Backups are now taken through SQLite's own snapshot mechanism** rather than
+  streaming the file off disk, which could catch a background sync mid-write.
+
 ## 1.22.0
 
 - **The weigh-in reminder can now run every day**, not just once a week. Set

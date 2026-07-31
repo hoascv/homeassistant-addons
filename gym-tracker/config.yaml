@@ -1,5 +1,5 @@
 name: "Gym Tracker"
-version: "1.22.0"
+version: "1.23.0"
 slug: "gym-tracker"
 description: "Track a weight/body-fat goal, home workouts, and a daily challenge with reminders"
 url: "https://github.com/hoascv/homeassistant-addons/tree/main/gym-tracker"
@@ -14,6 +14,12 @@ boot: auto
 init: false
 ingress: true
 ingress_port: 8099
+# Not published unless you set a port. Only needed to let something outside
+# Home Assistant — a data pipeline — reach the API with api_token.
+ports:
+  8099/tcp: null
+ports_description:
+  8099/tcp: "Direct API access for a data pipeline (requires api_token)"
 panel_icon: mdi:dumbbell
 panel_title: "Gym Tracker"
 # Only Home Assistant admin-group users get the sidebar menu entry (the
@@ -33,6 +39,7 @@ options:
   garmin_sync_interval_hours: 6
   garmin_hr_window_minutes: 30
   garmin_backfill_days: 60
+  api_token: ""
 schema:
   notify_service: "str?"
   challenge_reminder_enabled: "bool"
@@ -45,3 +52,4 @@ schema:
   garmin_sync_interval_hours: "int(1,168)"
   garmin_hr_window_minutes: "int(5,180)"
   garmin_backfill_days: "int(7,730)"
+  api_token: "str?"

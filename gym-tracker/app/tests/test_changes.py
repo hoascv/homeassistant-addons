@@ -1,0 +1,196 @@
+"""The change feed a downstream pipeline reads for incremental refresh."""
+import app as gymapp
+
+
+def _changes(client, since=0, **kw):
+    qs = "&".join(f"{k}={v}" for k, v in {"since": since, **kw}.items())
+    return client.get(f"/api/changes?{qs}").get_json()
+
+
+def _seq(conn):
+    return conn.execute("SELECT COALESCE(MAX(seq), 0) n FROM change_log").fetchone()["n"]
+
+
+# --- The triggers -----------------------------------------------------------
+
+
+def test_insert_update_delete_are_each_recorded_once(client, conn):
+    start = _seq(conn)
+    wid = client.post("/api/weight", json={"weight_kg": 100.0}).get_json()["id"]
+    client.put(f"/api/weight/{wid}", json={"weight_kg": 100.5})
+    client.delete(f"/api/weight/{wid}")
+
+    rows = conn.execute(
+        "SELECT seq, table_name, row_id, op FROM change_log WHERE seq > ? "
+        "AND table_name = 'weight_logs' ORDER BY seq",
+        (start,),
+    ).fetchall()
+    assert [r["op"] for r in rows] == ["I", "U", "D"]
+    assert {r["row_id"] for r in rows} == {str(wid)}
+    assert [r["seq"] for r in rows] == sorted(r["seq"] for r in rows)  # monotonic
+
+
+def test_a_delete_is_visible_with_no_row(client, conn):
+    wid = client.post("/api/weight", json={"weight_kg": 100.0}).get_json()["id"]
+    before = _seq(conn)
+    client.delete(f"/api/weight/{wid}")
+
+    entry = _changes(client, since=before)["changes"][0]
+    assert entry["op"] == "D"
+    assert entry["table"] == "weight_logs" and entry["row_id"] == str(wid)
+    # The row is gone, which is exactly what an updated_at column could never say.
+    assert entry["row"] is None
+
+
+def test_an_update_carries_the_current_row(client, conn):
+    wid = client.post("/api/weight", json={"weight_kg": 100.0}).get_json()["id"]
+    before = _seq(conn)
+    client.put(f"/api/weight/{wid}", json={"weight_kg": 101.25, "notes": "after coffee"})
+
+    entry = _changes(client, since=before)["changes"][0]
+    assert entry["op"] == "U"
+    assert entry["row"]["weight_kg"] == 101.25
+    assert entry["row"]["notes"] == "after coffee"
+
+
+def test_a_text_primary_key_is_recorded(conn, monkeypatch):
+    # garmin_daily is keyed by day, not an integer id.
+    from datetime import date
+
+    day = date.today().isoformat()
+    conn.execute("INSERT INTO garmin_daily (day, stress_avg) VALUES (?, 30)", (day,))
+    conn.commit()
+    row = conn.execute(
+        "SELECT row_id, op FROM change_log WHERE table_name = 'garmin_daily' ORDER BY seq DESC LIMIT 1"
+    ).fetchone()
+    assert row["row_id"] == day and row["op"] == "I"
+
+
+def test_internal_bookkeeping_is_not_in_the_feed(client, conn):
+    before = _seq(conn)
+    gymapp._set_app_state(conn, "garmin_last_sync", "2026-07-31T20:00:00")
+    conn.commit()
+    # app_state churns on every sync and means nothing downstream.
+    assert _changes(client, since=before)["changes"] == []
+
+
+def test_un_ticking_a_challenge_item_reports_both_deletions(client, conn):
+    ex = conn.execute("SELECT id FROM exercises WHERE archived = 0 LIMIT 1").fetchone()["id"]
+    item = client.post("/api/challenge/items", json={
+        "item_type": "exercise", "exercise_id": ex, "target_reps": 10,
+    }).get_json()["id"]
+    client.post("/api/challenge/toggle", json={"item_id": item})
+    before = _seq(conn)
+    client.post("/api/challenge/toggle", json={"item_id": item})  # un-tick
+
+    ops = {(c["table"], c["op"]) for c in _changes(client, since=before)["changes"]}
+    # Both the completion and the workout log it created are gone.
+    assert ("challenge_completions", "D") in ops
+    assert ("workout_logs", "D") in ops
+
+
+# --- The endpoints ----------------------------------------------------------
+
+
+def test_since_is_exclusive_and_ordered(client, conn):
+    client.post("/api/weight", json={"weight_kg": 100.0})
+    mid = _seq(conn)
+    client.post("/api/weight", json={"weight_kg": 101.0})
+
+    payload = _changes(client, since=mid)
+    assert payload["changes"]
+    assert all(c["seq"] > mid for c in payload["changes"])
+    assert [c["seq"] for c in payload["changes"]] == sorted(c["seq"] for c in payload["changes"])
+    assert payload["max_seq"] == _seq(conn)
+
+
+def test_limit_is_honoured_and_bounded(client):
+    for i in range(5):
+        client.post("/api/weight", json={"weight_kg": 100 + i})
+    assert len(_changes(client, since=0, limit=2)["changes"]) == 2
+    # Absurd values are clamped rather than rejected.
+    assert len(_changes(client, since=0, limit=99999)["changes"]) > 0
+
+
+def test_bad_query_values_are_a_bad_request(client):
+    assert client.get("/api/changes?since=abc").status_code == 400
+    assert client.get("/api/changes?limit=abc").status_code == 400
+
+
+def test_export_is_a_snapshot_with_the_sequence_it_matches(client, conn):
+    client.post("/api/weight", json={"weight_kg": 100.0})
+    payload = client.get("/api/export").get_json()
+
+    assert payload["max_seq"] == _seq(conn)
+    assert set(payload["tables"]) == set(gymapp.TRACKED_TABLES)
+    assert len(payload["tables"]["weight_logs"]) == conn.execute(
+        "SELECT COUNT(*) n FROM weight_logs"
+    ).fetchone()["n"]
+    # Nothing appended since the snapshot, so the feed from it is empty.
+    assert _changes(client, since=payload["max_seq"])["changes"] == []
+
+
+def test_export_leaves_out_image_bytes(client, conn):
+    import io
+
+    from test_exercises import PNG_1PX
+
+    eid = client.get("/api/exercises").get_json()[0]["exercises"][0]["id"]
+    client.post(
+        f"/api/exercises/{eid}/image",
+        data={"file": (io.BytesIO(PNG_1PX), "p.png")},
+        content_type="multipart/form-data",
+    )
+    row = client.get("/api/export").get_json()["tables"]["exercise_images"][0]
+    assert "image" not in row  # bytes are fetched from the image endpoint
+    assert row["exercise_id"] == eid and row["mime"] == "image/png"
+
+
+# --- Pruning ----------------------------------------------------------------
+
+
+def test_pruning_keeps_the_latest_entry_for_every_row(client, conn):
+    wid = client.post("/api/weight", json={"weight_kg": 100.0}).get_json()["id"]
+    client.put(f"/api/weight/{wid}", json={"weight_kg": 100.5})
+    conn.execute("UPDATE change_log SET changed_at = '2020-01-01T00:00:00'")
+    conn.commit()
+
+    gymapp._prune_change_log(conn, keep_days=30)
+    conn.commit()
+
+    kept = conn.execute(
+        "SELECT table_name, row_id, COUNT(*) n FROM change_log GROUP BY table_name, row_id"
+    ).fetchall()
+    # Old entries collapse to one per row rather than vanishing entirely: a
+    # consumer rebuilding from the feed still needs each row's latest state.
+    assert kept and all(r["n"] == 1 for r in kept)
+
+
+def test_a_watermark_below_the_retained_window_asks_for_a_reload(client, conn):
+    client.post("/api/weight", json={"weight_kg": 100.0})
+    conn.execute("DELETE FROM change_log WHERE seq < (SELECT MAX(seq) FROM change_log)")
+    conn.commit()
+
+    lo = conn.execute("SELECT MIN(seq) n FROM change_log").fetchone()["n"]
+    assert _changes(client, since=lo)["full_reload_required"] is False
+    if lo > 2:
+        assert _changes(client, since=1)["full_reload_required"] is True
+
+
+# --- Token auth -------------------------------------------------------------
+
+
+def test_a_token_authenticates_a_pipeline_that_has_no_ingress_session(client, set_options):
+    set_options(restrict_to_user_ids="abc123", api_token="s3cret")
+
+    assert client.get("/api/changes").status_code == 403  # no session, no token
+    assert client.get("/api/changes", headers={"Authorization": "Bearer s3cret"}).status_code == 200
+    assert client.get("/api/changes", headers={"Authorization": "Bearer wrong"}).status_code == 403
+    assert client.get("/api/changes", headers={"Authorization": "s3cret"}).status_code == 403
+
+
+def test_no_token_configured_means_no_token_access(client, set_options):
+    set_options(restrict_to_user_ids="abc123")
+    # An empty option must not turn into "any empty bearer works".
+    assert client.get("/api/changes", headers={"Authorization": "Bearer "}).status_code == 403
+    assert client.get("/api/changes").status_code == 403

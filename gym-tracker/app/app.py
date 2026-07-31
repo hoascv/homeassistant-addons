@@ -1,3 +1,4 @@
+import hmac
 import html
 import importlib.metadata
 import json
@@ -18,7 +19,7 @@ from flask import Flask, Response, g, jsonify, render_template, request, send_fi
 
 import garmin_client
 
-APP_VERSION = "1.22.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.23.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("GYM_DB_PATH", "/data/gym.db")
 OPTIONS_PATH = os.environ.get("GYM_OPTIONS_PATH", "/data/options.json")
@@ -116,8 +117,26 @@ def get_allowed_user_ids():
     return {uid.strip() for uid in raw.replace("\n", ",").replace(" ", ",").split(",") if uid.strip()}
 
 
+def get_api_token():
+    return (_read_options().get("api_token") or "").strip()
+
+
+def _request_has_api_token():
+    """A pipeline can't hold a Home Assistant session, so a bearer token is how
+    it authenticates. Off unless a token is configured."""
+    token = get_api_token()
+    if not token:
+        return False
+    header = request.headers.get("Authorization", "")
+    presented = header[7:].strip() if header.lower().startswith("bearer ") else ""
+    # Constant-time: the comparison is against a secret.
+    return bool(presented) and hmac.compare_digest(presented, token)
+
+
 @app.before_request
 def _enforce_user_allowlist():
+    if _request_has_api_token():
+        return None  # authenticated as the pipeline, not as an ingress user
     allowed = get_allowed_user_ids()
     if not allowed:
         return None  # feature off — any authenticated ingress user may access
@@ -372,6 +391,23 @@ def init_db():
         )
         """
     )
+    # Every insert, update and delete on a tracked table, in order. The
+    # sequence is the watermark a pipeline reads from: monotonic, with none of
+    # a clock's ambiguity, and unlike a timestamp column it records deletes.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS change_log (
+            seq INTEGER PRIMARY KEY AUTOINCREMENT,
+            table_name TEXT NOT NULL,
+            row_id TEXT NOT NULL,
+            op TEXT NOT NULL,
+            changed_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_change_log_table ON change_log(table_name, seq)"
+    )
     # Exercise pictures, kept out of the exercises table so the ordinary
     # queries never drag a blob around — and in the database rather than on
     # disk, because a backup is the database file: images saved beside it
@@ -460,9 +496,71 @@ def init_db():
 
     _migrate_columns(conn)
     _drop_placeholder_heart_rates(conn)
+    _install_change_triggers(conn)
     _seed_defaults(conn)
     conn.commit()
     conn.close()
+
+
+# --- Change data capture ---------------------------------------------------
+
+# What a downstream pipeline cares about, and the column identifying a row.
+# Primary keys are not uniform here, which is why row_id is stored as TEXT.
+# app_state and garmin_day_probe are deliberately absent: internal bookkeeping
+# that churns on every sync and means nothing to a consumer.
+TRACKED_TABLES = {
+    "weight_logs": "id",
+    "workout_logs": "id",
+    "exercises": "id",
+    "supplements": "id",
+    "challenges": "id",
+    "challenge_items": "id",
+    "challenge_completions": "id",
+    "goal": "id",
+    "goal_history": "id",
+    "garmin_daily": "day",
+    "garmin_activities": "activity_id",
+    "exercise_images": "exercise_id",
+}
+# Never serialised into the feed: a picture is fetched from its own endpoint.
+BLOB_COLUMNS = {("exercise_images", "image")}
+CHANGE_LOG_KEEP_DAYS = 90
+
+
+def _install_change_triggers(conn):
+    """Recreate the triggers that record every insert, update and delete.
+
+    Dropped and recreated on each start rather than created IF NOT EXISTS, so a
+    trigger can never be left behind from an older definition. They exist
+    because the alternative — stamping an updated_at at every write site — can
+    be forgotten, and cannot express a delete at all.
+    """
+    for table, pk in TRACKED_TABLES.items():
+        if not conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)
+        ).fetchone():
+            continue  # a table this version doesn't have yet
+        for op, when, ref in (("I", "INSERT", "NEW"), ("U", "UPDATE", "NEW"), ("D", "DELETE", "OLD")):
+            name = f"trg_{table}_{op.lower()}_changelog"
+            conn.execute(f"DROP TRIGGER IF EXISTS {name}")
+            conn.execute(
+                f"CREATE TRIGGER {name} AFTER {when} ON {table} BEGIN "
+                f"INSERT INTO change_log (table_name, row_id, op, changed_at) "
+                f"VALUES ('{table}', CAST({ref}.{pk} AS TEXT), '{op}', "
+                f"strftime('%Y-%m-%dT%H:%M:%S', 'now', 'localtime')); END"
+            )
+
+
+def _prune_change_log(conn, keep_days=CHANGE_LOG_KEEP_DAYS):
+    """Drop change entries older than the retention window, but never the most
+    recent entry for a row — a consumer rebuilding from the feed still needs to
+    know that row's latest state."""
+    cutoff = (date.today() - timedelta(days=keep_days)).isoformat()
+    conn.execute(
+        "DELETE FROM change_log WHERE changed_at < ? AND seq NOT IN "
+        "(SELECT MAX(seq) FROM change_log GROUP BY table_name, row_id)",
+        (cutoff,),
+    )
 
 
 def _drop_placeholder_heart_rates(conn):
@@ -3337,6 +3435,101 @@ def api_garmin_daily():
     return jsonify([dict(r) for r in rows])
 
 
+# --- Routes: change feed (for an external pipeline) ---
+
+
+def _serialisable_row(table, row):
+    return {
+        k: row[k] for k in row.keys() if (table, k) not in BLOB_COLUMNS
+    }
+
+
+def _table_rows(conn, table):
+    return [_serialisable_row(table, r) for r in conn.execute(f"SELECT * FROM {table}")]
+
+
+@app.route("/api/export")
+def api_export():
+    """A full snapshot plus the sequence it corresponds to.
+
+    Installing the triggers doesn't backfill rows that already existed, so a
+    consumer starts here and then follows /api/changes from `max_seq`.
+    """
+    db = get_db()
+    max_seq = db.execute("SELECT COALESCE(MAX(seq), 0) AS n FROM change_log").fetchone()["n"]
+    return jsonify(
+        {
+            "app_version": APP_VERSION,
+            "taken_at": _now_ts(),
+            "max_seq": max_seq,
+            "tables": {table: _table_rows(db, table) for table in TRACKED_TABLES},
+        }
+    )
+
+
+@app.route("/api/changes")
+def api_changes():
+    """Everything that happened after `since`, oldest first.
+
+    Each entry carries the row's current state for an insert or update, and
+    null for a delete, so one request is enough to apply the batch. `min_seq`
+    tells a consumer whether its watermark has fallen off the retained window,
+    in which case it needs /api/export again.
+    """
+    db = get_db()
+    try:
+        since = max(0, int(request.args.get("since", 0)))
+    except (TypeError, ValueError):
+        return jsonify({"error": "since must be a number"}), 400
+    try:
+        limit = max(1, min(5000, int(request.args.get("limit", 1000))))
+    except (TypeError, ValueError):
+        return jsonify({"error": "limit must be a number"}), 400
+
+    bounds = db.execute(
+        "SELECT COALESCE(MIN(seq), 0) AS lo, COALESCE(MAX(seq), 0) AS hi FROM change_log"
+    ).fetchone()
+    rows = db.execute(
+        "SELECT seq, table_name, row_id, op, changed_at FROM change_log "
+        "WHERE seq > ? ORDER BY seq ASC LIMIT ?",
+        (since, limit),
+    ).fetchall()
+
+    changes = []
+    for r in rows:
+        table = r["table_name"]
+        payload = None
+        if r["op"] != "D" and table in TRACKED_TABLES:
+            # The row as it stands now, which for several updates in this batch
+            # is the same final state — applying them in order is still correct.
+            current = db.execute(
+                f"SELECT * FROM {table} WHERE CAST({TRACKED_TABLES[table]} AS TEXT) = ?",
+                (r["row_id"],),
+            ).fetchone()
+            payload = _serialisable_row(table, current) if current else None
+        changes.append(
+            {
+                "seq": r["seq"],
+                "table": table,
+                "row_id": r["row_id"],
+                "op": r["op"],
+                "changed_at": r["changed_at"],
+                "row": payload,
+            }
+        )
+    return jsonify(
+        {
+            "changes": changes,
+            "since": since,
+            "min_seq": bounds["lo"],
+            "max_seq": bounds["hi"],
+            # True when `since` predates what is still retained, so the
+            # consumer knows the feed alone can't bring it up to date.
+            "full_reload_required": bool(since and bounds["lo"] and since < bounds["lo"] - 1),
+        }
+    )
+
+
 # --- Routes: backup / restore ---
 
 
@@ -3345,7 +3538,18 @@ def api_backup():
     db = get_db()
     db.commit()
     filename = f"gym-tracker-backup-{datetime.now().strftime('%Y%m%d-%H%M%S')}.db"
-    return send_file(DB_PATH, as_attachment=True, download_name=filename)
+    # Copied through SQLite's own backup API rather than sent straight off
+    # disk: the background sync writes on its own connection, so streaming the
+    # file could hand out a snapshot taken mid-write.
+    snapshot = f"{DB_PATH}.snapshot"
+    target = sqlite3.connect(snapshot)
+    try:
+        db.backup(target)
+    finally:
+        target.close()
+    response = send_file(snapshot, as_attachment=True, download_name=filename)
+    response.call_on_close(lambda: os.path.exists(snapshot) and os.remove(snapshot))
+    return response
 
 
 def _is_valid_backup(path):
@@ -3510,6 +3714,8 @@ def _background_loop():
                 _garmin_sync_tick(now, conn)
                 _challenge_reminder_tick(now, conn)
                 _weighin_reminder_tick(now, conn)
+                _prune_change_log(conn)
+                conn.commit()
             finally:
                 conn.close()
         except Exception:  # noqa: BLE001 - keep the loop alive across any single failure
