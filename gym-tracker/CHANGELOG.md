@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.19.0
+
+- **Say when an item joined a challenge.** Each item in the items sheet now has
+  an *In this challenge since* date. Days before it aren't expected to include
+  that item, so adding one part-way through no longer marks every earlier day
+  incomplete.
+- This matters for challenges that predate the app recording when items were
+  created: those items look like they were there from day one, so any day
+  before you actually started doing them counts against you. Setting the date
+  fixes it — and clearing the field goes back to the worked-out date, shown as
+  the field's placeholder.
+- The date you set wins over anything inferred, including an earlier tick.
+
 ## 1.18.1
 
 - **Heart rates that were never really measured are now removed.** Before

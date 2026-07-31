@@ -18,7 +18,7 @@ from flask import Flask, Response, g, jsonify, render_template, request, send_fi
 
 import garmin_client
 
-APP_VERSION = "1.18.1"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.19.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("GYM_DB_PATH", "/data/gym.db")
 OPTIONS_PATH = os.environ.get("GYM_OPTIONS_PATH", "/data/options.json")
@@ -325,7 +325,8 @@ def init_db():
             created_at TEXT,
             updated_at TEXT,
             archived_at TEXT,
-            moved_from INTEGER REFERENCES challenge_items(id)
+            moved_from INTEGER REFERENCES challenge_items(id),
+            joined_on TEXT
         )
         """
     )
@@ -575,6 +576,11 @@ def _migrate_columns(conn):
         conn.execute("ALTER TABLE workout_logs ADD COLUMN session_start TEXT")
         conn.execute("ALTER TABLE workout_logs ADD COLUMN session_end TEXT")
 
+    if "joined_on" not in item_cols:
+        # An explicit "part of the challenge from this day", for when the
+        # inferred one is wrong — usually because the item predates creation
+        # times being recorded at all.
+        conn.execute("ALTER TABLE challenge_items ADD COLUMN joined_on TEXT")
     if "moved_from" not in item_cols:
         # Which item this one continues, when it was moved between challenges.
         conn.execute("ALTER TABLE challenge_items ADD COLUMN moved_from INTEGER")
@@ -1447,7 +1453,7 @@ def _active_challenge_items(conn, challenge_id=None):
     rows = conn.execute(
         "SELECT ci.id, ci.sort_order, ci.item_type, ci.exercise_id, ci.supplement_id, "
         "ci.target_sets, ci.target_reps, ci.dose, ci.label AS stored_label, ci.challenge_id, "
-        "e.name AS exercise_name, s.name AS supplement_name, i.updated_at AS image_v "
+        "ci.joined_on, e.name AS exercise_name, s.name AS supplement_name, i.updated_at AS image_v "
         "FROM challenge_items ci "
         "LEFT JOIN exercises e ON e.id = ci.exercise_id "
         "LEFT JOIN supplements s ON s.id = ci.supplement_id "
@@ -1479,7 +1485,7 @@ def _challenge_membership(conn, challenge_id, challenge=None):
     rows = conn.execute(
         "SELECT ci.id, ci.sort_order, ci.item_type, ci.exercise_id, ci.supplement_id, "
         "ci.target_sets, ci.target_reps, ci.dose, ci.label AS stored_label, ci.challenge_id, "
-        "ci.archived, ci.created_at, ci.archived_at, "
+        "ci.archived, ci.created_at, ci.archived_at, ci.joined_on, "
         "e.name AS exercise_name, s.name AS supplement_name, i.updated_at AS image_v "
         "FROM challenge_items ci "
         "LEFT JOIN exercises e ON e.id = ci.exercise_id "
@@ -1515,8 +1521,18 @@ def _challenge_membership(conn, challenge_id, challenge=None):
     if challenge is not None:
         setup_day = (challenge["created_at"] or challenge["start_date"] or "")[:10] or None
 
+    keys = rows[0].keys() if rows else ()
     out = []
     for row in rows:
+        # An explicit join date wins outright: it is the user telling us
+        # something the timestamps cannot.
+        override = (row["joined_on"] or "")[:10] if "joined_on" in keys else None
+        if override:
+            left = (row["archived_at"] or "")[:10] or None
+            if row["archived"] and left is None:
+                continue
+            out.append((row, override, left))
+            continue
         # No creation time recorded (items predating 1.12.0): treat as having
         # been there from the start, which is what they were.
         created = (row["created_at"] or "")[:10] or None
@@ -1705,6 +1721,7 @@ def _challenge_item_view(r):
         "exercise_id": r["exercise_id"],
         # Present only where the query joined it; absent is simply "no picture".
         "image_v": r["image_v"] if "image_v" in keys else None,
+        "joined_on": r["joined_on"] if "joined_on" in keys else None,
         "supplement_id": r["supplement_id"],
         "target_sets": r["target_sets"],
         "target_reps": r["target_reps"],
@@ -2887,7 +2904,17 @@ def api_challenge_items():
     challenge_id, err = _requested_challenge_id()
     if err:
         return jsonify({"error": err}), 400
-    return jsonify(_active_challenge_items(get_db(), challenge_id))
+    db = get_db()
+    items = _active_challenge_items(db, challenge_id)
+    if challenge_id is not None:
+        # Say which date is actually being used, so the sheet can show the
+        # inferred one as a placeholder rather than leaving it a mystery.
+        effective = {
+            row["id"]: joined for row, joined, _ in _challenge_membership(db, challenge_id)
+        }
+        for item in items:
+            item["joined_effective"] = effective.get(item["id"])
+    return jsonify(items)
 
 
 @app.route("/api/challenge/items", methods=["POST"])
@@ -2978,6 +3005,19 @@ def api_update_challenge_item(item_id):
         target_sets, target_reps = _opt_int(data, "target_sets"), _opt_int(data, "target_reps")
     except ValueError as e:
         return jsonify({"error": f"{e} must be a number"}), 400
+
+    # An empty string clears the override and returns to the inferred date.
+    if "joined_on" in data:
+        joined_on = (data.get("joined_on") or "").strip() or None
+        if joined_on:
+            try:
+                date.fromisoformat(joined_on)
+            except ValueError:
+                return jsonify({"error": "joined_on must be YYYY-MM-DD"}), 400
+        db.execute(
+            "UPDATE challenge_items SET joined_on = ?, updated_at = ? WHERE id = ?",
+            (joined_on, _now_ts(), item_id),
+        )
 
     if item["item_type"] == "exercise":
         name = db.execute("SELECT name FROM exercises WHERE id = ?", (item["exercise_id"],)).fetchone()

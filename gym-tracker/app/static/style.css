@@ -170,6 +170,20 @@ body {
 .adh-key { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
 
 .ci-move { font-size: 0.75rem; max-width: 7.5rem; }
+/* Scoped, not on .items-list: the supplements list shares that class and
+   stays a single row. */
+#challenge-items-list li { flex-direction: column; align-items: stretch; }
+.ci-row { display: flex; align-items: center; gap: 0.5rem; width: 100%; }
+.ci-since {
+  display: flex; align-items: center; gap: 0.5rem;
+  margin: 0.25rem 0 0 1.6rem; font-size: 0.72rem; color: var(--text-muted);
+}
+/* The global label rule stacks its children; this one reads as one line. */
+.ci-since label {
+  display: flex; flex-direction: row; align-items: center; gap: 0.4rem;
+  flex: 0 1 auto; white-space: nowrap;
+}
+.ci-since input { font-size: 0.72rem; padding: 0.15rem 0.3rem; width: auto; flex: 0 0 auto; }
 
 /* Exercise pictures */
 .ex-thumb-btn { padding: 0; border: 0; background: none; cursor: pointer; flex-shrink: 0; }

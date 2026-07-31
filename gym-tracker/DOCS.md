@@ -148,6 +148,13 @@ The **Trends** tab shows, for each challenge:
   the point is to see what the scale did while you were keeping the challenge —
   but a few weigh-ins over a few weeks show a coincidence, not a cause.
 
+Each item in **Edit items** has an *In this challenge since* date. Days before it
+don't expect that item, so adding one part-way through never makes your earlier
+days look incomplete. It's normally worked out for you — shown greyed in the
+field — and you only need to set it where that guess is wrong, which mostly
+means items from before the app recorded when they were added. Clearing the
+field goes back to the worked-out date.
+
 Each day is scored against the items that were part of the challenge **that
 day**. An item you add later counts only from the day you added it, so adding
 one never makes your earlier days look incomplete; an item you remove keeps the

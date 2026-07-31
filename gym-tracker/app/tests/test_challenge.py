@@ -893,3 +893,94 @@ def test_existing_challenges_are_daily(client):
     view = client.get("/api/challenges").get_json()[0]
     assert view["schedule"] == {"kind": "daily", "interval": None, "weekdays": []}
     assert view["due_today"] is True
+
+
+# --- An explicit join date --------------------------------------------------
+
+
+def test_setting_a_join_date_fixes_days_before_the_item_existed(client, conn):
+    from datetime import date, timedelta
+
+    today = date.today()
+    start = (today - timedelta(days=8)).isoformat()
+    cid = _new_challenge(client, "Morning", start)
+    first = _add_exercise_item(client, conn, cid, "push-up")
+    second = _add_exercise_item(client, conn, cid, "squat")
+    # Both look like setup items, as they do on a database predating
+    # created_at: every day requires both.
+    _backdate_setup(conn, cid, start)
+
+    anchor = date.fromisoformat(start)
+    for i in range(9):
+        client.post("/api/challenge/toggle", json={
+            "item_id": first, "day": (anchor + timedelta(days=i)).isoformat(),
+        })
+    for i in range(4, 9):  # the second item only from day 4
+        client.post("/api/challenge/toggle", json={
+            "item_id": second, "day": (anchor + timedelta(days=i)).isoformat(),
+        })
+
+    before = next(s for s in client.get("/api/challenges/stats").get_json() if s["id"] == cid)
+    assert before["days_complete"] == 5  # the first four days can't complete
+
+    joined = (anchor + timedelta(days=4)).isoformat()
+    assert client.put(f"/api/challenge/items/{second}", json={"joined_on": joined}).status_code == 200
+
+    after = next(s for s in client.get("/api/challenges/stats").get_json() if s["id"] == cid)
+    assert after["days_complete"] == 9  # every day now counts
+    assert after["completion_pct"] == 100.0
+    # And the newcomer is scored over its own membership, not the whole run.
+    item = next(i for i in after["items"] if i["id"] == second)
+    assert item["days_member"] == 5 and item["rate_pct"] == 100.0
+
+
+def test_the_join_date_can_be_cleared_back_to_inferred(client, conn):
+    from datetime import date, timedelta
+
+    today = date.today()
+    start = (today - timedelta(days=5)).isoformat()
+    cid = _new_challenge(client, "Morning", start)
+    item = _add_exercise_item(client, conn, cid, "squat")
+    _backdate_setup(conn, cid, start)
+
+    client.put(f"/api/challenge/items/{item}", json={"joined_on": today.isoformat()})
+    listed = next(i for i in client.get(f"/api/challenge/items?challenge_id={cid}").get_json()
+                  if i["id"] == item)
+    assert listed["joined_on"] == today.isoformat()
+    assert listed["joined_effective"] == today.isoformat()
+
+    client.put(f"/api/challenge/items/{item}", json={"joined_on": ""})
+    listed = next(i for i in client.get(f"/api/challenge/items?challenge_id={cid}").get_json()
+                  if i["id"] == item)
+    assert listed["joined_on"] is None
+    assert listed["joined_effective"] is None  # back to "there from the start"
+
+
+def test_a_join_date_must_be_a_date(client, conn):
+    from datetime import date
+
+    cid = _new_challenge(client, "Morning", date.today().isoformat())
+    item = _add_exercise_item(client, conn, cid, "squat")
+    r = client.put(f"/api/challenge/items/{item}", json={"joined_on": "07/07/2026"})
+    assert r.status_code == 400
+    assert "joined_on" in r.get_json()["error"]
+
+
+def test_an_explicit_join_date_outranks_an_earlier_tick(client, conn):
+    from datetime import date, timedelta
+
+    today = date.today()
+    start = (today - timedelta(days=6)).isoformat()
+    cid = _new_challenge(client, "Morning", start)
+    item = _add_exercise_item(client, conn, cid, "squat")
+    _backdate_setup(conn, cid, start)
+    anchor = date.fromisoformat(start)
+    client.post("/api/challenge/toggle", json={"item_id": item, "day": anchor.isoformat()})
+
+    # Normally that tick would pull membership back; an explicit date wins.
+    client.put(f"/api/challenge/items/{item}", json={
+        "joined_on": (anchor + timedelta(days=3)).isoformat(),
+    })
+    stats = next(s for s in client.get("/api/challenges/stats").get_json() if s["id"] == cid)
+    entry = next(i for i in stats["items"] if i["id"] == item)
+    assert entry["days_member"] == 4  # from the stated day, not the early tick

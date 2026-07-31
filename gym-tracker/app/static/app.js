@@ -637,13 +637,28 @@ async function loadChallengeItems() {
         it.item_type === "supplement"
           ? `<input type="text" class="ci-edit-dose" data-id="${it.id}" value="${escapeHtml(it.dose || "")}" placeholder="dose">`
           : `<input type="number" class="ci-edit-reps" data-id="${it.id}" value="${it.target_reps != null ? it.target_reps : ""}" placeholder="reps" min="0">`;
+      // The inferred date sits in the placeholder, so it is visible without
+      // being mistaken for something that was set deliberately.
+      const since = `
+        <div class="ci-since">
+          <label>In this challenge since
+            <input type="date" class="ci-joined" data-id="${it.id}"
+                   value="${it.joined_on || ""}"
+                   placeholder="${it.joined_effective || ""}"
+                   title="${it.joined_on ? "Set explicitly" : "Worked out from when it was added"}">
+          </label>
+          ${it.joined_on ? `<button type="button" class="link-btn ci-joined-clear" data-id="${it.id}">reset</button>` : ""}
+        </div>`;
       return `
         <li data-id="${it.id}">
-          <span class="ci-icon">${icon}</span>
-          <span class="ci-name">${escapeHtml(it.name)}</span>
-          ${editField}
-          ${moveSelectHtml(it)}
-          <button type="button" class="list-del ci-del" data-id="${it.id}" aria-label="Remove">✕</button>
+          <div class="ci-row">
+            <span class="ci-icon">${icon}</span>
+            <span class="ci-name">${escapeHtml(it.name)}</span>
+            ${editField}
+            ${moveSelectHtml(it)}
+            <button type="button" class="list-del ci-del" data-id="${it.id}" aria-label="Remove">✕</button>
+          </div>
+          ${since}
         </li>`;
     })
     .join("");
@@ -869,7 +884,36 @@ document.getElementById("challenge-items-list").addEventListener("click", async 
     loadChallengeItems();
   } catch (err) { toast(err.message); }
 });
+document.getElementById("challenge-items-list").addEventListener("click", async (e) => {
+  const clear = e.target.closest(".ci-joined-clear");
+  if (!clear) return;
+  try {
+    await fetchJSON(`api/challenge/items/${clear.dataset.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ joined_on: "" }),
+    });
+    loadChallengeItems();
+    loadChallenge();
+    loadChallengeStats();
+  } catch (err) { toast(err.message); }
+});
+
 document.getElementById("challenge-items-list").addEventListener("change", async (e) => {
+  const joined = e.target.closest(".ci-joined");
+  if (joined) {
+    try {
+      await fetchJSON(`api/challenge/items/${joined.dataset.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ joined_on: joined.value }),
+      });
+      loadChallengeItems();
+      loadChallenge();
+      loadChallengeStats();
+    } catch (err) { toast(err.message); }
+    return;
+  }
   const reps = e.target.closest(".ci-edit-reps");
   const dose = e.target.closest(".ci-edit-dose");
   const field = reps || dose;
