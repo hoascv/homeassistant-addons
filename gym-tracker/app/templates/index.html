@@ -418,9 +418,19 @@
 
       <div class="form-actions">
         <button type="button" class="btn-primary" id="garmin-sync-btn">Sync now</button>
+        <button type="button" class="btn-secondary" id="garmin-diagnose-btn">Diagnostics</button>
         <button type="button" class="btn-secondary" id="garmin-disconnect-btn">Disconnect</button>
       </div>
       <p class="result-line" id="garmin-sync-result"></p>
+      <!-- Shape of Garmin's answers for one day, for working out why a metric
+           is empty. Shown on demand; nothing personal in it. -->
+      <div id="garmin-diagnostics" hidden>
+        <div class="ghist-head">
+          <h3 class="subhead">Diagnostics</h3>
+          <button type="button" class="link-btn" id="garmin-diagnose-copy">Copy</button>
+        </div>
+        <pre class="diag-output" id="garmin-diagnose-output"></pre>
+      </div>
     </div>
 
     <div class="sheet-actions">

@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.20.0
+
+- **Diagnostics button in the ⌚ Garmin sheet.** Shows what Garmin actually
+  answers for a day — the shape of it, not your data — so an empty metric can
+  be worked out from evidence instead of guesswork. Previously this meant
+  hand-editing a long URL.
+- **Sleep score: the parser now looks inside lists too**, which it wasn't
+  doing. That was a real gap — Garmin nests some of this structure in lists,
+  and skipping them may be why the score was never found.
+- **Days are no longer re-fetched forever over a missing sleep score.** Treating
+  it as required meant every day without one counted as incomplete, so the
+  backfill would keep re-asking Garmin about months of days for something some
+  devices never report. If the diagnostics show the score is available, it goes
+  back to being required.
+
 ## 1.19.0
 
 - **Say when an item joined a challenge.** Each item in the items sheet now has

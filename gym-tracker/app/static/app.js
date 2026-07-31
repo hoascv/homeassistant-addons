@@ -2179,6 +2179,32 @@ document.getElementById("garmin-login-form").addEventListener("submit", async (e
   }
 });
 
+document.getElementById("garmin-diagnose-btn").addEventListener("click", async () => {
+  const panel = document.getElementById("garmin-diagnostics");
+  const out = document.getElementById("garmin-diagnose-output");
+  panel.hidden = false;
+  out.textContent = "Asking Garmin…";
+  // Yesterday: today's data may not have finished arriving.
+  const day = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+  try {
+    const data = await fetchJSON(`api/garmin/diagnose?day=${day}`);
+    out.textContent = JSON.stringify(data, null, 2);
+  } catch (err) {
+    out.textContent = `Failed: ${err.message}`;
+  }
+});
+
+document.getElementById("garmin-diagnose-copy").addEventListener("click", async () => {
+  const text = document.getElementById("garmin-diagnose-output").textContent;
+  try {
+    await navigator.clipboard.writeText(text);
+    toast("Diagnostics copied.");
+  } catch (e) {
+    // Ingress can run without clipboard permission; selecting it still works.
+    toast("Couldn't copy — select the text instead.");
+  }
+});
+
 document.getElementById("garmin-sync-btn").addEventListener("click", async () => {
   const result = document.getElementById("garmin-sync-result");
   result.textContent = "Syncing…";

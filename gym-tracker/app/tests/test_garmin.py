@@ -931,10 +931,16 @@ def test_a_duration_is_never_mistaken_for_a_score():
     assert fields["sleep_score"] is None
 
 
-def test_a_day_without_a_sleep_score_is_chased(conn, monkeypatch):
+def test_a_day_is_not_re_chased_for_a_sleep_score_alone(conn, monkeypatch):
+    """A day holding everything but its sleep score is left alone.
+
+    The score does not arrive at all for some devices, and a metric that marks
+    a day incomplete puts it back on the backfill list — which would have the
+    sync re-asking Garmin about two months of days forever for something that
+    may not exist.
+    """
     from datetime import date, timedelta
 
-    # A day stored back when the score was never parsed.
     old_day = (date.today() - timedelta(days=9)).isoformat()
     conn.execute(
         "INSERT INTO garmin_daily (day, sleep_seconds, stress_avg, body_battery_high, synced_at) "
@@ -943,16 +949,25 @@ def test_a_day_without_a_sleep_score_is_chased(conn, monkeypatch):
     )
     conn.commit()
 
-    _patch_data(monkeypatch, {"sleep_score": 79}, [], days_with_data={old_day})
-    for _ in range(10):
-        gymapp._garmin_do_sync(conn)
-        if conn.execute(
-            "SELECT sleep_score FROM garmin_daily WHERE day = ?", (old_day,)
-        ).fetchone()["sleep_score"] is not None:
-            break
-    else:
-        raise AssertionError("the day was never re-chased for its sleep score")
+    asked = []
 
-    row = conn.execute("SELECT * FROM garmin_daily WHERE day = ?", (old_day,)).fetchone()
-    assert row["sleep_score"] == 79
-    assert row["sleep_seconds"] == 27000  # and nothing else was disturbed
+    def _fetch(client, day):
+        asked.append(day)
+        return {}
+
+    _patch_data(monkeypatch, {}, [])
+    monkeypatch.setattr(gymapp.garmin_client, "fetch_day", _fetch)
+    for _ in range(5):
+        gymapp._garmin_do_sync(conn)
+
+    assert old_day not in asked  # complete enough; nothing left to fetch
+    assert "sleep_score" not in gymapp.GARMIN_DAY_METRICS
+
+
+def test_a_sleep_score_nested_in_a_list_is_found():
+    # Skipping lists was the flaw in the first attempt at this.
+    client = _SleepClient({
+        "dailySleepDTO": {"sleepTimeSeconds": 27000},
+        "sleepLevels": [{"summary": {"sleepScores": {"overall": {"value": 71}}}}],
+    })
+    assert gymapp.garmin_client._sleep_fields(client, "2026-07-30")["sleep_score"] == 71

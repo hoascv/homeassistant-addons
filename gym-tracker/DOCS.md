@@ -300,8 +300,15 @@ Days missing one metric are chased the same way as days missing entirely, so a
 metric that starts working fills in backwards through your history over the
 next few syncs rather than only from today on.
 
-If a metric goes quiet, `/api/garmin/diagnose?day=YYYY-MM-DD` (append it to the
-add-on's URL) reports what each Garmin source returns for that day.
+If a metric goes quiet, press **Diagnostics** in the ⌚ sheet. It reports what
+each Garmin source returns for yesterday — the shape of the response, not your
+data — which is what's needed to work out why something is empty. **Copy** puts
+it on the clipboard. The same thing is available at
+`/api/garmin/diagnose?day=YYYY-MM-DD` if you'd rather use the URL.
+
+Note that not every Garmin device reports a **sleep score**; where it isn't
+available the field simply stays empty, and the add-on won't keep asking for
+it.
 
 This is the only feature that contacts an external service. It uses Garmin's
 unofficial API, so an occasional sync error (shown in the sheet) is normal;

@@ -146,6 +146,13 @@ def _sleep_score(payload, depth=0):
             found = _sleep_score(nested, depth + 1)
             if found is not None:
                 return found
+        elif isinstance(nested, (list, tuple)):
+            # Garmin nests some of this inside lists; skipping them was why
+            # the first attempt at finding the score came up empty everywhere.
+            for entry in nested[:10]:
+                found = _sleep_score(entry, depth + 1) if isinstance(entry, dict) else None
+                if found is not None:
+                    return found
     return None
 
 

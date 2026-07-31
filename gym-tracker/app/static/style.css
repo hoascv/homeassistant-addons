@@ -185,6 +185,13 @@ body {
 }
 .ci-since input { font-size: 0.72rem; padding: 0.15rem 0.3rem; width: auto; flex: 0 0 auto; }
 
+.diag-output {
+  max-height: 40vh; overflow: auto; margin: 0.4rem 0 0;
+  padding: 0.6rem; border-radius: 8px; background: var(--surface-2);
+  border: 1px solid var(--border); font-size: 0.7rem; line-height: 1.35;
+  white-space: pre; -webkit-user-select: text; user-select: text;
+}
+
 /* Exercise pictures */
 .ex-thumb-btn { padding: 0; border: 0; background: none; cursor: pointer; flex-shrink: 0; }
 .ex-thumb {
