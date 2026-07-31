@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.22.0
+
+- **The weigh-in reminder can now run every day**, not just once a week. Set
+  **weighin_reminder_weekday** to `daily` on the Configuration tab. It still
+  stays quiet on any day you've already logged, and still only asks once.
+
 ## 1.21.0
 
 - **Resting heart rate**, from Garmin, as a fourth metric in the ⌚ history

@@ -200,9 +200,9 @@ configured on the add-on's **Configuration** tab:
 
 - **Challenge reminder** — a daily nudge at `challenge_reminder_time`. It
   only fires if you haven't already completed the whole challenge that day.
-- **Weigh-in reminder** — fires weekly on `weighin_reminder_weekday` at
-  `weighin_reminder_time`, and is skipped if you already logged a weight
-  that day.
+- **Weigh-in reminder** — fires at `weighin_reminder_time`, either every day or
+  once a week, depending on `weighin_reminder_weekday`. Skipped if you already
+  logged a weight that day.
 
 Set **notify_service** to the service name to use (without the `notify.`
 prefix, e.g. `mobile_app_pixel`). The in-app 🔔 reminders sheet shows the
@@ -324,9 +324,10 @@ the next sync usually recovers.
 - **challenge_reminder_enabled**: turn the daily challenge reminder on/off.
 - **challenge_reminder_time**: 24-hour `HH:MM` time for the challenge
   reminder (default `18:00`).
-- **weighin_reminder_enabled**: turn the weekly weigh-in reminder on/off.
-- **weighin_reminder_weekday**: the day of the week the weigh-in reminder
-  fires (default `sunday`).
+- **weighin_reminder_enabled**: turn the weigh-in reminder on/off.
+- **weighin_reminder_weekday**: `daily` to be asked every day, or the name of a
+  weekday for once a week (default `sunday`). Daily suits tracking a weight
+  trend — more readings let the day-to-day noise average out.
 - **weighin_reminder_time**: 24-hour `HH:MM` time for the weigh-in reminder
   (default `08:00`).
 - **restrict_to_user_ids**: comma-separated Home Assistant user IDs allowed

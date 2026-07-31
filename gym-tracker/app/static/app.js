@@ -1828,7 +1828,9 @@ async function loadReminders() {
   const badge = (on) => `<span class="badge ${on ? "badge-on" : "badge-off"}">${on ? "On" : "Off"}</span>`;
   document.getElementById("reminder-status").innerHTML = `
     <div class="reminder-line">${badge(data.challenge.enabled)}<span>Daily challenge · ${escapeHtml(data.challenge.time)}</span></div>
-    <div class="reminder-line">${badge(data.weighin.enabled)}<span>Weekly weigh-in · ${escapeHtml(data.weighin.weekday)} ${escapeHtml(data.weighin.time)}</span></div>`;
+    <div class="reminder-line">${badge(data.weighin.enabled)}<span>Weigh-in · ${
+      data.weighin.weekday === "daily" ? "every day" : escapeHtml(data.weighin.weekday)
+    } ${escapeHtml(data.weighin.time)}</span></div>`;
 
   const select = document.getElementById("notify-service-select");
   let svc;

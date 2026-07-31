@@ -186,3 +186,41 @@ def test_challenge_reminder_is_silent_on_a_rest_day(conn, set_options, fake_ha_s
     gymapp._set_app_state(conn, "challenge_reminder_last_sent", "")
     gymapp._challenge_reminder_tick(datetime(2026, 7, 20, 18, 30), conn)  # a Monday
     assert len(fake_ha_server) == 1
+
+
+def test_weighin_reminder_can_run_daily(conn, set_options, fake_ha_server):
+    set_options(notify_service=NOTIFY, weighin_reminder_enabled=True,
+                weighin_reminder_weekday="daily", weighin_reminder_time="08:00")
+
+    # A Wednesday and a Thursday: both fire, where a weekday setting wouldn't.
+    gymapp._weighin_reminder_tick(datetime(2026, 7, 22, 8, 30), conn)
+    assert len(fake_ha_server) == 1
+    assert "weekly" not in fake_ha_server[0]["body"]["message"].lower()
+
+    gymapp._weighin_reminder_tick(datetime(2026, 7, 23, 8, 30), conn)
+    assert len(fake_ha_server) == 2
+
+
+def test_a_daily_weighin_reminder_still_skips_a_day_already_logged(conn, set_options, fake_ha_server):
+    set_options(notify_service=NOTIFY, weighin_reminder_enabled=True,
+                weighin_reminder_weekday="daily", weighin_reminder_time="08:00")
+    conn.execute("INSERT INTO weight_logs (ts, weight_kg, ts_exact) VALUES (?, 100.0, 1)",
+                 ("2026-07-22T07:15:00",))
+    conn.commit()
+
+    gymapp._weighin_reminder_tick(datetime(2026, 7, 22, 8, 30), conn)
+    assert fake_ha_server == []
+    # ...and still only asks once on a day it does fire.
+    gymapp._weighin_reminder_tick(datetime(2026, 7, 23, 8, 30), conn)
+    gymapp._weighin_reminder_tick(datetime(2026, 7, 23, 9, 30), conn)
+    assert len(fake_ha_server) == 1
+
+
+def test_a_weekday_weighin_reminder_is_unaffected(conn, set_options, fake_ha_server):
+    set_options(notify_service=NOTIFY, weighin_reminder_enabled=True,
+                weighin_reminder_weekday="sunday", weighin_reminder_time="08:00")
+    gymapp._weighin_reminder_tick(datetime(2026, 7, 22, 8, 30), conn)  # a Wednesday
+    assert fake_ha_server == []
+    gymapp._weighin_reminder_tick(datetime(2026, 7, 26, 8, 30), conn)  # a Sunday
+    assert len(fake_ha_server) == 1
+    assert "weekly" in fake_ha_server[0]["body"]["message"].lower()

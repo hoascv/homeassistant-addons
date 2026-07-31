@@ -18,7 +18,7 @@ from flask import Flask, Response, g, jsonify, render_template, request, send_fi
 
 import garmin_client
 
-APP_VERSION = "1.21.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.22.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("GYM_DB_PATH", "/data/gym.db")
 OPTIONS_PATH = os.environ.get("GYM_OPTIONS_PATH", "/data/options.json")
@@ -3454,8 +3454,13 @@ def _weighin_reminder_tick(now, conn):
     cfg = get_reminders_config()
     if not (cfg["weighin_enabled"] and cfg["notify_service"]):
         return
-    if cfg["weighin_weekday"] not in WEEKDAYS or WEEKDAYS.index(cfg["weighin_weekday"]) != now.weekday():
-        return  # not the configured weekday — leave the guard untouched for next week
+    daily = cfg["weighin_weekday"] == "daily"
+    if not daily:
+        if (
+            cfg["weighin_weekday"] not in WEEKDAYS
+            or WEEKDAYS.index(cfg["weighin_weekday"]) != now.weekday()
+        ):
+            return  # not the configured weekday — leave the guard for next week
     target = _parse_hhmm(cfg["weighin_time"])
     if target is None or now.time() < target:
         return
@@ -3466,7 +3471,10 @@ def _weighin_reminder_tick(now, conn):
     # Skip if they already stepped on the scale today.
     if not _weighed_in_on(conn, today_iso):
         send_notification(
-            "Weekly weigh-in — log your weight in Gym Tracker.", title="Gym Tracker"
+            "Weigh-in — log your weight in Gym Tracker."
+            if daily
+            else "Weekly weigh-in — log your weight in Gym Tracker.",
+            title="Gym Tracker",
         )
 
 
