@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.21.0
+
+- **Resting heart rate**, from Garmin, as a fourth metric in the ⌚ history
+  alongside sleep, stress and Body Battery. It arrives in the same response the
+  sleep data comes from, so it costs nothing extra, and past days are filled in.
+- **The sleep score is no longer attempted beyond its one documented place.**
+  The diagnostics settled it: some devices — including the one this was tested
+  against — send no sleep score at all, anywhere in the response. Pretending
+  otherwise meant re-asking Garmin about months of days for something that was
+  never coming. Where a device does report one it's still read; where it
+  doesn't, the field stays empty and the add-on stops asking.
+- **Fix Copy in the Diagnostics panel.** The clipboard API only exists on a
+  secure connection, which Home Assistant over a local address isn't — so it
+  silently did nothing. It now falls back to the older copy command, and
+  failing that selects the text so you can copy it yourself.
+
 ## 1.20.0
 
 - **Diagnostics button in the ⌚ Garmin sheet.** Shows what Garmin actually

@@ -274,7 +274,8 @@ has empty timestamps, because the original times were never recorded.
 ### History, and a watch that hasn't synced
 
 Every day pulled is kept, building up a history you can scroll back through —
-the ⌚ sheet charts the **last 14 days** of sleep, stress or Body Battery.
+the ⌚ sheet charts the **last 14 days** of sleep, stress, Body Battery or
+resting heart rate.
 
 Your watch only reaches Garmin when it syncs with the Garmin Connect phone
 app, which can lag by days. Gym Tracker treats that as normal rather than as
@@ -306,9 +307,10 @@ data — which is what's needed to work out why something is empty. **Copy** put
 it on the clipboard. The same thing is available at
 `/api/garmin/diagnose?day=YYYY-MM-DD` if you'd rather use the URL.
 
-Note that not every Garmin device reports a **sleep score**; where it isn't
-available the field simply stays empty, and the add-on won't keep asking for
-it.
+Note that not every Garmin device reports a **sleep score** — some send no such
+field at all. Where it isn't available it simply stays empty and the add-on
+stops asking. **Resting heart rate** comes from the same data and is usually the
+more useful recovery number anyway.
 
 This is the only feature that contacts an external service. It uses Garmin's
 unofficial API, so an occasional sync error (shown in the sheet) is normal;

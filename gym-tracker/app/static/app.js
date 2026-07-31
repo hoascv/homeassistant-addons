@@ -2010,6 +2010,7 @@ const GARMIN_METRICS = {
   sleep: { key: "sleep_seconds", max: 9 * 3600, fmt: (v) => fmtDuration(v) },
   stress: { key: "stress_avg", max: 100, fmt: (v) => `${v}` },
   battery: { key: "body_battery_high", max: 100, fmt: (v) => `${v}` },
+  resting: { key: "resting_hr", max: 80, fmt: (v) => `${v} bpm` },
 };
 const GARMIN_HISTORY_DAYS = 14;
 let garminMetric = "sleep";
@@ -2195,13 +2196,24 @@ document.getElementById("garmin-diagnose-btn").addEventListener("click", async (
 });
 
 document.getElementById("garmin-diagnose-copy").addEventListener("click", async () => {
-  const text = document.getElementById("garmin-diagnose-output").textContent;
+  const pre = document.getElementById("garmin-diagnose-output");
+  // navigator.clipboard only exists in a secure context, and ingress over a
+  // LAN address isn't one — so select the text and try the old command, which
+  // does work there. Worst case the text is selected and ready to copy by hand.
+  const range = document.createRange();
+  range.selectNodeContents(pre);
+  const selection = window.getSelection();
+  selection.removeAllRanges();
+  selection.addRange(range);
   try {
-    await navigator.clipboard.writeText(text);
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(pre.textContent);
+    } else if (!document.execCommand("copy")) {
+      throw new Error("copy rejected");
+    }
     toast("Diagnostics copied.");
   } catch (e) {
-    // Ingress can run without clipboard permission; selecting it still works.
-    toast("Couldn't copy — select the text instead.");
+    toast("Selected it — press copy on your keyboard.");
   }
 });
 

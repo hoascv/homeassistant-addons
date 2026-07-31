@@ -111,48 +111,21 @@ def _num(value):
         return None
 
 
-# Where the sleep score has been seen to live. The durations sit in
-# dailySleepDTO and arrive reliably; the score moves around between accounts
-# and firmware, so it is hunted rather than assumed.
-_SLEEP_SCORE_KEYS = ("sleepScore", "overallScore", "sleepScoreValue", "value")
-
-
-def _sleep_score(payload, depth=0):
-    """The 0–100 sleep score from wherever it is hiding in the response.
-
-    Restricted to plausible keys and to the 0–100 range: a blind search would
-    happily return a duration in seconds and call it a score.
-    """
-    if depth > 4 or not isinstance(payload, dict):
-        return None
-    # The documented shape first, so the common case doesn't rely on the hunt.
-    scores = payload.get("sleepScores")
-    if isinstance(scores, dict):
-        overall = scores.get("overall")
-        if isinstance(overall, dict):
-            value = _num(overall.get("value"))
-            if value is not None and 0 <= value <= 100:
-                return value
-        for key in _SLEEP_SCORE_KEYS:
-            value = _num(scores.get(key))
-            if value is not None and 0 <= value <= 100:
-                return value
-    for key in _SLEEP_SCORE_KEYS[:-1]:  # not bare "value" at this level
-        value = _num(payload.get(key))
-        if value is not None and 0 <= value <= 100:
-            return value
-    for nested in payload.values():
-        if isinstance(nested, dict):
-            found = _sleep_score(nested, depth + 1)
-            if found is not None:
-                return found
-        elif isinstance(nested, (list, tuple)):
-            # Garmin nests some of this inside lists; skipping them was why
-            # the first attempt at finding the score came up empty everywhere.
-            for entry in nested[:10]:
-                found = _sleep_score(entry, depth + 1) if isinstance(entry, dict) else None
-                if found is not None:
-                    return found
+# Not every device produces a sleep score. On an account whose sleep response
+# carries 22 fields of durations, stages and timestamps, there is no
+# `sleepScores` key at all — in the DTO, at the top level, or on the daily
+# summary. So it is attempted at the one documented path and otherwise left
+# empty, rather than hunted for.
+def _sleep_score(payload):
+    dto = payload.get("dailySleepDTO") or {}
+    for source in (dto, payload):
+        scores = source.get("sleepScores")
+        if isinstance(scores, dict):
+            overall = scores.get("overall")
+            if isinstance(overall, dict):
+                value = _num(overall.get("value"))
+                if value is not None and 0 <= value <= 100:
+                    return value
     return None
 
 
@@ -164,23 +137,17 @@ def _sleep_fields(client, day):
     if not isinstance(data, dict):
         return {}
     dto = data.get("dailySleepDTO") or {}
-    fields = {
+    return {
         "sleep_seconds": _num(dto.get("sleepTimeSeconds")),
         "sleep_deep_seconds": _num(dto.get("deepSleepSeconds")),
         "sleep_light_seconds": _num(dto.get("lightSleepSeconds")),
         "sleep_rem_seconds": _num(dto.get("remSleepSeconds")),
         "sleep_awake_seconds": _num(dto.get("awakeSleepSeconds")),
         "sleep_score": _sleep_score(data),
+        # Reported alongside sleep and worth more than the score for tracking
+        # recovery: an actual measurement rather than a vendor index.
+        "resting_hr": _num(data.get("restingHeartRate")),
     }
-    if fields["sleep_score"] is None:
-        # Some accounts only carry the score on the daily summary.
-        try:
-            summary = client.get_user_summary(day) or {}
-        except Exception:  # noqa: BLE001
-            summary = {}
-        if isinstance(summary, dict):
-            fields["sleep_score"] = _sleep_score(summary)
-    return fields
 
 
 def _stress_fields(client, day):

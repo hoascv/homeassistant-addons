@@ -908,17 +908,32 @@ def test_sleep_score_from_the_documented_shape():
     assert fields["sleep_score"] == 82
 
 
-def test_sleep_score_found_when_it_moves():
-    # Scalar rather than nested, and outside the DTO.
+def test_a_device_that_reports_no_sleep_score_yields_none():
+    """The real shape from a device that doesn't produce one: 22 fields of
+    durations, stages and timestamps, and no sleepScores anywhere."""
+    client = _SleepClient({
+        "dailySleepDTO": {
+            "sleepTimeSeconds": 30540, "deepSleepSeconds": 1980,
+            "remSleepSeconds": 10680, "lightSleepSeconds": 17880,
+            "awakeSleepSeconds": 0, "sleepQualityTypePK": None,
+            "sleepResultTypePK": None, "deviceRemCapable": True,
+        },
+        "restingHeartRate": 54,
+        "sleepLevels": [{"startGMT": "x"}],
+        "sleepStress": [{"value": 20}],
+    })
+    fields = gymapp.garmin_client._sleep_fields(client, "2026-07-30")
+    assert fields["sleep_score"] is None
+    assert fields["sleep_seconds"] == 30540 and fields["sleep_rem_seconds"] == 10680
+
+
+def test_resting_heart_rate_comes_from_the_sleep_response():
+    client = _SleepClient({"dailySleepDTO": {"sleepTimeSeconds": 1}, "restingHeartRate": 54})
+    assert gymapp.garmin_client._sleep_fields(client, "2026-07-30")["resting_hr"] == 54
+    # Absent is absent, never zero.
     assert gymapp.garmin_client._sleep_fields(
-        _SleepClient({"dailySleepDTO": {"sleepTimeSeconds": 1}, "sleepScores": {"overallScore": 74}}),
-        "2026-07-30",
-    )["sleep_score"] == 74
-    # Only on the daily summary.
-    assert gymapp.garmin_client._sleep_fields(
-        _SleepClient({"dailySleepDTO": {"sleepTimeSeconds": 1}}, summary={"sleepScore": 66}),
-        "2026-07-30",
-    )["sleep_score"] == 66
+        _SleepClient({"dailySleepDTO": {"sleepTimeSeconds": 1}}), "2026-07-30"
+    )["resting_hr"] is None
 
 
 def test_a_duration_is_never_mistaken_for_a_score():
@@ -943,8 +958,8 @@ def test_a_day_is_not_re_chased_for_a_sleep_score_alone(conn, monkeypatch):
 
     old_day = (date.today() - timedelta(days=9)).isoformat()
     conn.execute(
-        "INSERT INTO garmin_daily (day, sleep_seconds, stress_avg, body_battery_high, synced_at) "
-        "VALUES (?, 27000, 30, 88, '2026-07-01T06:00:00')",
+        "INSERT INTO garmin_daily (day, sleep_seconds, resting_hr, stress_avg, body_battery_high, "
+        "synced_at) VALUES (?, 27000, 54, 30, 88, '2026-07-01T06:00:00')",
         (old_day,),
     )
     conn.commit()
@@ -964,10 +979,31 @@ def test_a_day_is_not_re_chased_for_a_sleep_score_alone(conn, monkeypatch):
     assert "sleep_score" not in gymapp.GARMIN_DAY_METRICS
 
 
-def test_a_sleep_score_nested_in_a_list_is_found():
-    # Skipping lists was the flaw in the first attempt at this.
-    client = _SleepClient({
-        "dailySleepDTO": {"sleepTimeSeconds": 27000},
-        "sleepLevels": [{"summary": {"sleepScores": {"overall": {"value": 71}}}}],
-    })
-    assert gymapp.garmin_client._sleep_fields(client, "2026-07-30")["sleep_score"] == 71
+
+
+def test_a_day_without_a_resting_heart_rate_is_chased(conn, monkeypatch):
+    """Unlike the sleep score, this one does arrive — so a day stored without
+    it is worth going back for."""
+    from datetime import date, timedelta
+
+    old_day = (date.today() - timedelta(days=9)).isoformat()
+    conn.execute(
+        "INSERT INTO garmin_daily (day, sleep_seconds, stress_avg, body_battery_high, synced_at) "
+        "VALUES (?, 27000, 30, 88, '2026-07-01T06:00:00')",
+        (old_day,),
+    )
+    conn.commit()
+
+    _patch_data(monkeypatch, {"resting_hr": 54}, [], days_with_data={old_day})
+    for _ in range(10):
+        gymapp._garmin_do_sync(conn)
+        if conn.execute(
+            "SELECT resting_hr FROM garmin_daily WHERE day = ?", (old_day,)
+        ).fetchone()["resting_hr"] is not None:
+            break
+    else:
+        raise AssertionError("the day was never re-chased for its resting heart rate")
+
+    row = conn.execute("SELECT * FROM garmin_daily WHERE day = ?", (old_day,)).fetchone()
+    assert row["resting_hr"] == 54
+    assert row["sleep_seconds"] == 27000  # nothing else disturbed

@@ -18,7 +18,7 @@ from flask import Flask, Response, g, jsonify, render_template, request, send_fi
 
 import garmin_client
 
-APP_VERSION = "1.20.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.21.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("GYM_DB_PATH", "/data/gym.db")
 OPTIONS_PATH = os.environ.get("GYM_OPTIONS_PATH", "/data/options.json")
@@ -421,6 +421,7 @@ def init_db():
             body_battery_low INTEGER,
             body_battery_charged INTEGER,
             body_battery_drained INTEGER,
+            resting_hr INTEGER,
             synced_at TEXT
         )
         """
@@ -554,6 +555,10 @@ def _migrate_columns(conn):
     # Items used to belong to a single implicit challenge; give them a real
     # one so several can coexist. The default's start date is backdated to the
     # earliest completion so its statistics cover the history that exists.
+    daily_cols = {row[1] for row in conn.execute("PRAGMA table_info(garmin_daily)")}
+    if "resting_hr" not in daily_cols:
+        conn.execute("ALTER TABLE garmin_daily ADD COLUMN resting_hr INTEGER")
+
     challenge_cols = {row[1] for row in conn.execute("PRAGMA table_info(challenges)")}
     if "repeat_of" not in challenge_cols:
         # Which challenge this one is another run of.
@@ -878,12 +883,13 @@ GARMIN_PROBE_ATTEMPTS = 3
 # of them is chased like a hole, so a metric that starts working (or arrives
 # late from the watch) fills in across the history rather than only in the
 # refresh window.
-# Deliberately without sleep_score: on the reference account it never arrives,
-# and a metric listed here makes every day without it count as incomplete —
-# which would have the backfill re-asking Garmin about two months of days,
-# forever, for something that may not exist for that device. Put it back if
-# the diagnostics show the score is actually obtainable.
-GARMIN_DAY_METRICS = ("sleep_seconds", "stress_avg", "body_battery_high")
+# Deliberately without sleep_score. The diagnostics settled it: the sleep
+# response carries no sleepScores key at all — not in the DTO, not at the top
+# level, not on the daily summary — so no device that answers like this will
+# ever fill it, and listing it here would have the backfill re-asking about
+# two months of days forever. resting_hr is listed, because it arrives in the
+# same response and is therefore worth chasing for days stored without it.
+GARMIN_DAY_METRICS = ("sleep_seconds", "resting_hr", "stress_avg", "body_battery_high")
 
 
 def _garmin_upsert_day(conn, day, fields):
