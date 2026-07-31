@@ -111,22 +111,69 @@ def _num(value):
         return None
 
 
+# Where the sleep score has been seen to live. The durations sit in
+# dailySleepDTO and arrive reliably; the score moves around between accounts
+# and firmware, so it is hunted rather than assumed.
+_SLEEP_SCORE_KEYS = ("sleepScore", "overallScore", "sleepScoreValue", "value")
+
+
+def _sleep_score(payload, depth=0):
+    """The 0–100 sleep score from wherever it is hiding in the response.
+
+    Restricted to plausible keys and to the 0–100 range: a blind search would
+    happily return a duration in seconds and call it a score.
+    """
+    if depth > 4 or not isinstance(payload, dict):
+        return None
+    # The documented shape first, so the common case doesn't rely on the hunt.
+    scores = payload.get("sleepScores")
+    if isinstance(scores, dict):
+        overall = scores.get("overall")
+        if isinstance(overall, dict):
+            value = _num(overall.get("value"))
+            if value is not None and 0 <= value <= 100:
+                return value
+        for key in _SLEEP_SCORE_KEYS:
+            value = _num(scores.get(key))
+            if value is not None and 0 <= value <= 100:
+                return value
+    for key in _SLEEP_SCORE_KEYS[:-1]:  # not bare "value" at this level
+        value = _num(payload.get(key))
+        if value is not None and 0 <= value <= 100:
+            return value
+    for nested in payload.values():
+        if isinstance(nested, dict):
+            found = _sleep_score(nested, depth + 1)
+            if found is not None:
+                return found
+    return None
+
+
 def _sleep_fields(client, day):
     try:
         data = client.get_sleep_data(day) or {}
-        dto = data.get("dailySleepDTO") or {}
-        scores = dto.get("sleepScores") or {}
-        overall = scores.get("overall") or {}
-        return {
-            "sleep_seconds": _num(dto.get("sleepTimeSeconds")),
-            "sleep_deep_seconds": _num(dto.get("deepSleepSeconds")),
-            "sleep_light_seconds": _num(dto.get("lightSleepSeconds")),
-            "sleep_rem_seconds": _num(dto.get("remSleepSeconds")),
-            "sleep_awake_seconds": _num(dto.get("awakeSleepSeconds")),
-            "sleep_score": _num(overall.get("value")),
-        }
     except Exception:  # noqa: BLE001 - one bad metric shouldn't fail the day
         return {}
+    if not isinstance(data, dict):
+        return {}
+    dto = data.get("dailySleepDTO") or {}
+    fields = {
+        "sleep_seconds": _num(dto.get("sleepTimeSeconds")),
+        "sleep_deep_seconds": _num(dto.get("deepSleepSeconds")),
+        "sleep_light_seconds": _num(dto.get("lightSleepSeconds")),
+        "sleep_rem_seconds": _num(dto.get("remSleepSeconds")),
+        "sleep_awake_seconds": _num(dto.get("awakeSleepSeconds")),
+        "sleep_score": _sleep_score(data),
+    }
+    if fields["sleep_score"] is None:
+        # Some accounts only carry the score on the daily summary.
+        try:
+            summary = client.get_user_summary(day) or {}
+        except Exception:  # noqa: BLE001
+            summary = {}
+        if isinstance(summary, dict):
+            fields["sleep_score"] = _sleep_score(summary)
+    return fields
 
 
 def _stress_fields(client, day):
@@ -231,6 +278,34 @@ def _body_battery_fields(client, day):
             if fields.get(key) is None:
                 fields[key] = value
     return fields
+
+
+def diagnose_sleep(client, day):
+    """What the sleep response actually contains, for when the score is empty.
+    Reports the shape, not the payload."""
+    out = {"day": day}
+    try:
+        data = client.get_sleep_data(day) or {}
+        dto = data.get("dailySleepDTO") or {}
+        scores = dto.get("sleepScores")
+        out["top_level_keys"] = sorted(k for k in data) if isinstance(data, dict) else None
+        out["dto_keys"] = sorted(k for k in dto) if isinstance(dto, dict) else None
+        out["sleep_scores_keys"] = sorted(k for k in scores) if isinstance(scores, dict) else None
+        out["sleep_scores_overall"] = (
+            scores.get("overall") if isinstance(scores, dict) else None
+        )
+        out["parsed_score"] = _sleep_score(data)
+    except Exception as e:  # noqa: BLE001
+        out["error"] = str(e)
+    try:
+        summary = client.get_user_summary(day) or {}
+        out["summary_sleep_keys"] = sorted(
+            k for k in summary if "leep" in k
+        ) if isinstance(summary, dict) else None
+        out["parsed_score_from_summary"] = _sleep_score(summary)
+    except Exception as e:  # noqa: BLE001
+        out["summary_error"] = str(e)
+    return out
 
 
 def diagnose_body_battery(client, day):

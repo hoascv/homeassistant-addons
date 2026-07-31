@@ -478,7 +478,8 @@ def test_diagnose_endpoint_reports_both_sources(client, monkeypatch):
             series=[{"bodyBatteryValuesArray": [[1785300000000, "MEASURED", 44, 1.0]]}],
         ),
     )
-    data = client.get("/api/garmin/diagnose?day=2026-07-29").get_json()
+    # The endpoint now reports sleep alongside Body Battery.
+    data = client.get("/api/garmin/diagnose?day=2026-07-29").get_json()["body_battery"]
     assert data["from_summary"] == {"body_battery_high": 90, "body_battery_low": 20}
     assert data["from_series"]["body_battery_high"] == 44
     assert data["summary_body_battery_keys"] == ["bodyBatteryHighestValue", "bodyBatteryLowestValue"]
@@ -820,3 +821,138 @@ def test_sessions_ignore_entries_with_a_placeholder_time(client, conn):
     # Nothing to group: a midday placeholder says nothing about what was done
     # alongside what.
     assert client.get("/api/sessions").get_json() == []
+
+
+# --- Clearing heart rates read from a placeholder time ----------------------
+
+
+def _hr_row(conn, ts, ts_exact, hr=120):
+    conn.execute("INSERT OR IGNORE INTO exercises (id, name) VALUES (1, 'Push-up')")
+    cur = conn.execute(
+        "INSERT INTO workout_logs (ts, exercise_id, source, ts_exact, hr_avg, hr_max, hr_min, "
+        "hr_samples, hr_attempts, session_start) "
+        "VALUES (?, 1, 'manual', ?, ?, ?, ?, 16, 1, ?)",
+        (ts, ts_exact, hr, hr + 20, hr - 20, ts),
+    )
+    conn.commit()
+    return cur.lastrowid
+
+
+def test_placeholder_heart_rates_are_cleared_once(conn, db_path):
+    # A reading taken over 11:30-12:00 because the entry was stamped midday,
+    # next to one measured over a real window.
+    bogus = _hr_row(conn, "2026-07-09T12:00:00", 0, hr=78)
+    real = _hr_row(conn, "2026-07-30T21:30:03", 1, hr=90)
+    gymapp._set_app_state(conn, "placeholder_hr_cleared", "")
+    conn.commit()
+
+    gymapp._drop_placeholder_heart_rates(conn)
+    conn.commit()
+
+    rows = {r["id"]: r for r in conn.execute(
+        "SELECT id, hr_avg, hr_max, hr_min, hr_samples, hr_attempts, session_start FROM workout_logs"
+    )}
+    assert rows[bogus]["hr_avg"] is None and rows[bogus]["hr_samples"] is None
+    assert rows[bogus]["hr_attempts"] == 0 and rows[bogus]["session_start"] is None
+    assert rows[real]["hr_avg"] == 90  # a real window is untouched
+    assert gymapp._get_app_state(conn, "placeholder_hr_cleared")
+
+    # Runs once: a later placeholder-timed reading isn't re-cleared by it.
+    again = _hr_row(conn, "2026-07-10T12:00:00", 0, hr=77)
+    gymapp._drop_placeholder_heart_rates(conn)
+    conn.commit()
+    assert conn.execute(
+        "SELECT hr_avg FROM workout_logs WHERE id = ?", (again,)
+    ).fetchone()["hr_avg"] == 77
+
+
+def test_the_sync_never_refills_a_placeholder_entry(conn, monkeypatch):
+    from datetime import date
+
+    day = date.today().isoformat()
+    wid = _hr_row(conn, f"{day}T12:00:00", 0)
+    conn.execute("UPDATE workout_logs SET hr_avg = NULL WHERE id = ?", (wid,))
+    conn.commit()
+    _patch_hr(monkeypatch, {day: _hr_series(day, [("11:40", 120), ("11:50", 130)])})
+
+    gymapp._garmin_do_sync(conn)
+    assert conn.execute(
+        "SELECT hr_avg FROM workout_logs WHERE id = ?", (wid,)
+    ).fetchone()["hr_avg"] is None
+
+
+# --- Sleep score ------------------------------------------------------------
+
+
+class _SleepClient:
+    def __init__(self, sleep, summary=None):
+        self._sleep = sleep
+        self._summary = summary or {}
+
+    def get_sleep_data(self, day):
+        return self._sleep
+
+    def get_user_summary(self, day):
+        return self._summary
+
+
+def test_sleep_score_from_the_documented_shape():
+    client = _SleepClient({
+        "dailySleepDTO": {
+            "sleepTimeSeconds": 27000,
+            "sleepScores": {"overall": {"value": 82, "qualifierKey": "GOOD"}},
+        }
+    })
+    fields = gymapp.garmin_client._sleep_fields(client, "2026-07-30")
+    assert fields["sleep_seconds"] == 27000
+    assert fields["sleep_score"] == 82
+
+
+def test_sleep_score_found_when_it_moves():
+    # Scalar rather than nested, and outside the DTO.
+    assert gymapp.garmin_client._sleep_fields(
+        _SleepClient({"dailySleepDTO": {"sleepTimeSeconds": 1}, "sleepScores": {"overallScore": 74}}),
+        "2026-07-30",
+    )["sleep_score"] == 74
+    # Only on the daily summary.
+    assert gymapp.garmin_client._sleep_fields(
+        _SleepClient({"dailySleepDTO": {"sleepTimeSeconds": 1}}, summary={"sleepScore": 66}),
+        "2026-07-30",
+    )["sleep_score"] == 66
+
+
+def test_a_duration_is_never_mistaken_for_a_score():
+    # Nothing score-shaped: the durations must not be scavenged as one.
+    fields = gymapp.garmin_client._sleep_fields(
+        _SleepClient({"dailySleepDTO": {"sleepTimeSeconds": 27000, "deepSleepSeconds": 5400}}),
+        "2026-07-30",
+    )
+    assert fields["sleep_seconds"] == 27000
+    assert fields["sleep_score"] is None
+
+
+def test_a_day_without_a_sleep_score_is_chased(conn, monkeypatch):
+    from datetime import date, timedelta
+
+    # A day stored back when the score was never parsed.
+    old_day = (date.today() - timedelta(days=9)).isoformat()
+    conn.execute(
+        "INSERT INTO garmin_daily (day, sleep_seconds, stress_avg, body_battery_high, synced_at) "
+        "VALUES (?, 27000, 30, 88, '2026-07-01T06:00:00')",
+        (old_day,),
+    )
+    conn.commit()
+
+    _patch_data(monkeypatch, {"sleep_score": 79}, [], days_with_data={old_day})
+    for _ in range(10):
+        gymapp._garmin_do_sync(conn)
+        if conn.execute(
+            "SELECT sleep_score FROM garmin_daily WHERE day = ?", (old_day,)
+        ).fetchone()["sleep_score"] is not None:
+            break
+    else:
+        raise AssertionError("the day was never re-chased for its sleep score")
+
+    row = conn.execute("SELECT * FROM garmin_daily WHERE day = ?", (old_day,)).fetchone()
+    assert row["sleep_score"] == 79
+    assert row["sleep_seconds"] == 27000  # and nothing else was disturbed

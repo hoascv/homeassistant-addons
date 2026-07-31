@@ -18,7 +18,7 @@ from flask import Flask, Response, g, jsonify, render_template, request, send_fi
 
 import garmin_client
 
-APP_VERSION = "1.18.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.18.1"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("GYM_DB_PATH", "/data/gym.db")
 OPTIONS_PATH = os.environ.get("GYM_OPTIONS_PATH", "/data/options.json")
@@ -457,9 +457,35 @@ def init_db():
     )
 
     _migrate_columns(conn)
+    _drop_placeholder_heart_rates(conn)
     _seed_defaults(conn)
     conn.commit()
     conn.close()
+
+
+def _drop_placeholder_heart_rates(conn):
+    """Clear heart rates that were read against a midday placeholder.
+
+    Before ts_exact existed, an entry filed at {day}T12:00:00 had its heart
+    rate read over 11:30–12:00 — a real measurement of the wrong window. Those
+    readings sit in the resting range and are indistinguishable from correct
+    ones once stored, which makes them worse than no reading at all. They can
+    never be corrected either: the real time was never recorded.
+
+    Runs once; entries logged since are unaffected, and the sync will not
+    refill these because it requires ts_exact = 1.
+    """
+    if _get_app_state(conn, "placeholder_hr_cleared"):
+        return
+    cur = conn.execute(
+        "UPDATE workout_logs SET hr_avg = NULL, hr_max = NULL, hr_min = NULL, hr_samples = NULL, "
+        "hr_synced_at = NULL, hr_attempts = 0, hr_upload = NULL, "
+        "session_start = NULL, session_end = NULL "
+        "WHERE ts_exact = 0 AND hr_avg IS NOT NULL"
+    )
+    _set_app_state(conn, "placeholder_hr_cleared", datetime.now().isoformat(timespec="seconds"))
+    if cur.rowcount:
+        _log(f"cleared {cur.rowcount} heart rate(s) read from a placeholder timestamp")
 
 
 def _migrate_columns(conn):
@@ -846,7 +872,7 @@ GARMIN_PROBE_ATTEMPTS = 3
 # of them is chased like a hole, so a metric that starts working (or arrives
 # late from the watch) fills in across the history rather than only in the
 # refresh window.
-GARMIN_DAY_METRICS = ("sleep_seconds", "stress_avg", "body_battery_high")
+GARMIN_DAY_METRICS = ("sleep_seconds", "sleep_score", "stress_avg", "body_battery_high")
 
 
 def _garmin_upsert_day(conn, day, fields):
@@ -3215,7 +3241,12 @@ def api_garmin_diagnose():
     day = request.args.get("day") or date.today().isoformat()
     try:
         client = garmin_client.get_client()
-        return jsonify(garmin_client.diagnose_body_battery(client, day))
+        return jsonify(
+            {
+                "body_battery": garmin_client.diagnose_body_battery(client, day),
+                "sleep": garmin_client.diagnose_sleep(client, day),
+            }
+        )
     except Exception as e:  # noqa: BLE001 - a diagnostic must report, not raise
         return jsonify({"day": day, "error": str(e)}), 502
 

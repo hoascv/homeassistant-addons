@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.18.1
+
+- **Heart rates that were never really measured are now removed.** Before
+  timestamps were recorded properly, an exercise filed at midday had its heart
+  rate read over 11:30–12:00 — a real measurement of the wrong window. Those
+  readings sit in the resting range and are indistinguishable from correct ones
+  once stored, which makes them worse than no reading at all. They're cleared
+  once, on upgrade; readings taken over a real window are untouched, and the
+  sync was already refusing to make new ones.
+- **Fix the sleep score never being recorded.** It was read from one fixed
+  place in Garmin's response, which for some accounts holds nothing — so it
+  came back empty every single day while sleep durations, stress and Body
+  Battery all arrived fine. It's now looked for wherever Garmin puts it, falling
+  back to the daily summary, and a day missing its score counts as incomplete so
+  past days get filled in.
+- `/api/garmin/diagnose` now reports sleep alongside Body Battery.
+
 ## 1.18.0
 
 - **Pictures for your exercises.** Tap the thumbnail beside any exercise in the
