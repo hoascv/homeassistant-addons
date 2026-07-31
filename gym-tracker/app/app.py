@@ -18,7 +18,7 @@ from flask import Flask, Response, g, jsonify, render_template, request, send_fi
 
 import garmin_client
 
-APP_VERSION = "1.17.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.18.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("GYM_DB_PATH", "/data/gym.db")
 OPTIONS_PATH = os.environ.get("GYM_OPTIONS_PATH", "/data/options.json")
@@ -368,6 +368,20 @@ def init_db():
             schedule_kind TEXT NOT NULL DEFAULT 'daily',
             schedule_interval INTEGER,
             schedule_weekdays TEXT
+        )
+        """
+    )
+    # Exercise pictures, kept out of the exercises table so the ordinary
+    # queries never drag a blob around — and in the database rather than on
+    # disk, because a backup is the database file: images saved beside it
+    # would vanish on restore.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS exercise_images (
+            exercise_id INTEGER PRIMARY KEY REFERENCES exercises(id),
+            image BLOB NOT NULL,
+            mime TEXT NOT NULL,
+            updated_at TEXT
         )
         """
     )
@@ -1407,10 +1421,11 @@ def _active_challenge_items(conn, challenge_id=None):
     rows = conn.execute(
         "SELECT ci.id, ci.sort_order, ci.item_type, ci.exercise_id, ci.supplement_id, "
         "ci.target_sets, ci.target_reps, ci.dose, ci.label AS stored_label, ci.challenge_id, "
-        "e.name AS exercise_name, s.name AS supplement_name "
+        "e.name AS exercise_name, s.name AS supplement_name, i.updated_at AS image_v "
         "FROM challenge_items ci "
         "LEFT JOIN exercises e ON e.id = ci.exercise_id "
         "LEFT JOIN supplements s ON s.id = ci.supplement_id "
+        "LEFT JOIN exercise_images i ON i.exercise_id = ci.exercise_id "
         f"{where} ORDER BY ci.sort_order ASC, ci.id ASC",
         params,
     ).fetchall()
@@ -1439,10 +1454,11 @@ def _challenge_membership(conn, challenge_id, challenge=None):
         "SELECT ci.id, ci.sort_order, ci.item_type, ci.exercise_id, ci.supplement_id, "
         "ci.target_sets, ci.target_reps, ci.dose, ci.label AS stored_label, ci.challenge_id, "
         "ci.archived, ci.created_at, ci.archived_at, "
-        "e.name AS exercise_name, s.name AS supplement_name "
+        "e.name AS exercise_name, s.name AS supplement_name, i.updated_at AS image_v "
         "FROM challenge_items ci "
         "LEFT JOIN exercises e ON e.id = ci.exercise_id "
         "LEFT JOIN supplements s ON s.id = ci.supplement_id "
+        "LEFT JOIN exercise_images i ON i.exercise_id = ci.exercise_id "
         "WHERE ci.challenge_id = ? ORDER BY ci.sort_order ASC, ci.id ASC",
         (challenge_id,),
     ).fetchall()
@@ -1655,11 +1671,14 @@ def _challenge_item_view(r):
     else:  # legacy/untyped fallback (should be archived, but stay safe)
         name = r["stored_label"]
         label = r["stored_label"]
+    keys = r.keys()
     return {
         "id": r["id"],
         "sort_order": r["sort_order"],
         "item_type": item_type,
         "exercise_id": r["exercise_id"],
+        # Present only where the query joined it; absent is simply "no picture".
+        "image_v": r["image_v"] if "image_v" in keys else None,
         "supplement_id": r["supplement_id"],
         "target_sets": r["target_sets"],
         "target_reps": r["target_reps"],
@@ -1933,8 +1952,10 @@ def api_exercises():
     rows = [
         dict(r)
         for r in db.execute(
-            "SELECT id, name, equipment, category, is_custom, notes FROM exercises "
-            "WHERE archived = 0 ORDER BY equipment ASC, name ASC"
+            "SELECT e.id, e.name, e.equipment, e.category, e.is_custom, e.notes, "
+            "i.updated_at AS image_v FROM exercises e "
+            "LEFT JOIN exercise_images i ON i.exercise_id = e.id "
+            "WHERE e.archived = 0 ORDER BY e.equipment ASC, e.name ASC"
         )
     ]
     groups = defaultdict(list)
@@ -1943,6 +1964,76 @@ def api_exercises():
     ordered = [eq for eq in EQUIPMENT_ORDER if eq in groups]
     ordered += sorted(eq for eq in groups if eq not in EQUIPMENT_ORDER)
     return jsonify([{"equipment": eq, "exercises": groups[eq]} for eq in ordered])
+
+
+# Sniffed from the bytes rather than trusted from the upload's own claim.
+_IMAGE_SIGNATURES = (
+    (b"\xff\xd8\xff", "image/jpeg"),
+    (b"\x89PNG\r\n\x1a\n", "image/png"),
+)
+# The browser resizes before uploading, so anything approaching this is either
+# a client that didn't, or not really an image.
+MAX_IMAGE_BYTES = 1_000_000
+
+
+def _sniff_image(data):
+    """The image's real type, or None if it isn't one we serve."""
+    for signature, mime in _IMAGE_SIGNATURES:
+        if data.startswith(signature):
+            return mime
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    return None
+
+
+@app.route("/api/exercises/<int:exercise_id>/image", methods=["POST"])
+def api_set_exercise_image(exercise_id):
+    db = get_db()
+    if db.execute("SELECT 1 FROM exercises WHERE id = ?", (exercise_id,)).fetchone() is None:
+        return jsonify({"error": "no such exercise"}), 404
+    uploaded = request.files.get("file")
+    if uploaded is None or uploaded.filename == "":
+        return jsonify({"error": "no file provided"}), 400
+    data = uploaded.read(MAX_IMAGE_BYTES + 1)
+    if len(data) > MAX_IMAGE_BYTES:
+        return jsonify({"error": "image is too large"}), 400
+    mime = _sniff_image(data)
+    if mime is None:
+        return jsonify({"error": "not a JPEG, PNG or WebP image"}), 400
+    db.execute(
+        "INSERT INTO exercise_images (exercise_id, image, mime, updated_at) VALUES (?, ?, ?, ?) "
+        "ON CONFLICT(exercise_id) DO UPDATE SET image = excluded.image, mime = excluded.mime, "
+        "updated_at = excluded.updated_at",
+        (exercise_id, data, mime, _now_ts()),
+    )
+    db.commit()
+    return jsonify({"status": "saved", "bytes": len(data)})
+
+
+@app.route("/api/exercises/<int:exercise_id>/image")
+def api_get_exercise_image(exercise_id):
+    row = get_db().execute(
+        "SELECT image, mime FROM exercise_images WHERE exercise_id = ?", (exercise_id,)
+    ).fetchone()
+    if row is None:
+        return jsonify({"error": "no image"}), 404
+    # The client asks with ?v=<updated_at>, so a stored image can be cached
+    # hard and still change the moment it is replaced.
+    return Response(
+        row["image"],
+        mimetype=row["mime"],
+        headers={"Cache-Control": "private, max-age=31536000"},
+    )
+
+
+@app.route("/api/exercises/<int:exercise_id>/image", methods=["DELETE"])
+def api_delete_exercise_image(exercise_id):
+    db = get_db()
+    cur = db.execute("DELETE FROM exercise_images WHERE exercise_id = ?", (exercise_id,))
+    db.commit()
+    if cur.rowcount == 0:
+        return jsonify({"error": "no image"}), 404
+    return jsonify({"status": "removed"})
 
 
 @app.route("/api/exercises", methods=["POST"])

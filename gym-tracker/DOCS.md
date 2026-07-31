@@ -69,6 +69,18 @@ two and edit earlier entries to correct them.
 
 ## The library: exercises and supplements
 
+### Pictures
+
+Every exercise can have a picture. In the 🏋️ Library, tap the thumbnail beside
+an exercise to choose one from your phone or computer; tap an existing picture
+to replace or remove it. Pictures show in the Library and next to exercise items
+on your challenge cards.
+
+They're resized in your browser before being sent (longest side 512 px), and
+stored inside the add-on's database — so they're included in a **backup** and
+come back on **restore**, and never leave your Home Assistant instance. JPEG,
+PNG and WebP are accepted.
+
 The 🏋️ button opens your **Library**, with two tabs:
 
 - **Exercises** — home exercises grouped by the equipment they need:

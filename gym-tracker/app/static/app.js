@@ -512,6 +512,9 @@ function challengeCardHtml(ch) {
       (it) => `
       <li class="challenge-item ${it.done_today ? "done" : ""}" data-id="${it.id}">
         <span class="challenge-check">${it.done_today ? "✓" : ""}</span>
+        ${it.item_type === "exercise" && it.image_v
+          ? `<img class="ci-thumb" src="${exerciseImageUrl(it.exercise_id, it.image_v)}" alt="" loading="lazy">`
+          : ""}
         <span class="challenge-label">${escapeHtml(it.label)}</span>
       </li>`
     )
@@ -1320,6 +1323,76 @@ document.querySelectorAll(".lib-tab").forEach((tab) => {
   });
 });
 
+// --- Exercise pictures ------------------------------------------------------
+
+const EXERCISE_IMAGE_PX = 512;
+
+function exerciseImageUrl(id, version) {
+  // The version busts the cache when a picture is replaced; without one there
+  // is nothing to show.
+  return version ? `api/exercises/${id}/image?v=${encodeURIComponent(version)}` : null;
+}
+
+function exerciseThumbHtml(id, version, fallback) {
+  const url = exerciseImageUrl(id, version);
+  return url
+    ? `<img class="ex-thumb" src="${url}" alt="" loading="lazy">`
+    : `<span class="ex-thumb ex-thumb-none">${fallback}</span>`;
+}
+
+// Resized in the browser: the add-on runs on hardware where an image library
+// is a liability, and a phone photo is megabytes of detail nobody needs at
+// thumbnail size.
+function shrinkImage(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Couldn't read that file."));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error("That doesn't look like an image."));
+      img.onload = () => {
+        const scale = Math.min(1, EXERCISE_IMAGE_PX / Math.max(img.width, img.height));
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.round(img.width * scale);
+        canvas.height = Math.round(img.height * scale);
+        canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+        canvas.toBlob(
+          (blob) => (blob ? resolve(blob) : reject(new Error("Couldn't process that image."))),
+          "image/jpeg",
+          0.8
+        );
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+async function uploadExerciseImage(exerciseId, file) {
+  const blob = await shrinkImage(file);
+  const body = new FormData();
+  body.append("file", blob, "exercise.jpg");
+  const res = await fetch(`api/exercises/${exerciseId}/image`, { method: "POST", body });
+  if (!res.ok) {
+    const payload = await res.json().catch(() => ({}));
+    throw new Error(payload.error || "Upload failed.");
+  }
+}
+
+// One picker reused by every row: the row is remembered on it while open.
+document.getElementById("exercise-image-input").addEventListener("change", async (e) => {
+  const input = e.target;
+  const id = input.dataset.exerciseId;
+  const file = input.files && input.files[0];
+  input.value = "";  // so choosing the same file twice still fires
+  if (!id || !file) return;
+  try {
+    await uploadExerciseImage(id, file);
+    loadExercises();
+    loadChallenge();
+  } catch (err) { toast(err.message); }
+});
+
 async function loadExercises() {
   try { exerciseGroups = await fetchJSON("api/exercises"); } catch (e) { return; }
   const host = document.getElementById("exercises-groups");
@@ -1332,6 +1405,11 @@ async function loadExercises() {
           .map(
             (ex) => `
           <div class="exercise-row" data-id="${ex.id}">
+            <button type="button" class="ex-thumb-btn ex-photo" data-id="${ex.id}"
+                    data-has-image="${ex.image_v ? "1" : ""}"
+                    aria-label="${ex.image_v ? "Replace or remove picture" : "Add a picture"}">
+              ${exerciseThumbHtml(ex.id, ex.image_v, "🏋️")}
+            </button>
             <div class="ex-main">
               <div class="ex-name">${escapeHtml(ex.name)}</div>
               ${ex.category ? `<div class="ex-cat">${escapeHtml(ex.category)}</div>` : ""}
@@ -1371,6 +1449,24 @@ document.getElementById("exercise-form").addEventListener("submit", async (e) =>
 });
 
 document.getElementById("exercises-groups").addEventListener("click", async (e) => {
+  const photo = e.target.closest(".ex-photo");
+  if (photo) {
+    const input = document.getElementById("exercise-image-input");
+    if (photo.dataset.hasImage) {
+      // Tapping an existing picture offers to drop it; cancelling replaces it.
+      if (confirm("Remove this picture? Cancel to choose a different one instead.")) {
+        try {
+          await fetchJSON(`api/exercises/${photo.dataset.id}/image`, { method: "DELETE" });
+          loadExercises();
+          loadChallenge();
+        } catch (err) { toast(err.message); }
+        return;
+      }
+    }
+    input.dataset.exerciseId = photo.dataset.id;
+    input.click();
+    return;
+  }
   const del = e.target.closest(".ex-del");
   if (del) {
     if (!confirm("Remove this exercise? Logged history is kept.")) return;

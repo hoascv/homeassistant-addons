@@ -134,3 +134,131 @@ def test_archiving_counts_as_a_change(client, conn):
     row = conn.execute("SELECT archived, updated_at FROM exercises WHERE id = ?", (eid,)).fetchone()
     assert row["archived"] == 1
     assert row["updated_at"] > "2020-01-01T00:00:00"
+
+
+# --- Exercise pictures ------------------------------------------------------
+
+import io
+
+# Smallest valid files of each type, so the tests exercise the real sniffing.
+PNG_1PX = bytes.fromhex(
+    "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4"
+    "890000000a49444154789c6360000002000100ffff03000006000557bfabd400"
+    "00000049454e44ae426082"
+)
+JPEG_HEAD = b"\xff\xd8\xff\xe0" + b"\x00" * 64
+WEBP_HEAD = b"RIFF" + b"\x00\x00\x00\x00" + b"WEBP" + b"\x00" * 32
+
+
+def _upload(client, exercise_id, data, filename="pic.png"):
+    return client.post(
+        f"/api/exercises/{exercise_id}/image",
+        data={"file": (io.BytesIO(data), filename)},
+        content_type="multipart/form-data",
+    )
+
+
+def _first_exercise(client):
+    return client.get("/api/exercises").get_json()[0]["exercises"][0]["id"]
+
+
+def test_a_picture_can_be_added_fetched_and_removed(client):
+    eid = _first_exercise(client)
+    assert client.get(f"/api/exercises/{eid}/image").status_code == 404
+
+    assert _upload(client, eid, PNG_1PX).status_code == 200
+
+    served = client.get(f"/api/exercises/{eid}/image")
+    assert served.status_code == 200
+    assert served.mimetype == "image/png"
+    assert served.data == PNG_1PX
+
+    # The listing advertises it, with a version to bust the cache on.
+    listed = next(
+        e for g in client.get("/api/exercises").get_json() for e in g["exercises"] if e["id"] == eid
+    )
+    assert listed["image_v"]
+
+    assert client.delete(f"/api/exercises/{eid}/image").status_code == 200
+    assert client.get(f"/api/exercises/{eid}/image").status_code == 404
+
+
+def test_replacing_a_picture_changes_its_version(client):
+    eid = _first_exercise(client)
+    _upload(client, eid, PNG_1PX)
+    first = next(
+        e for g in client.get("/api/exercises").get_json() for e in g["exercises"] if e["id"] == eid
+    )["image_v"]
+
+    _upload(client, eid, JPEG_HEAD, filename="pic.jpg")
+    second = next(
+        e for g in client.get("/api/exercises").get_json() for e in g["exercises"] if e["id"] == eid
+    )["image_v"]
+
+    assert client.get(f"/api/exercises/{eid}/image").mimetype == "image/jpeg"
+    assert second >= first  # a cached thumbnail can't survive the swap
+
+
+def test_the_bytes_decide_the_type_not_the_filename(client):
+    eid = _first_exercise(client)
+    # A script wearing a .png name is still not an image.
+    r = _upload(client, eid, b"<?php echo 'nope'; ?>", filename="evil.png")
+    assert r.status_code == 400
+    assert "JPEG" in r.get_json()["error"]
+    assert client.get(f"/api/exercises/{eid}/image").status_code == 404
+
+    # ...and a real WebP is accepted whatever it's called.
+    assert _upload(client, eid, WEBP_HEAD, filename="whatever.txt").status_code == 200
+    assert client.get(f"/api/exercises/{eid}/image").mimetype == "image/webp"
+
+
+def test_an_oversized_upload_is_refused(client):
+    import app as gymapp
+
+    eid = _first_exercise(client)
+    huge = PNG_1PX + b"\x00" * (gymapp.MAX_IMAGE_BYTES + 1)
+    r = _upload(client, eid, huge)
+    assert r.status_code == 400
+    assert "too large" in r.get_json()["error"]
+
+
+def test_uploading_to_a_missing_exercise_is_a_404(client):
+    assert _upload(client, 9999, PNG_1PX).status_code == 404
+    assert client.delete("/api/exercises/9999/image").status_code == 404
+
+
+def test_pictures_survive_backup_and_restore(client, db_path, tmp_path):
+    """Images live in the database precisely so a backup carries them."""
+    eid = _first_exercise(client)
+    _upload(client, eid, PNG_1PX)
+
+    backup = client.get("/api/backup").data
+    client.delete(f"/api/exercises/{eid}/image")
+    assert client.get(f"/api/exercises/{eid}/image").status_code == 404
+
+    restored = client.post(
+        "/api/restore",
+        data={"file": (io.BytesIO(backup), "backup.db")},
+        content_type="multipart/form-data",
+    )
+    assert restored.status_code == 200
+    assert client.get(f"/api/exercises/{eid}/image").data == PNG_1PX
+
+
+def test_challenge_items_advertise_their_exercise_picture(client, conn):
+    eid = _first_exercise(client)
+    _upload(client, eid, PNG_1PX)
+    item = client.post("/api/challenge/items", json={
+        "item_type": "exercise", "exercise_id": eid, "target_reps": 10,
+    }).get_json()["id"]
+
+    items = client.get("/api/challenge/items").get_json()
+    entry = next(i for i in items if i["id"] == item)
+    assert entry["image_v"]
+    # A supplement item has no exercise, so nothing to show.
+    sup = conn.execute("SELECT id FROM supplements WHERE archived = 0 LIMIT 1").fetchone()["id"]
+    sup_item = client.post("/api/challenge/items", json={
+        "item_type": "supplement", "supplement_id": sup, "dose": "5 g",
+    }).get_json()["id"]
+    assert next(i for i in client.get("/api/challenge/items").get_json()
+                if i["id"] == sup_item)["image_v"] is None

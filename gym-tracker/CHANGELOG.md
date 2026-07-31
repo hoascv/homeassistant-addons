@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.18.0
+
+- **Pictures for your exercises.** Tap the thumbnail beside any exercise in the
+  🏋️ Library to choose a photo; tap an existing one to replace or remove it.
+  They show in the Library and beside exercise items on your challenge cards.
+- Pictures are **resized in your browser** before upload (longest side 512 px,
+  JPEG) — nothing large is ever sent or stored, and no image library is needed
+  on the add-on side.
+- They are stored **in the database, not as files**, so they ride along in a
+  backup and come back on restore. A picture never leaves your Home Assistant
+  instance.
+- Uploads are checked by their actual bytes rather than their filename, so a
+  file merely *named* `.png` can't be stored and served back.
+
 ## 1.17.0
 
 - **Challenges can have a schedule.** As well as every day, a challenge can run
