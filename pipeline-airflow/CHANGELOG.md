@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.2.0
+
+- **Fix not being able to log in.** `admin_user` and `admin_password` were
+  being ignored: Airflow 3 only applies them when the FAB auth manager is
+  installed, and it wasn't — so Airflow fell back to its development
+  auth manager, which invents a password, prints it to the log once and stores
+  it in plaintext. The FAB provider is now installed and selected, so the
+  options work as documented.
+- **Changing `admin_password` now takes effect.** The old path only ever
+  *created* a user and silently did nothing if one already existed, so editing
+  the option later changed nothing. The password is applied on every start.
+- Sessions survive a restart: the session secret is persisted alongside the
+  Fernet key instead of being regenerated each boot.
+
 ## 1.1.0
 
 - New **gym_tracker_ingest** and **coop_tracker_ingest** DAGs: pull each

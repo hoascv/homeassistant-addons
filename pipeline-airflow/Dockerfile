@@ -25,10 +25,16 @@ RUN curl -fsSL https://archive.apache.org/dist/spark/spark-4.1.3/spark-4.1.3-bin
 # root under Supervisor, still imports these.
 # hadolint ignore=DL3013
 USER airflow
+# providers-fab is not optional here: without it Airflow 3 falls back to
+# SimpleAuthManager, which ignores the admin_user/admin_password options
+# entirely, generates a password it prints once to the log, and stores it in
+# plaintext — its own source calls it dev-only. The UI is published on the host
+# network, so it needs a real auth manager.
 RUN pip install --no-cache-dir \
     "apache-airflow-providers-apache-spark" \
     "apache-airflow-providers-amazon" \
-    "apache-airflow-providers-postgres"
+    "apache-airflow-providers-postgres" \
+    "apache-airflow-providers-fab"
 
 # --- Back to root so the add-on can write /data and /share -----------------
 USER root

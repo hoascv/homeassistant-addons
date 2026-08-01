@@ -36,15 +36,27 @@ if [ ! -f "$FERNET_FILE" ]; then
 fi
 export AIRFLOW__CORE__FERNET_KEY="$(cat "$FERNET_FILE")"
 
+# Persist the session secret too, or every restart logs everyone out.
+SECRET_FILE=/data/session.key
+if [ ! -f "$SECRET_FILE" ]; then
+  python -c "import secrets; print(secrets.token_urlsafe(32))" > "$SECRET_FILE"
+fi
+export AIRFLOW__API__SECRET_KEY="$(cat "$SECRET_FILE")"
+
+# Use the FAB auth manager, so the admin_user/admin_password options below are
+# actually honoured. Airflow 3 otherwise defaults to SimpleAuthManager, whose
+# generated password is printed once to the log and stored in plaintext.
+export AIRFLOW__CORE__AUTH_MANAGER="airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager"
+
 # Seed the example DAG into the shared, user-editable folder (once).
 mkdir -p /share/pipeline-airflow/dags
 cp -n /opt/airflow/project-dags/*.py /share/pipeline-airflow/dags/ 2>/dev/null || true
 
-# --- Admin user (handled by the upstream image entrypoint) -----------------
-export _AIRFLOW_DB_MIGRATE=true
-export _AIRFLOW_WWW_USER_CREATE=true
-export _AIRFLOW_WWW_USER_USERNAME="$ADMIN_USER"
-export _AIRFLOW_WWW_USER_PASSWORD="$ADMIN_PASSWORD"
+# --- Database and admin user ------------------------------------------------
+# Done here rather than through the entrypoint's _AIRFLOW_WWW_USER_CREATE,
+# because FAB keeps its tables in a separate migration that has to run first,
+# and because that path only ever creates a user: it silently does nothing if
+# one exists, so changing admin_password later would never take effect.
 
 # --- Pre-wired connections (via env, always available) ---------------------
 export AIRFLOW_CONN_SPARK_DEFAULT="spark://${SPARK_MASTER}:${SPARK_PORT}"
@@ -67,6 +79,30 @@ export AIRFLOW_VAR_PIPELINE_PG_USER="$PIPELINE_PG_USER"
 export AIRFLOW_VAR_PIPELINE_PG_PASSWORD="$PIPELINE_PG_PASSWORD"
 export AIRFLOW_VAR_SPARK_JOB_PATH="/opt/pipeline/jobs/example_job.py"
 
+echo "[Pipeline Airflow] preparing database and admin user"
+# One pass through the entrypoint (it waits for Postgres and migrates the core
+# schema) to add FAB's own tables and settle the admin account.
+# The credentials go through the environment rather than being interpolated
+# into the script below — a password containing a quote would otherwise break
+# it, and this file must not care what characters are in it.
+export ADMIN_USER ADMIN_PASSWORD
+_AIRFLOW_DB_MIGRATE=true /entrypoint bash -c '
+  set -e
+  airflow fab-db migrate
+  # create fails when the account already exists; stderr is suppressed because
+  # that case is normal, and the reset below then makes the configured
+  # password authoritative.
+  if airflow users create \
+       --username "$ADMIN_USER" \
+       --firstname Airflow --lastname Admin \
+       --role Admin --email airflowadmin@example.com \
+       --password "$ADMIN_PASSWORD" 2>/dev/null; then
+    echo "[Pipeline Airflow] created admin user \"$ADMIN_USER\""
+  else
+    airflow users reset-password --username "$ADMIN_USER" --password "$ADMIN_PASSWORD"
+    echo "[Pipeline Airflow] admin password for \"$ADMIN_USER\" set from options"
+  fi
+'
+
 echo "[Pipeline Airflow] starting (LocalExecutor, metadata DB @ ${PG_HOST}:${PG_PORT}, UI :8080)"
-# The upstream entrypoint waits for the DB, migrates, and creates the admin user.
 exec /entrypoint airflow standalone

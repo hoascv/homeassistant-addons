@@ -27,7 +27,8 @@ Part of a four-add-on data pipeline: **Pipeline Postgres**, **Pipeline MinIO**,
 ## Configuration
 
 - **admin_user** / **admin_password**: the Airflow web login. **Change the
-  password before starting.**
+  password before starting.** Changing it later also works — it's reapplied
+  every time the add-on starts, so you can reset a forgotten one from here.
 - **postgres_host** / **postgres_port** / **airflow_db_password**: how to reach the
   metadata DB. Defaults target the Pipeline Postgres add-on via the host gateway
   (`172.30.32.1:5432`); `airflow_db_password` must match that add-on's value.
