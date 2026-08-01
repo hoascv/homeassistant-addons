@@ -140,6 +140,10 @@ already ticked stay with the challenge you earned them in — a move ends the
 item's membership there and starts a new one in the destination, so neither
 challenge's statistics are rewritten by it.
 
+Tapping an item you've already ticked asks before clearing it — the tick is the
+day's credit, and for an exercise it also removes the workout that ticking
+logged. Ticking is immediate; only undoing asks.
+
 ### Statistics
 
 The **Trends** tab shows, for each challenge:

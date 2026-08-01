@@ -486,6 +486,16 @@ function challengeById(id) {
   return (challengeData || []).find((c) => c.id === id) || null;
 }
 
+// Names what actually goes, rather than a bare "are you sure?".
+function undoTickPrompt(item, day) {
+  const when = day ? ` on ${fmtDate(day)}` : "";
+  const loses =
+    item.item_type === "exercise"
+      ? " This also removes the workout it logged."
+      : "";
+  return `Un-tick ${item.label || item.name}${when}?${loses}`;
+}
+
 function findChallengeItem(itemId) {
   for (const ch of challengeData || []) {
     const item = (ch.items || []).find((it) => it.id === itemId);
@@ -557,6 +567,11 @@ document.getElementById("challenge-cards").addEventListener("click", (e) => {
   const found = findChallengeItem(Number(el.dataset.id));
   if (!found) return;
   const item = found.item;
+
+  // Un-ticking throws work away — the tick, the streak day, and for an
+  // exercise the workout it logged with whatever heart rate had been matched
+  // to it. Easy to do by accident on a checklist you tap at speed, so ask.
+  if (item.done_today && !confirm(undoTickPrompt(item))) return;
 
   // Optimistic update: flip the check now (and, for exercise items, the Recent
   // workouts card, since ticking one logs a workout) so the UI reacts instantly
@@ -1215,6 +1230,10 @@ document.getElementById("history-grid").addEventListener("click", (e) => {
   // cache now, so the grid reacts instantly. The POST reconciles against the
   // server; on failure we flip it back and tell the user.
   const wasDone = dayEntry.done.includes(itemId);
+  if (wasDone) {
+    const item = (challengeHistoryData.items || []).find((it) => it.id === itemId);
+    if (item && !confirm(undoTickPrompt(item, day))) return;
+  }
   applyHistoryToggle(dayEntry, itemId, !wasDone);
 
   fetchJSON("api/challenge/toggle", {

@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.25.1
+
+- **Un-ticking something you've already done now asks first.** A challenge is a
+  list you tap at speed, and clearing a tick throws away the day's credit — and
+  for an exercise, the workout it logged along with any heart rate matched to
+  it. The prompt says which of those applies. Ticking something still happens
+  straight away.
+- The same applies in the challenge history when clearing a past day.
+
 ## 1.25.0
 
 - **Every recorded change now says who made it**: `user` for something done in
