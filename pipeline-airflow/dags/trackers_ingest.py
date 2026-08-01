@@ -34,8 +34,10 @@ import datetime
 import json
 import urllib.request
 
+import logging
+
 from airflow.decorators import dag, task
-from airflow.exceptions import AirflowSkipException
+from airflow.exceptions import AirflowFailException
 from airflow.models import Variable
 from airflow.providers.amazon.aws.hooks.s3 import S3Hook
 from airflow.providers.apache.spark.operators.spark_submit import SparkSubmitOperator
@@ -59,6 +61,8 @@ SOURCES = {
     "gym_tracker": "http://172.30.32.1:8099",
     "coop_tracker": "http://172.30.32.1:8098",
 }
+
+log = logging.getLogger(__name__)
 
 
 def _get(base_url: str, token: str, path: str) -> dict:
@@ -98,7 +102,15 @@ def build_dag(source: str, default_url: str):
         def fetch() -> dict:
             token = Variable.get(f"{source}_api_token", default_var="").strip()
             if not token:
-                raise AirflowSkipException(f"no {source}_api_token set — skipping")
+                # Fails rather than skips. A skip leaves the run green, and a
+                # pipeline that is quietly loading nothing looks exactly like a
+                # healthy one — the single state most worth noticing.
+                raise AirflowFailException(
+                    f"Airflow Variable {source}_api_token is not set, so there is nothing "
+                    f"to authenticate with. Set it to the api_token from the {source} "
+                    f"add-on's configuration, and {source}_base_url to the address its "
+                    "port is published on."
+                )
             base_url = Variable.get(f"{source}_base_url", default_var=default_url)
 
             pg = PostgresHook(postgres_conn_id=PG_CONN_ID)
@@ -131,6 +143,11 @@ def build_dag(source: str, default_url: str):
             if watermark == 0 or probe.get("full_reload_required"):
                 snapshot = _get(base_url, token, "/api/export")
                 archive("export.json", snapshot)
+                rows = sum(len(v) for v in snapshot["tables"].values())
+                log.info(
+                    "bootstrap: %s rows across %s tables, up to seq %s (watermark was %s)",
+                    rows, len(snapshot["tables"]), snapshot["max_seq"], watermark,
+                )
                 return {
                     "mode": "bootstrap",
                     "prefix": f"s3a://{RAW_BUCKET}/{prefix}",
@@ -139,7 +156,7 @@ def build_dag(source: str, default_url: str):
                     "pages": 1,
                 }
 
-            since, pages = watermark, 0
+            since, pages, changes_seen = watermark, 0, 0
             while pages < MAX_PAGES:
                 page = _get(base_url, token, f"/api/changes?since={since}&limit={PAGE_SIZE}")
                 changes = page.get("changes") or []
@@ -147,9 +164,14 @@ def build_dag(source: str, default_url: str):
                     break
                 archive(f"changes-{since}.json", page)
                 since = changes[-1]["seq"]
+                changes_seen += len(changes)
                 pages += 1
                 if len(changes) < PAGE_SIZE:
                     break
+            log.info(
+                "incremental: %s change(s) over %s page(s), seq %s -> %s",
+                changes_seen, pages, watermark, since,
+            )
             return {
                 "mode": "incremental",
                 "prefix": f"s3a://{RAW_BUCKET}/{prefix}",
@@ -160,9 +182,15 @@ def build_dag(source: str, default_url: str):
 
         @task.short_circuit
         def has_work(batch: dict) -> bool:
-            # Nothing new: skip the Spark submit rather than pay for a cluster
-            # round trip to merge an empty batch.
-            return batch["pages"] > 0
+            # Nothing new is a healthy outcome, not a problem — skip the Spark
+            # submit rather than pay for a cluster round trip to merge an empty
+            # batch. Said out loud so a run that does nothing says so.
+            if batch["pages"]:
+                return True
+            log.info(
+                "nothing new since seq %s — no merge to run", batch["from_seq"]
+            )
+            return False
 
         batch = fetch()
         gate = has_work(batch)
@@ -191,6 +219,10 @@ def build_dag(source: str, default_url: str):
                     (source, batch["max_seq"]),
                 )
                 connection.commit()
+            log.info(
+                "%s complete: %s, watermark %s -> %s",
+                source, batch["mode"], batch["from_seq"], batch["max_seq"],
+            )
             return {"source": source, "seq": batch["max_seq"], "mode": batch["mode"]}
 
         gate >> merge >> advance_watermark(batch)

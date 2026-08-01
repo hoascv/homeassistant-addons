@@ -48,9 +48,15 @@ export AIRFLOW__API__SECRET_KEY="$(cat "$SECRET_FILE")"
 # generated password is printed once to the log and stored in plaintext.
 export AIRFLOW__CORE__AUTH_MANAGER="airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager"
 
-# Seed the example DAG into the shared, user-editable folder (once).
+# Seed the example DAG into the shared, user-editable folder (once) — yours to
+# edit, so it is never overwritten.
 mkdir -p /share/pipeline-airflow/dags
-cp -n /opt/airflow/project-dags/*.py /share/pipeline-airflow/dags/ 2>/dev/null || true
+cp -n /opt/airflow/project-dags/example_pipeline.py /share/pipeline-airflow/dags/ 2>/dev/null || true
+
+# The tracker DAGs ship with the add-on and are replaced on every start.
+# With cp -n a fix to them could never reach an installation that already had
+# the old copy. Edit them in the repository, not here.
+cp -f /opt/airflow/project-dags/trackers_ingest.py /share/pipeline-airflow/dags/ 2>/dev/null || true
 
 # --- Database and admin user ------------------------------------------------
 # Done here rather than through the entrypoint's _AIRFLOW_WWW_USER_CREATE,

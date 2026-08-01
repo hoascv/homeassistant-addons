@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.3.0
+
+- **An unconfigured tracker now fails the run instead of skipping it.** Skipping
+  left the run green, so a pipeline that was loading nothing looked exactly like
+  a healthy one — the single state most worth noticing. The failure message
+  names the Variables to set.
+- **The runs say what they did**: how many rows a bootstrap carried, how many
+  changes an incremental pass found, where the watermark moved to, and — when
+  there is genuinely nothing new — that too, so a quiet run is quiet on purpose.
+- **The tracker DAGs are refreshed on every start.** They were only ever copied
+  if absent, which meant a fix to them could never reach an installation that
+  already had the old copy. `example_pipeline.py` is still yours to edit and is
+  left alone.
+
 ## 1.2.1
 
 - **Actually fix the login.** 1.2.0 created the admin account correctly, but the

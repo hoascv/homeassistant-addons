@@ -104,8 +104,13 @@ To set it up, for each tracker:
    | `coop_tracker_base_url` | `http://172.30.32.1:8098` |
    | `coop_tracker_api_token` | the token you set |
 
-A source with no token set is skipped, so you can run one tracker without the
-other.
+A source whose token isn't set **fails** the run rather than skipping it. A skip
+would leave the run green, and a pipeline quietly loading nothing looks exactly
+like a healthy one.
+
+`trackers_ingest.py` is maintained by the add-on and replaced on every start, so
+fixes reach you on update — edit it in the repository rather than in
+`/share`. `example_pipeline.py` is yours and is never overwritten.
 
 Rows land with the payload as a JSON string plus `row_id`, `seq`, `changed_at`
 and `deleted_at`. Deletes are soft — the row keeps its last known state — since
