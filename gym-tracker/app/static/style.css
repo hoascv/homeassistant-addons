@@ -192,6 +192,8 @@ body {
   white-space: pre; -webkit-user-select: text; user-select: text;
 }
 
+.ex-measure { font-size: 0.72rem; padding: 0.1rem 0.2rem; width: auto; flex: 0 0 auto; }
+
 /* Exercise pictures */
 .ex-thumb-btn { padding: 0; border: 0; background: none; cursor: pointer; flex-shrink: 0; }
 .ex-thumb {

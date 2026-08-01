@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.24.0
+
+- **Exercises can be timed rather than counted.** Each one in the 🏋️ Library
+  now has a **reps / time** toggle. A timed exercise asks for a hold instead of
+  repetitions everywhere: logging a set, setting a challenge target, and in the
+  labels — *Plank · 1m 30s* or *3 × 45s* rather than *1×60*.
+- **Plank is timed out of the box**, and an existing timed target that had to be
+  written as reps is moved across on upgrade, so the number keeps meaning what
+  you meant by it.
+- Ticking a timed challenge item now logs the **hold**, so an auto-logged
+  workout matches one you entered by hand — previously it recorded seconds in
+  the reps field.
+- Challenge volume counts held time alongside reps, instead of a plank
+  contributing nothing.
+
 ## 1.23.2
 
 - **Fix a token with non-ASCII characters breaking authentication.** A

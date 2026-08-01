@@ -19,7 +19,7 @@ from flask import Flask, Response, g, jsonify, render_template, request, send_fi
 
 import garmin_client
 
-APP_VERSION = "1.23.2"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.24.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("GYM_DB_PATH", "/data/gym.db")
 OPTIONS_PATH = os.environ.get("GYM_OPTIONS_PATH", "/data/options.json")
@@ -63,6 +63,10 @@ SEED_CHALLENGE = [
 
 # (name, equipment, category) — a home-friendly starter library. The user
 # extends this as they buy equipment (POST /api/exercises).
+# Presets that are held rather than counted. Kept beside the list rather than
+# as a fourth tuple element, so the common case stays a three-tuple.
+TIMED_PRESETS = {"Plank"}
+
 PRESET_EXERCISES = [
     ("Push-up", "Bodyweight", "Push"),
     ("Squat", "Bodyweight", "Legs"),
@@ -289,7 +293,9 @@ def init_db():
             archived INTEGER NOT NULL DEFAULT 0,
             notes TEXT,
             created_at TEXT,
-            updated_at TEXT
+            updated_at TEXT,
+            -- How this exercise is counted: repetitions, or time held.
+            measure TEXT NOT NULL DEFAULT 'reps'
         )
         """
     )
@@ -343,6 +349,10 @@ def init_db():
             supplement_id INTEGER,
             target_sets INTEGER,
             target_reps INTEGER,
+            -- Held for this long, for exercises measured in time. Kept apart
+            -- from target_reps rather than overloading it: a column that means
+            -- two things is a trap for anything reading this later.
+            target_seconds INTEGER,
             dose TEXT,
             challenge_id INTEGER REFERENCES challenges(id),
             created_at TEXT,
@@ -607,6 +617,31 @@ def _migrate_columns(conn):
     ):
         if col not in challenge_cols:
             conn.execute(f"ALTER TABLE challenge_items ADD COLUMN {col} {decl}")
+    exercise_cols = {row[1] for row in conn.execute("PRAGMA table_info(exercises)")}
+    if "measure" not in exercise_cols:
+        conn.execute(
+            "ALTER TABLE exercises ADD COLUMN measure TEXT NOT NULL DEFAULT 'reps'"
+        )
+        # The one seeded exercise that is obviously a hold rather than a count.
+        conn.executemany(
+            "UPDATE exercises SET measure = 'duration' WHERE name = ? AND is_custom = 0",
+            [(name,) for name in TIMED_PRESETS],
+        )
+
+    item_measure_cols = {row[1] for row in conn.execute("PRAGMA table_info(challenge_items)")}
+    if "target_seconds" not in item_measure_cols:
+        conn.execute("ALTER TABLE challenge_items ADD COLUMN target_seconds INTEGER")
+        # Before this existed, a timed target had to be expressed as reps —
+        # a 60-second plank stored as "1 × 60". Move those across so the label
+        # and the logged workout agree about what the number means.
+        moved = conn.execute(
+            "UPDATE challenge_items SET target_seconds = target_reps, target_reps = NULL "
+            "WHERE target_seconds IS NULL AND target_reps IS NOT NULL AND exercise_id IN "
+            "(SELECT id FROM exercises WHERE measure = 'duration')"
+        ).rowcount
+        if moved:
+            _log(f"moved {moved} timed challenge target(s) from reps to seconds")
+
     weight_cols = {row[1] for row in conn.execute("PRAGMA table_info(weight_logs)")}
     if "device" not in weight_cols:
         conn.execute("ALTER TABLE weight_logs ADD COLUMN device TEXT")
@@ -782,8 +817,11 @@ def _seed_defaults(conn):
         for name, equipment, category in PRESET_EXERCISES:
             conn.execute(
                 "INSERT INTO exercises (name, equipment, category, is_custom, archived, "
-                "created_at, updated_at) VALUES (?, ?, ?, 0, 0, ?, ?)",
-                (name, equipment, category, _now_ts(), _now_ts()),
+                "created_at, updated_at, measure) VALUES (?, ?, ?, 0, 0, ?, ?, ?)",
+                (
+                    name, equipment, category, _now_ts(), _now_ts(),
+                    "duration" if name in TIMED_PRESETS else "reps",
+                ),
             )
     if conn.execute("SELECT COUNT(*) FROM supplements").fetchone()[0] == 0:
         for name, amount, unit, quantity, timing, brand in SEED_SUPPLEMENTS:
@@ -1565,8 +1603,9 @@ def _active_challenge_items(conn, challenge_id=None):
         params = (challenge_id,)
     rows = conn.execute(
         "SELECT ci.id, ci.sort_order, ci.item_type, ci.exercise_id, ci.supplement_id, "
-        "ci.target_sets, ci.target_reps, ci.dose, ci.label AS stored_label, ci.challenge_id, "
-        "ci.joined_on, e.name AS exercise_name, s.name AS supplement_name, i.updated_at AS image_v "
+        "ci.target_sets, ci.target_reps, ci.target_seconds, ci.dose, ci.label AS stored_label, "
+        "ci.challenge_id, ci.joined_on, e.name AS exercise_name, e.measure AS measure, "
+        "s.name AS supplement_name, i.updated_at AS image_v "
         "FROM challenge_items ci "
         "LEFT JOIN exercises e ON e.id = ci.exercise_id "
         "LEFT JOIN supplements s ON s.id = ci.supplement_id "
@@ -1598,8 +1637,9 @@ def _challenge_membership(conn, challenge_id, challenge=None):
     rows = conn.execute(
         "SELECT ci.id, ci.sort_order, ci.item_type, ci.exercise_id, ci.supplement_id, "
         "ci.target_sets, ci.target_reps, ci.dose, ci.label AS stored_label, ci.challenge_id, "
-        "ci.archived, ci.created_at, ci.archived_at, ci.joined_on, "
-        "e.name AS exercise_name, s.name AS supplement_name, i.updated_at AS image_v "
+        "ci.archived, ci.created_at, ci.archived_at, ci.joined_on, ci.target_seconds, "
+        "e.name AS exercise_name, e.measure AS measure, s.name AS supplement_name, "
+        "i.updated_at AS image_v "
         "FROM challenge_items ci "
         "LEFT JOIN exercises e ON e.id = ci.exercise_id "
         "LEFT JOIN supplements s ON s.id = ci.supplement_id "
@@ -1801,7 +1841,31 @@ def _challenge_days(conn, ch, membership=None):
     return days
 
 
-def _exercise_target_text(sets, reps):
+MEASURES = ("reps", "duration")
+
+
+def _resolve_measure(value, current="reps"):
+    value = (value or "").strip().lower()
+    if not value:
+        return current, None
+    if value not in MEASURES:
+        return None, f"measure must be one of {', '.join(MEASURES)}"
+    return value, None
+
+
+def _format_seconds(seconds):
+    """60 -> '60s', 90 -> '1m 30s', 120 -> '2m'."""
+    seconds = int(seconds)
+    if seconds < 60:
+        return f"{seconds}s"
+    minutes, rest = divmod(seconds, 60)
+    return f"{minutes}m {rest}s" if rest else f"{minutes}m"
+
+
+def _exercise_target_text(sets, reps, seconds=None):
+    if seconds:
+        held = _format_seconds(seconds)
+        return f"{sets} × {held}" if sets and sets > 1 else held
     if sets and reps:
         return f"{sets}×{reps}"
     if reps:
@@ -1811,6 +1875,11 @@ def _exercise_target_text(sets, reps):
     return None
 
 
+def _row_value(row, column, default=None):
+    """A column that only some of the queries feeding this select."""
+    return row[column] if column in row.keys() else default
+
+
 def _challenge_item_view(r):
     """Present a challenge-item row for the API — the display label uses the
     referenced library row's *live* name, so renaming an exercise or
@@ -1818,7 +1887,9 @@ def _challenge_item_view(r):
     item_type = r["item_type"]
     if item_type == "exercise":
         name = r["exercise_name"] or r["stored_label"]
-        target = _exercise_target_text(r["target_sets"], r["target_reps"])
+        target = _exercise_target_text(
+            r["target_sets"], r["target_reps"], _row_value(r, "target_seconds")
+        )
         label = f"{name}{' · ' + target if target else ''}"
     elif item_type == "supplement":
         name = r["supplement_name"] or r["stored_label"]
@@ -1838,6 +1909,8 @@ def _challenge_item_view(r):
         "supplement_id": r["supplement_id"],
         "target_sets": r["target_sets"],
         "target_reps": r["target_reps"],
+        "target_seconds": _row_value(r, "target_seconds"),
+        "measure": _row_value(r, "measure") or "reps",
         "dose": r["dose"],
         "name": name,
         "label": label,
@@ -2108,7 +2181,7 @@ def api_exercises():
     rows = [
         dict(r)
         for r in db.execute(
-            "SELECT e.id, e.name, e.equipment, e.category, e.is_custom, e.notes, "
+            "SELECT e.id, e.name, e.equipment, e.category, e.is_custom, e.notes, e.measure, "
             "i.updated_at AS image_v FROM exercises e "
             "LEFT JOIN exercise_images i ON i.exercise_id = e.id "
             "WHERE e.archived = 0 ORDER BY e.equipment ASC, e.name ASC"
@@ -2200,11 +2273,14 @@ def api_add_exercise():
         return jsonify({"error": "name is required"}), 400
     equipment = (data.get("equipment") or "Bodyweight").strip() or "Bodyweight"
     category = (data.get("category") or "").strip() or None
+    measure, err = _resolve_measure(data.get("measure"))
+    if err:
+        return jsonify({"error": err}), 400
     db = get_db()
     cur = db.execute(
         "INSERT INTO exercises (name, equipment, category, is_custom, archived, created_at, "
-        "updated_at) VALUES (?, ?, ?, 1, 0, ?, ?)",
-        (name, equipment, category, _now_ts(), _now_ts()),
+        "updated_at, measure) VALUES (?, ?, ?, 1, 0, ?, ?, ?)",
+        (name, equipment, category, _now_ts(), _now_ts(), measure),
     )
     db.commit()
     return jsonify({"status": "created", "id": cur.lastrowid}), 201
@@ -2213,15 +2289,26 @@ def api_add_exercise():
 @app.route("/api/exercises/<int:exercise_id>", methods=["PUT"])
 def api_update_exercise(exercise_id):
     data = request.get_json(force=True, silent=True) or {}
-    name = (data.get("name") or "").strip()
-    if not name:
-        return jsonify({"error": "name is required"}), 400
-    equipment = (data.get("equipment") or "Bodyweight").strip() or "Bodyweight"
-    category = (data.get("category") or "").strip() or None
     db = get_db()
+    existing = db.execute("SELECT * FROM exercises WHERE id = ?", (exercise_id,)).fetchone()
+    if existing is None:
+        return jsonify({"error": "no such exercise"}), 404
+    # Every field falls back to what is already stored, so a caller changing
+    # one thing — the measure, say — needn't resend the rest.
+    name = (data.get("name") or "").strip() or existing["name"]
+    equipment = (data.get("equipment") or "").strip() or existing["equipment"]
+    category = (
+        (data.get("category") or "").strip() or None if "category" in data else existing["category"]
+    )
+    measure, err = _resolve_measure(
+        data.get("measure"), _row_value(existing, "measure") or "reps"
+    )
+    if err:
+        return jsonify({"error": err}), 400
     cur = db.execute(
-        "UPDATE exercises SET name = ?, equipment = ?, category = ?, updated_at = ? WHERE id = ?",
-        (name, equipment, category, _now_ts(), exercise_id),
+        "UPDATE exercises SET name = ?, equipment = ?, category = ?, measure = ?, "
+        "updated_at = ? WHERE id = ?",
+        (name, equipment, category, measure, _now_ts(), exercise_id),
     )
     db.commit()
     if cur.rowcount == 0:
@@ -2713,7 +2800,7 @@ def _challenge_stats(conn, ch):
             }
         )
 
-    volume = {"sessions": 0, "reps": 0, "hr_avg": None, "hr_max": None}
+    volume = {"sessions": 0, "reps": 0, "seconds": 0, "hr_avg": None, "hr_max": None}
     start, last = _challenge_day_range(ch)
     if ids and start is not None:
         placeholders = ",".join("?" for _ in ids)
@@ -2722,6 +2809,9 @@ def _challenge_stats(conn, ch):
         row = conn.execute(
             "SELECT COUNT(*) AS sessions, "
             "SUM(COALESCE(sets, 1) * COALESCE(reps, 0)) AS reps, "
+            # Held time, for the exercises measured that way — counting a plank
+            # as zero reps would hide it entirely.
+            "SUM(COALESCE(sets, 1) * COALESCE(duration_sec, 0)) AS seconds, "
             "AVG(hr_avg) AS hr_avg, MAX(hr_max) AS hr_max "
             f"FROM workout_logs WHERE challenge_item_id IN ({placeholders}) "
             "AND substr(ts, 1, 10) BETWEEN ? AND ?",
@@ -2730,6 +2820,7 @@ def _challenge_stats(conn, ch):
         volume = {
             "sessions": row["sessions"] or 0,
             "reps": int(row["reps"]) if row["reps"] else 0,
+            "seconds": int(row["seconds"]) if row["seconds"] else 0,
             "hr_avg": round(row["hr_avg"]) if row["hr_avg"] is not None else None,
             "hr_max": row["hr_max"],
         }
@@ -2961,7 +3052,7 @@ def api_challenge_toggle():
         return jsonify({"error": "item_id is required"}), 400
     db = get_db()
     item = db.execute(
-        "SELECT id, item_type, exercise_id, target_sets, target_reps "
+        "SELECT id, item_type, exercise_id, target_sets, target_reps, target_seconds "
         "FROM challenge_items WHERE id = ? AND archived = 0",
         (item_id,),
     ).fetchone()
@@ -2998,9 +3089,14 @@ def api_challenge_toggle():
     if item["item_type"] == "exercise" and item["exercise_id"]:
         if done:
             db.execute(
-                "INSERT INTO workout_logs (ts, exercise_id, sets, reps, source, challenge_item_id, "
-                "ts_exact) VALUES (?, ?, ?, ?, 'challenge', ?, ?)",
-                (ts, item["exercise_id"], item["target_sets"], item["target_reps"], item_id, ts_exact),
+                "INSERT INTO workout_logs (ts, exercise_id, sets, reps, duration_sec, source, "
+                "challenge_item_id, ts_exact) VALUES (?, ?, ?, ?, ?, 'challenge', ?, ?)",
+                (
+                    ts, item["exercise_id"], item["target_sets"], item["target_reps"],
+                    # A timed exercise logs the hold, so the entry means the
+                    # same thing as one logged by hand.
+                    _row_value(item, "target_seconds"), item_id, ts_exact,
+                ),
             )
         else:
             db.execute(
@@ -3054,6 +3150,7 @@ def api_add_challenge_item():
             return jsonify({"error": "no such challenge"}), 400
     try:
         target_sets, target_reps = _opt_int(data, "target_sets"), _opt_int(data, "target_reps")
+        target_seconds = _opt_int(data, "target_seconds")
     except ValueError as e:
         return jsonify({"error": f"{e} must be a number"}), 400
     next_order = db.execute(
@@ -3071,15 +3168,15 @@ def api_add_challenge_item():
         if ex is None:
             return jsonify({"error": "no such exercise"}), 400
         label = f"{ex['name']}"
-        target = _exercise_target_text(target_sets, target_reps)
+        target = _exercise_target_text(target_sets, target_reps, target_seconds)
         if target:
             label += f" · {target}"
         cur = db.execute(
             "INSERT INTO challenge_items (label, sort_order, archived, item_type, exercise_id, "
-            "target_sets, target_reps, challenge_id, created_at, updated_at) "
-            "VALUES (?, ?, 0, 'exercise', ?, ?, ?, ?, ?, ?)",
-            (label, next_order, exercise_id, target_sets, target_reps, challenge_id,
-             _now_ts(), _now_ts()),
+            "target_sets, target_reps, target_seconds, challenge_id, created_at, updated_at) "
+            "VALUES (?, ?, 0, 'exercise', ?, ?, ?, ?, ?, ?, ?)",
+            (label, next_order, exercise_id, target_sets, target_reps, target_seconds,
+             challenge_id, _now_ts(), _now_ts()),
         )
     else:
         try:
@@ -3116,6 +3213,11 @@ def api_update_challenge_item(item_id):
         return jsonify({"error": "no such challenge item"}), 404
     try:
         target_sets, target_reps = _opt_int(data, "target_sets"), _opt_int(data, "target_reps")
+        target_seconds = (
+            _opt_int(data, "target_seconds")
+            if "target_seconds" in data
+            else _row_value(item, "target_seconds")
+        )
     except ValueError as e:
         return jsonify({"error": f"{e} must be a number"}), 400
 
@@ -3134,12 +3236,12 @@ def api_update_challenge_item(item_id):
 
     if item["item_type"] == "exercise":
         name = db.execute("SELECT name FROM exercises WHERE id = ?", (item["exercise_id"],)).fetchone()
-        target = _exercise_target_text(target_sets, target_reps)
+        target = _exercise_target_text(target_sets, target_reps, target_seconds)
         label = f"{name['name'] if name else 'Exercise'}{' · ' + target if target else ''}"
         db.execute(
-            "UPDATE challenge_items SET target_sets = ?, target_reps = ?, label = ?, "
-            "updated_at = ? WHERE id = ?",
-            (target_sets, target_reps, label, _now_ts(), item_id),
+            "UPDATE challenge_items SET target_sets = ?, target_reps = ?, target_seconds = ?, "
+            "label = ?, updated_at = ? WHERE id = ?",
+            (target_sets, target_reps, target_seconds, label, _now_ts(), item_id),
         )
     else:
         name = db.execute("SELECT name FROM supplements WHERE id = ?", (item["supplement_id"],)).fetchone()

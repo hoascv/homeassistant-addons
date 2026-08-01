@@ -262,3 +262,99 @@ def test_challenge_items_advertise_their_exercise_picture(client, conn):
     }).get_json()["id"]
     assert next(i for i in client.get("/api/challenge/items").get_json()
                 if i["id"] == sup_item)["image_v"] is None
+
+
+# --- Timed exercises --------------------------------------------------------
+
+
+def test_plank_is_seeded_as_timed_and_others_are_not(client):
+    exercises = {e["name"]: e for g in client.get("/api/exercises").get_json()
+                 for e in g["exercises"]}
+    assert exercises["Plank"]["measure"] == "duration"
+    assert exercises["Push-up"]["measure"] == "reps"
+
+
+def test_the_measure_can_be_changed_on_its_own(client, conn):
+    eid = client.get("/api/exercises").get_json()[0]["exercises"][0]["id"]
+    before = conn.execute("SELECT name, equipment FROM exercises WHERE id = ?", (eid,)).fetchone()
+
+    # Sending only the measure must not blank the rest of the row.
+    assert client.put(f"/api/exercises/{eid}", json={"measure": "duration"}).status_code == 200
+    after = conn.execute(
+        "SELECT name, equipment, measure FROM exercises WHERE id = ?", (eid,)
+    ).fetchone()
+    assert after["measure"] == "duration"
+    assert after["name"] == before["name"] and after["equipment"] == before["equipment"]
+
+
+def test_an_unknown_measure_is_refused(client):
+    eid = client.get("/api/exercises").get_json()[0]["exercises"][0]["id"]
+    r = client.put(f"/api/exercises/{eid}", json={"measure": "furlongs"})
+    assert r.status_code == 400 and "measure" in r.get_json()["error"]
+
+
+def test_a_timed_challenge_item_reads_as_a_hold(client, conn):
+    plank = next(e for g in client.get("/api/exercises").get_json()
+                 for e in g["exercises"] if e["name"] == "Plank")
+    item = client.post("/api/challenge/items", json={
+        "item_type": "exercise", "exercise_id": plank["id"], "target_seconds": 90,
+    }).get_json()["id"]
+
+    view = next(i for i in client.get("/api/challenge/items").get_json() if i["id"] == item)
+    assert view["label"] == "Plank · 1m 30s"   # not "90 reps"
+    assert view["target_seconds"] == 90 and view["target_reps"] is None
+    assert view["measure"] == "duration"
+
+
+def test_sets_of_a_hold_read_naturally(client):
+    plank = next(e for g in client.get("/api/exercises").get_json()
+                 for e in g["exercises"] if e["name"] == "Plank")
+    item = client.post("/api/challenge/items", json={
+        "item_type": "exercise", "exercise_id": plank["id"],
+        "target_sets": 3, "target_seconds": 45,
+    }).get_json()["id"]
+    view = next(i for i in client.get("/api/challenge/items").get_json() if i["id"] == item)
+    assert view["label"] == "Plank · 3 × 45s"
+
+
+def test_ticking_a_timed_item_logs_a_duration_not_reps(client, conn):
+    plank = next(e for g in client.get("/api/exercises").get_json()
+                 for e in g["exercises"] if e["name"] == "Plank")
+    item = client.post("/api/challenge/items", json={
+        "item_type": "exercise", "exercise_id": plank["id"], "target_seconds": 60,
+    }).get_json()["id"]
+
+    client.post("/api/challenge/toggle", json={"item_id": item})
+
+    log = conn.execute(
+        "SELECT reps, duration_sec FROM workout_logs WHERE challenge_item_id = ?", (item,)
+    ).fetchone()
+    # The auto-logged workout means the same thing as one entered by hand.
+    assert log["duration_sec"] == 60 and log["reps"] is None
+
+
+def test_a_timed_target_stored_as_reps_is_migrated(db_path):
+    """Before this existed, a 60-second plank had to be stored as "1 × 60"."""
+    import sqlite3
+
+    import app as gymapp
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    plank = conn.execute("SELECT id FROM exercises WHERE name = 'Plank'").fetchone()["id"]
+    conn.execute(
+        "INSERT INTO challenge_items (label, sort_order, item_type, exercise_id, target_sets, "
+        "target_reps) VALUES ('Plank · 1×60', 99, 'exercise', ?, 1, 60)",
+        (plank,),
+    )
+    conn.execute("ALTER TABLE challenge_items DROP COLUMN target_seconds")
+    conn.commit()
+
+    gymapp._migrate_columns(conn)
+    conn.commit()
+
+    row = conn.execute(
+        "SELECT target_reps, target_seconds FROM challenge_items WHERE sort_order = 99"
+    ).fetchone()
+    conn.close()
+    assert row["target_seconds"] == 60 and row["target_reps"] is None

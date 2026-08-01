@@ -69,6 +69,17 @@ two and edit earlier entries to correct them.
 
 ## The library: exercises and supplements
 
+### Counted or timed
+
+Some exercises are held rather than repeated. Each exercise in the 🏋️ Library
+has a **reps / time** toggle: switch it to *time* and everything asks for a hold
+instead of repetitions — logging a set, setting a challenge target, and the
+labels, which read *Plank · 1m 30s* or *3 × 45s*.
+
+**Plank** is set to time already. If you had a timed target written as reps
+(*1×60* for a minute's plank), it's moved across automatically the first time
+this version runs.
+
 ### Pictures
 
 Every exercise can have a picture. In the 🏋️ Library, tap the thumbnail beside

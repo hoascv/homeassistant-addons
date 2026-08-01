@@ -636,7 +636,11 @@ async function loadChallengeItems() {
       const editField =
         it.item_type === "supplement"
           ? `<input type="text" class="ci-edit-dose" data-id="${it.id}" value="${escapeHtml(it.dose || "")}" placeholder="dose">`
-          : `<input type="number" class="ci-edit-reps" data-id="${it.id}" value="${it.target_reps != null ? it.target_reps : ""}" placeholder="reps" min="0">`;
+          : `<input type="number" class="ci-edit-reps" data-id="${it.id}" data-measure="${it.measure || "reps"}" value="${
+              it.measure === "duration"
+                ? (it.target_seconds != null ? it.target_seconds : "")
+                : (it.target_reps != null ? it.target_reps : "")
+            }" placeholder="${it.measure === "duration" ? "seconds" : "reps"}" min="0">`;
       // The inferred date sits in the placeholder, so it is visible without
       // being mistaken for something that was set deliberately.
       const since = `
@@ -718,6 +722,15 @@ function syncChallengeItemFields() {
   document.getElementById("ci-supplement-fields").hidden = !isSupp;
 }
 document.getElementById("ci-type").addEventListener("change", syncChallengeItemFields);
+document.getElementById("ci-exercise").addEventListener("change", syncChallengeRepsLabel);
+
+function syncChallengeRepsLabel() {
+  const chosen = exerciseById(document.getElementById("ci-exercise").value);
+  const timed = chosen && chosen.measure === "duration";
+  const field = document.getElementById("ci-reps");
+  field.previousSibling.textContent = timed ? "Seconds" : "Reps";
+  field.placeholder = timed ? "e.g. 60" : "e.g. 40";
+}
 
 // Card actions are delegated: the cards are rebuilt on every render.
 document.getElementById("challenge-cards").addEventListener("click", async (e) => {
@@ -734,6 +747,7 @@ document.getElementById("challenge-cards").addEventListener("click", async (e) =
     openSheet("challenge-items-backdrop");
     await populateChallengeItemForm();
     syncChallengeItemFields();
+    syncChallengeRepsLabel();
     loadChallengeItems();
   } else {
     challengeItemsFor = id;
@@ -854,13 +868,18 @@ document.getElementById("challenge-item-form").addEventListener("submit", async 
   } else {
     const exercise_id = document.getElementById("ci-exercise").value;
     if (!exercise_id) { toast("Add an exercise in the Library first."); return; }
+    const chosen = exerciseById(exercise_id);
     payload = {
       item_type: "exercise",
       exercise_id,
       target_sets: document.getElementById("ci-sets").value,
-      target_reps: document.getElementById("ci-reps").value,
       challenge_id: challengeItemsFor,
     };
+    if (chosen && chosen.measure === "duration") {
+      payload.target_seconds = document.getElementById("ci-reps").value;
+    } else {
+      payload.target_reps = document.getElementById("ci-reps").value;
+    }
   }
   try {
     await fetchJSON("api/challenge/items", {
@@ -918,7 +937,11 @@ document.getElementById("challenge-items-list").addEventListener("change", async
   const dose = e.target.closest(".ci-edit-dose");
   const field = reps || dose;
   if (!field) return;
-  const payload = reps ? { target_reps: field.value } : { dose: field.value };
+  const payload = reps
+    ? (field.dataset.measure === "duration"
+        ? { target_seconds: field.value }
+        : { target_reps: field.value })
+    : { dose: field.value };
   try {
     await fetchJSON(`api/challenge/items/${field.dataset.id}`, {
       method: "PUT",
@@ -1090,6 +1113,7 @@ function challengeStatsHtml(st) {
   const volumeBits = [];
   if (v.sessions) volumeBits.push(`${v.sessions} logged`);
   if (v.reps) volumeBits.push(`${v.reps} reps`);
+  if (v.seconds) volumeBits.push(`${fmtDuration(v.seconds)} held`);
   if (v.hr_avg != null) volumeBits.push(`♥ ${v.hr_avg} avg${v.hr_max != null ? ` · ${v.hr_max} max` : ""}`);
 
   return `
@@ -1459,6 +1483,11 @@ async function loadExercises() {
               ${ex.category ? `<div class="ex-cat">${escapeHtml(ex.category)}</div>` : ""}
             </div>
             <div class="exercise-actions">
+              <select class="ex-measure" data-id="${ex.id}" aria-label="How this exercise is counted"
+                      title="Counted in repetitions, or timed">
+                <option value="reps" ${ex.measure === "duration" ? "" : "selected"}>reps</option>
+                <option value="duration" ${ex.measure === "duration" ? "selected" : ""}>time</option>
+              </select>
               <button type="button" class="link-btn ex-log-btn" data-id="${ex.id}">Log</button>
               <button type="button" class="link-btn ex-edit" data-id="${ex.id}" aria-label="Edit">✎</button>
               <button type="button" class="list-del ex-del" data-id="${ex.id}" aria-label="Remove">✕</button>
@@ -1489,6 +1518,20 @@ document.getElementById("exercise-form").addEventListener("submit", async (e) =>
     document.getElementById("exercise-form-name").value = "";
     document.getElementById("exercise-form-equipment").value = "";
     loadExercises();
+  } catch (err) { toast(err.message); }
+});
+
+document.getElementById("exercises-groups").addEventListener("change", async (e) => {
+  const select = e.target.closest(".ex-measure");
+  if (!select) return;
+  try {
+    await fetchJSON(`api/exercises/${select.dataset.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ measure: select.value }),
+    });
+    loadExercises();
+    loadChallenge();   // labels change with it
   } catch (err) { toast(err.message); }
 });
 
@@ -1536,6 +1579,7 @@ document.getElementById("exercises-groups").addEventListener("click", async (e) 
     } catch (err) { toast(err.message); }
     return;
   }
+  if (e.target.closest(".ex-measure")) return;  // the toggle isn't a row tap
   const log = e.target.closest(".ex-log-btn") || e.target.closest(".exercise-row");
   if (log) openWorkoutSheet(Number(log.dataset.id));
 });
@@ -1657,6 +1701,23 @@ function resetWorkoutForm() {
   document.getElementById("workout-form-save").textContent = "Save set";
 }
 
+function exerciseById(id) {
+  return exerciseGroups.flatMap((g) => g.exercises).find((ex) => String(ex.id) === String(id));
+}
+
+// A timed exercise is held, not counted: ask for the hold and hide reps, so
+// nobody has to encode "60 seconds" as 60 reps the way this used to require.
+function syncWorkoutMeasureFields() {
+  const chosen = exerciseById(document.getElementById("workout-form-exercise").value);
+  const timed = chosen && chosen.measure === "duration";
+  const reps = document.getElementById("workout-form-reps");
+  reps.closest("label").hidden = !!timed;
+  const duration = document.getElementById("workout-form-duration");
+  duration.closest("label").classList.toggle("grow", !!timed);
+  duration.placeholder = timed ? "60" : "optional";
+}
+document.getElementById("workout-form-exercise").addEventListener("change", syncWorkoutMeasureFields);
+
 async function openWorkoutSheet(exerciseId) {
   if (!exerciseGroups.length) {
     try { exerciseGroups = await fetchJSON("api/exercises"); } catch (e) { /* ignore */ }
@@ -1672,6 +1733,7 @@ async function openWorkoutSheet(exerciseId) {
   resetWorkoutForm();
   if (exerciseId) select.value = String(exerciseId);
   workoutFilterExerciseId = exerciseId || null;
+  syncWorkoutMeasureFields();
   openSheet("workout-backdrop");
   loadWorkoutHistory(exerciseId);
 }
