@@ -85,6 +85,48 @@ export AIRFLOW_VAR_PIPELINE_PG_USER="$PIPELINE_PG_USER"
 export AIRFLOW_VAR_PIPELINE_PG_PASSWORD="$PIPELINE_PG_PASSWORD"
 export AIRFLOW_VAR_SPARK_JOB_PATH="/opt/pipeline/jobs/example_job.py"
 
+# --- Spark client configuration --------------------------------------------
+# Jobs are submitted in client mode, because Spark standalone supports cluster
+# deploy mode only for JVM applications and rejects a .py one outright. That
+# means the *driver* runs in this container, so this container's spark-defaults
+# is the driver's configuration: without it the driver has no S3A credentials
+# and no Delta jars, however well configured the workers are. Written to a file
+# rather than passed per-task so the MinIO secret never reaches a command line
+# — a failed spark-submit echoes its whole invocation into the task log.
+SPARK_CONF_DIR="${SPARK_HOME}/conf"
+mkdir -p "$SPARK_CONF_DIR"
+
+# hadoop-aws has to match the Hadoop this client was built against, or its AWS
+# SDK dependency arrives at a version S3AFileSystem cannot use. Read from the
+# jars rather than hardcoded, so a Spark bump can't silently desync it.
+HADOOP_VER="$(ls "${SPARK_HOME}"/jars/hadoop-client-api-*.jar 2>/dev/null \
+  | sed -E 's#.*/hadoop-client-api-([0-9.]+)\.jar#\1#' | head -1)"
+
+case "$MINIO_ENDPOINT" in
+  https://*) S3A_SSL=true ;;
+  *)         S3A_SSL=false ;;
+esac
+
+{
+  printf 'spark.jars.packages org.apache.hadoop:hadoop-aws:%s,io.delta:delta-spark_4.1_2.13:4.3.1\n' "${HADOOP_VER:-3.4.2}"
+  printf 'spark.sql.extensions io.delta.sql.DeltaSparkSessionExtension\n'
+  printf 'spark.sql.catalog.spark_catalog org.apache.spark.sql.delta.catalog.DeltaCatalog\n'
+  printf 'spark.hadoop.fs.s3a.endpoint %s\n' "$MINIO_ENDPOINT"
+  printf 'spark.hadoop.fs.s3a.access.key %s\n' "$MINIO_KEY"
+  printf 'spark.hadoop.fs.s3a.secret.key %s\n' "$MINIO_SECRET"
+  printf 'spark.hadoop.fs.s3a.path.style.access true\n'
+  printf 'spark.hadoop.fs.s3a.connection.ssl.enabled %s\n' "$S3A_SSL"
+  # In client mode the executors open connections back to the driver, so it has
+  # to advertise an address they can reach — the container's address on the
+  # Supervisor network, not its loopback. Bind wide, advertise precisely.
+  DRIVER_IP="$(hostname -i 2>/dev/null | awk '{print $1}')"
+  case "$DRIVER_IP" in
+    ""|127.*) : ;;  # nothing usable — let Spark work it out for itself
+    *) printf 'spark.driver.host %s\nspark.driver.bindAddress 0.0.0.0\n' "$DRIVER_IP" ;;
+  esac
+} > "$SPARK_CONF_DIR/spark-defaults.conf"
+chmod 600 "$SPARK_CONF_DIR/spark-defaults.conf"
+
 echo "[Pipeline Airflow] preparing database and admin user"
 # One pass through the entrypoint (it waits for Postgres and migrates the core
 # schema) to add FAB's own tables and settle the admin account.

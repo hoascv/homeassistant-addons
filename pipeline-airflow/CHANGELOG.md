@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.4.0
+
+- **The tracker DAGs can actually read their Variables.** `fetch` read the API
+  token through `airflow.models.Variable`, which in Airflow 3 cannot see
+  Variables from a task: a worker has no metadata-database access, so the call
+  warned and returned the default. A token that *was* set read back as unset and
+  the run failed claiming it was missing. Now `airflow.sdk.Variable`, which
+  resolves through the execution API. The `dag`/`task` decorators and
+  `AirflowFailException` moved to `airflow.sdk` with it.
+- **Spark jobs submit in client mode.** Spark standalone supports cluster deploy
+  mode only for JVM applications — a PySpark job was rejected before it started
+  ("Cluster deploy mode is currently not supported for python applications on
+  standalone clusters"). This affected the example DAG and would have hit the
+  tracker merge next.
+- **The merge job ships with this add-on.** It was referenced at
+  `/opt/pipeline/jobs/trackers_merge.py` but never copied into any image, so the
+  path did not exist. In client mode the driver runs here, so the job lives here.
+- **The driver gets a Spark configuration.** In client mode the driver runs in
+  this container, so the workers' settings do not reach it. The add-on now
+  writes `spark-defaults.conf` with the MinIO S3A credentials, the Delta and
+  hadoop-aws packages, and a driver address the executors can call back on.
+  Written to a file, not passed per task, so the MinIO secret never lands in a
+  task log.
+
 ## 1.3.0
 
 - **An unconfigured tracker now fails the run instead of skipping it.** Skipping

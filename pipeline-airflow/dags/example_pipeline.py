@@ -63,7 +63,8 @@ def example_pipeline():
         task_id="spark_transform",
         conn_id="spark_default",
         application=job_path,
-        deploy_mode="cluster",
+        # Client mode: Spark standalone supports cluster deploy mode only for
+        # JVM applications and rejects a .py one outright.
         name="pipeline-example",
         application_args=[input_path, jdbc_url, RESULT_TABLE, pg_user, pg_password],
     )

@@ -4,7 +4,7 @@ Reads a CSV from MinIO (s3a://), does a tiny aggregation, and writes the result
 to Postgres over JDBC. Triggered by the Pipeline Airflow example DAG, but also
 runnable by hand:
 
-    spark-submit --deploy-mode cluster --master spark://172.30.32.1:7077 \
+    spark-submit --master spark://172.30.32.1:7077 \
         /opt/pipeline/jobs/example_job.py \
         s3a://raw/sample.csv \
         jdbc:postgresql://172.30.32.1:5432/pipeline \

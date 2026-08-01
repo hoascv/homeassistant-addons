@@ -70,9 +70,12 @@ may open it in a new tab instead.
 Watch the Spark master UI (`:8082`) to see the job run. If the first Spark task is
 slow, it's downloading `hadoop-aws` once (cached afterwards).
 
-> **Note:** the example submits in Spark **cluster** deploy mode, so the job file
-> must exist on the Spark worker — it's baked into the Pipeline Spark image. For your
-> own Spark jobs, either stage them on MinIO (`s3a://…`) or bake them in.
+> **Note:** Spark jobs submit in **client** deploy mode, because Spark standalone
+> supports cluster mode only for JVM applications and rejects a PySpark one
+> outright. The driver therefore runs inside *this* add-on: a job file must exist
+> here (`/opt/pipeline/jobs/`), not on the Spark worker, and the driver reads this
+> container's `spark-defaults.conf`, which the add-on writes at start with the
+> MinIO credentials and the Delta packages.
 >
 > **Security:** the web UI is published on the host network. Use a strong admin
 > password and don't expose the host to the internet.

@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.2.1
+
+- Documented that jobs run in **client mode**, not cluster mode: Spark
+  standalone rejects a PySpark application submitted with `--deploy-mode
+  cluster`. The driver therefore runs in the submitting container, which is why
+  the tracker merge job now ships with the Airflow add-on rather than this one.
+- Corrected the documented Spark version (4.1, not 4.2).
+
 ## 1.2.0
 
 - The Delta tables now carry an **actor** column — who each change came from:

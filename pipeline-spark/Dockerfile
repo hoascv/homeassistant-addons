@@ -24,7 +24,9 @@ RUN apt-get update \
     && printf 'spark.jars.packages org.apache.hadoop:hadoop-aws:%s,io.delta:delta-spark_4.1_2.13:4.3.1\nspark.master.rest.enabled true\nspark.sql.extensions io.delta.sql.DeltaSparkSessionExtension\nspark.sql.catalog.spark_catalog org.apache.spark.sql.delta.catalog.DeltaCatalog\n' "${HADOOP_VER}" \
          > /opt/pipeline/base-defaults.conf
 
-# Example PySpark job, baked in so a cluster-mode submit finds it on the worker.
+# Example PySpark job, kept here so it can be run by hand from this container.
+# Airflow submits its own copy: Spark standalone runs Python applications in
+# client mode only, so the driver — and the .py file it reads — live there.
 COPY jobs/example_job.py /opt/pipeline/jobs/example_job.py
 COPY run.sh /run.sh
 RUN chmod +x /run.sh

@@ -26,7 +26,8 @@ its configuration, then set these Airflow Variables:
     coop_tracker_base_url   http://172.30.32.1:8098
     coop_tracker_api_token  <the token>
 
-A source with no token set is skipped, so one tracker can run without the other.
+A source with no token set fails loudly rather than skipping: a pipeline that is
+quietly loading nothing looks exactly like a healthy one.
 """
 from __future__ import annotations
 
@@ -36,9 +37,13 @@ import urllib.request
 
 import logging
 
-from airflow.decorators import dag, task
-from airflow.exceptions import AirflowFailException
-from airflow.models import Variable
+# airflow.sdk, not airflow.models/decorators/exceptions. In Airflow 3 a task
+# runs in a worker process with no metadata-database access, and the legacy
+# `airflow.models.Variable.get` cannot see Variables from there — it warns, then
+# quietly returns the default, so a token that is set reads back as unset. The
+# SDK's Variable resolves through the execution API and does see them.
+from airflow.sdk import Variable, dag, task
+from airflow.sdk.exceptions import AirflowFailException
 from airflow.providers.amazon.aws.hooks.s3 import S3Hook
 from airflow.providers.apache.spark.operators.spark_submit import SparkSubmitOperator
 from airflow.providers.postgres.hooks.postgres import PostgresHook
@@ -100,7 +105,7 @@ def build_dag(source: str, default_url: str):
     def ingest():
         @task
         def fetch() -> dict:
-            token = Variable.get(f"{source}_api_token", default_var="").strip()
+            token = Variable.get(f"{source}_api_token", default="").strip()
             if not token:
                 # Fails rather than skips. A skip leaves the run green, and a
                 # pipeline that is quietly loading nothing looks exactly like a
@@ -111,7 +116,7 @@ def build_dag(source: str, default_url: str):
                     f"add-on's configuration, and {source}_base_url to the address its "
                     "port is published on."
                 )
-            base_url = Variable.get(f"{source}_base_url", default_var=default_url)
+            base_url = Variable.get(f"{source}_base_url", default=default_url)
 
             pg = PostgresHook(postgres_conn_id=PG_CONN_ID)
             with pg.get_conn() as connection, connection.cursor() as cursor:
@@ -195,11 +200,16 @@ def build_dag(source: str, default_url: str):
         batch = fetch()
         gate = has_work(batch)
 
+        # Client mode, not cluster: Spark standalone refuses a *Python*
+        # application in cluster deploy mode ("Cluster deploy mode is currently
+        # not supported for python applications on standalone clusters"). The
+        # driver therefore runs inside the Airflow container, which is why the
+        # add-on writes S3A credentials and the Delta packages into this
+        # container's spark-defaults.conf — see run.sh.
         merge = SparkSubmitOperator(
             task_id="merge_into_delta",
             conn_id=SPARK_CONN_ID,
             application=MERGE_JOB,
-            deploy_mode="cluster",
             name=f"trackers-merge-{source}",
             application_args=[source, "{{ ti.xcom_pull(task_ids='fetch')['prefix'] }}", LAKEHOUSE_ROOT],
         )

@@ -36,12 +36,21 @@ RUN pip install --no-cache-dir \
     "apache-airflow-providers-postgres" \
     "apache-airflow-providers-fab"
 
+# The tracker merge job runs its driver here — Spark standalone cannot run a
+# Python application in cluster deploy mode, so submits are client mode — which
+# means `import delta.tables` has to resolve in *this* image, not only on the
+# workers. Keep this version equal to the delta-spark jar coordinate in run.sh
+# and in the Pipeline Spark add-on. --no-deps because it pins pyspark<=4.1.1
+# while this client is 4.1.3; spark-submit puts the matching pyspark on
+# PYTHONPATH from SPARK_HOME anyway.
+RUN pip install --no-cache-dir --no-deps "delta-spark==4.3.1"
+
 # --- Back to root so the add-on can write /data and /share -----------------
 USER root
-# Example DAG (seeded into /share on first boot) and the PySpark job it submits
-# (baked here too so a cluster-mode spark-submit can read the local path).
+# The DAGs (seeded into /share on boot) and the PySpark jobs they submit. The
+# jobs live here rather than in the Spark add-on because the driver is local.
 COPY dags/ /opt/airflow/project-dags/
-COPY jobs/example_job.py /opt/pipeline/jobs/example_job.py
+COPY jobs/ /opt/pipeline/jobs/
 COPY run.sh /run.sh
 RUN chmod +x /run.sh
 

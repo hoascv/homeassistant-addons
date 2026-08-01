@@ -1,6 +1,6 @@
 # Pipeline Spark
 
-Apache Spark 4.2 running as a **single-node standalone cluster** (a master and one
+Apache Spark 4.1 running as a **single-node standalone cluster** (a master and one
 worker in the same add-on) for the data-pipeline stack. Airflow submits jobs to it;
 jobs read/write MinIO over `s3a://` and write results to Postgres over JDBC.
 
@@ -32,15 +32,28 @@ Part of a four-add-on data pipeline: **Pipeline Postgres**, **Pipeline MinIO**,
 
 ## Submitting jobs
 
-Airflow submits with `--deploy-mode cluster` to the standalone REST API, so the
-driver runs inside this add-on (no ports need to be published back from Airflow).
-For a cluster-mode submit the job file must exist **on the worker** — either baked
-into this image (like the example) or staged on MinIO (`s3a://…`).
-
-To submit by hand from elsewhere:
+Spark standalone supports `--deploy-mode cluster` **only for JVM applications**.
+A PySpark job submitted that way is rejected outright:
 
 ```
-spark-submit --master spark://<host-ip>:7077 --deploy-mode cluster \
+Cluster deploy mode is currently not supported for python applications
+on standalone clusters
+```
+
+So jobs here run in **client mode**: the driver runs wherever the submit came
+from — for scheduled jobs, inside the Pipeline Airflow add-on — and only the
+executors run here. Two consequences worth knowing:
+
+- The job's `.py` file must exist **where you submit from**, not on the worker.
+  That is why the tracker merge job lives in the Airflow add-on.
+- The driver reads the *submitting* container's `spark-defaults.conf`. Airflow
+  writes its own with the MinIO credentials and Delta packages; the settings
+  below configure this add-on's executors.
+
+To submit by hand from inside this add-on:
+
+```
+spark-submit --master spark://<host-ip>:7077 \
   /opt/pipeline/jobs/example_job.py s3a://raw/sample.csv \
   jdbc:postgresql://<host-ip>:5432/pipeline pipeline_result pipeline <pw>
 ```
