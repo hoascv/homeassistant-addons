@@ -163,3 +163,58 @@ def test_a_token_with_non_ascii_characters_still_works(client, set_options):
     assert client.get(
         "/api/changes", headers={"Authorization": "Bearer cafe-tres-securise"}
     ).status_code == 403
+
+
+# --- Who made the change ----------------------------------------------------
+
+
+def _actors(conn, since=0):
+    return [
+        (r["table_name"], r["op"], r["actor"])
+        for r in conn.execute(
+            "SELECT table_name, op, actor FROM change_log WHERE seq > ? ORDER BY seq", (since,)
+        )
+    ]
+
+
+def test_a_request_is_recorded_as_a_user(client, conn):
+    start = _seq(conn)
+    client.post("/api/log", json={"type": "egg", "count": 3})
+
+    assert _actors(conn, start) == [("logs", "I", "user")]
+
+
+def test_the_background_loop_is_recorded_as_automation(conn):
+    start = _seq(conn)
+    standalone = coopapp._db_connect_standalone()
+    try:
+        assert standalone.actor == "automation"
+        standalone.execute("INSERT INTO chickens (name, status) VALUES ('Mabel', 'active')")
+        standalone.commit()
+    finally:
+        standalone.close()
+
+    assert _actors(conn, start) == [("chickens", "I", "automation")]
+
+
+def test_a_connection_that_claims_nothing_says_so(conn, db_path):
+    import sqlite3
+
+    start = _seq(conn)
+    plain = sqlite3.connect(db_path, factory=coopapp._AttributedConnection)
+    try:
+        # Must not inherit the previous actor: confidently wrong attribution is
+        # worse than none.
+        plain.execute("INSERT INTO chickens (name, status) VALUES ('Nameless', 'active')")
+        plain.commit()
+    finally:
+        plain.close()
+
+    assert _actors(conn, start) == [("chickens", "I", "unknown")]
+
+
+def test_the_feed_carries_the_actor(client, conn):
+    start = _seq(conn)
+    client.post("/api/log", json={"type": "egg", "count": 2})
+
+    assert _changes(client, since=start)["changes"][0]["actor"] == "user"

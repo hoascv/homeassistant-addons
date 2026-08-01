@@ -79,7 +79,9 @@ publish its port in the add-on's Network section.
   food types, health events, nesting boxes), plus the `max_seq` the snapshot
   corresponds to. Start here.
 - **`GET /api/changes?since=<seq>&limit=<n>`** — everything after `seq`, oldest
-  first. Each entry carries the row's current state for an insert or update,
+  first. Each entry names its **actor** — `user`, `automation` or `migration` —
+  so you can tell a value you entered from one the add-on wrote for you. Each
+  entry carries the row's current state for an insert or update,
   and `null` for a delete. Apply them in order.
 
 Watch `full_reload_required` — entries are pruned after 90 days, so a pipeline

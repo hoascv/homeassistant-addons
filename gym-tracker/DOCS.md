@@ -378,7 +378,9 @@ publish its port in the add-on's Network section.
 - **`GET /api/export`** — every tracked table, plus the `max_seq` the snapshot
   corresponds to. Start here.
 - **`GET /api/changes?since=<seq>&limit=<n>`** — everything after `seq`, oldest
-  first. Each entry has the row's current state for an insert or update, and
+  first. Each entry names its **actor** — `user`, `automation` or `migration` —
+  so you can tell a value you entered from one the add-on wrote for you. Each
+  entry has the row's current state for an insert or update, and
   `null` for a delete. Apply them in order.
 
 Deletes are in the feed, which matters here: un-ticking a challenge item

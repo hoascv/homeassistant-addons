@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.39.0
+
+- **Every recorded change now says who made it**: `user` for something done in
+  the app, `automation` for the add-on's own background work, `migration` for an
+  upgrade or one-off fix. It comes through on the change feed, so a pipeline can
+  tell a figure you entered from one the software wrote.
+- Changes recorded before this leave it empty rather than being guessed at.
+
 ## 1.38.2
 
 - **Fix a token with non-ASCII characters breaking authentication.** A

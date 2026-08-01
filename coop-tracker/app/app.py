@@ -65,7 +65,7 @@ except ImportError as e:
     SKLEARN_AVAILABLE = False
     SKLEARN_ERROR = str(e)
 
-APP_VERSION = "1.38.2"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.39.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("COOP_DB_PATH", "/data/coop.db")
 OPTIONS_PATH = os.environ.get("COOP_OPTIONS_PATH", "/data/options.json")
@@ -432,10 +432,41 @@ def get_egg_vision_training_config():
     }
 
 
+class _AttributedConnection(sqlite3.Connection):
+    """A connection that records who its changes came from.
+
+    The triggers write change_log rows with a null actor; this stamps them on
+    the way out. Doing it here rather than at the ~40 write sites means no site
+    can forget, and doing it inside the write transaction means the unstamped
+    rows are provably ours — SQLite holds the write lock from a connection's
+    first write until it commits, so nobody else can have left rows in that
+    state meanwhile.
+
+    A trigger can't read this itself: SQLite rejects a trigger referencing a
+    TEMP table, and a shared ordinary table would have a connection that forgot
+    to set a value silently inherit the previous one, which is worse than
+    recording nothing.
+    """
+
+    # Overwritten by whichever helper opened the connection. Left honest rather
+    # than optimistic for any path that goes through neither.
+    actor = "unknown"
+
+    def commit(self):
+        try:
+            self.execute(
+                "UPDATE change_log SET actor = ? WHERE actor IS NULL", (self.actor,)
+            )
+        except sqlite3.OperationalError:
+            pass  # change_log not created yet, i.e. the very first init_db
+        super().commit()
+
+
 def get_db():
     if "db" not in g:
         os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-        g.db = sqlite3.connect(DB_PATH)
+        g.db = sqlite3.connect(DB_PATH, factory=_AttributedConnection)
+        g.db.actor = "user"
         g.db.row_factory = sqlite3.Row
     return g.db
 
@@ -449,7 +480,10 @@ def close_db(exception=None):
 
 def init_db():
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
+    # Everything this runs — schema changes, seeds, one-off data fixes — is
+    # attributed to the upgrade rather than to whoever happened to start it.
+    conn = sqlite3.connect(DB_PATH, factory=_AttributedConnection)
+    conn.actor = "migration"
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS logs (
@@ -621,13 +655,21 @@ def init_db():
             table_name TEXT NOT NULL,
             row_id TEXT NOT NULL,
             op TEXT NOT NULL,
-            changed_at TEXT NOT NULL
+            changed_at TEXT NOT NULL,
+            -- Who the change came from: user, automation or migration. Set on
+            -- commit, not by the trigger — see _AttributedConnection.
+            actor TEXT
         )
         """
     )
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_change_log_table ON change_log(table_name, seq)"
     )
+    change_cols = {row[1] for row in conn.execute("PRAGMA table_info(change_log)")}
+    if "actor" not in change_cols:
+        # Left null on existing rows: those changes genuinely predate the
+        # record, and guessing an actor for them would be inventing history.
+        conn.execute("ALTER TABLE change_log ADD COLUMN actor TEXT")
     _install_change_triggers(conn)
 
     conn.commit()
@@ -692,7 +734,8 @@ def _prune_change_log(conn, keep_days=CHANGE_LOG_KEEP_DAYS):
 
 def _db_connect_standalone():
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, factory=_AttributedConnection)
+    conn.actor = "automation"
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -3306,7 +3349,7 @@ def api_changes():
         "SELECT COALESCE(MIN(seq), 0) AS lo, COALESCE(MAX(seq), 0) AS hi FROM change_log"
     ).fetchone()
     rows = db.execute(
-        "SELECT seq, table_name, row_id, op, changed_at FROM change_log "
+        "SELECT seq, table_name, row_id, op, changed_at, actor FROM change_log "
         "WHERE seq > ? ORDER BY seq ASC LIMIT ?",
         (since, limit),
     ).fetchall()
@@ -3328,6 +3371,9 @@ def api_changes():
                 "row_id": r["row_id"],
                 "op": r["op"],
                 "changed_at": r["changed_at"],
+                # user, automation or migration — null for changes recorded
+                # before this was tracked.
+                "actor": r["actor"],
                 "row": payload,
             }
         )

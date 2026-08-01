@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.2.0
+
+- The Delta tables now carry an **actor** column — who each change came from:
+  `user`, `automation` or `migration`.
+
 ## 1.1.0
 
 - **Delta Lake support.** `delta-spark` is pulled at first submit alongside

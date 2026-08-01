@@ -47,6 +47,9 @@ CHANGE_SCHEMA = StructType(
         StructField("data", StringType(), True),
         StructField("seq", LongType(), False),
         StructField("changed_at", StringType(), True),
+        # user, automation or migration — null for changes recorded before the
+        # trackers began tracking it.
+        StructField("actor", StringType(), True),
         StructField("op", StringType(), False),
     ]
 )
@@ -73,7 +76,8 @@ def _rows_from_payload(payload):
                     "the add-on needs to be new enough to send `keys`"
                 )
             for row in rows:
-                yield table, (str(row[key]), json.dumps(row), seq, None, "I")
+                # A snapshot has no single actor: it is the state, not a change.
+                yield table, (str(row[key]), json.dumps(row), seq, None, None, "I")
     else:  # /api/changes
         for change in payload.get("changes", []):
             yield change["table"], (
@@ -81,6 +85,7 @@ def _rows_from_payload(payload):
                 json.dumps(change["row"]) if change["row"] is not None else None,
                 int(change["seq"]),
                 change.get("changed_at"),
+                change.get("actor"),
                 change["op"],
             )
 

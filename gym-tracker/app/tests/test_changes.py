@@ -223,3 +223,103 @@ def test_a_token_with_non_ascii_characters_still_works(client, set_options):
     assert client.get(
         "/api/changes", headers={"Authorization": "Bearer cafe-tres-securise"}
     ).status_code == 403
+
+
+# --- Who made the change ----------------------------------------------------
+
+
+def _actors(conn, since=0):
+    return [
+        (r["table_name"], r["op"], r["actor"])
+        for r in conn.execute(
+            "SELECT table_name, op, actor FROM change_log WHERE seq > ? ORDER BY seq", (since,)
+        )
+    ]
+
+
+def test_a_request_is_recorded_as_a_user(client, conn):
+    start = _seq(conn)
+    client.post("/api/weight", json={"weight_kg": 100.4})
+
+    assert _actors(conn, start) == [("weight_logs", "I", "user")]
+
+
+def test_the_background_loop_is_recorded_as_automation(conn, monkeypatch):
+    from datetime import date
+
+    start = _seq(conn)
+    # _db_connect_standalone is what the loop uses, and what decides the actor.
+    standalone = gymapp._db_connect_standalone()
+    try:
+        assert standalone.actor == "automation"
+        standalone.execute(
+            "INSERT INTO garmin_daily (day, stress_avg) VALUES (?, 31)", (date.today().isoformat(),)
+        )
+        standalone.commit()
+    finally:
+        standalone.close()
+
+    assert _actors(conn, start) == [("garmin_daily", "I", "automation")]
+
+
+def test_a_migration_is_recorded_as_a_migration(client, conn, db_path):
+    # An entry with a heart rate read from a placeholder timestamp: the
+    # one-off fix that clears these runs inside init_db.
+    conn.execute("INSERT OR IGNORE INTO exercises (id, name) VALUES (1, 'Push-up')")
+    conn.execute(
+        "INSERT INTO workout_logs (ts, exercise_id, source, ts_exact, hr_avg, hr_max) "
+        "VALUES ('2026-07-09T12:00:00', 1, 'manual', 0, 78, 81)"
+    )
+    gymapp._set_app_state(conn, "placeholder_hr_cleared", "")
+    conn.commit()
+    start = _seq(conn)
+
+    gymapp.init_db()
+
+    recorded = _actors(conn, start)
+    assert recorded, "the migration made no recorded change"
+    assert {actor for _, _, actor in recorded} == {"migration"}
+    assert ("workout_logs", "U", "migration") in recorded
+
+
+def test_a_connection_that_claims_nothing_says_so(conn, db_path):
+    import sqlite3
+
+    start = _seq(conn)
+    plain = sqlite3.connect(db_path, factory=gymapp._AttributedConnection)
+    try:
+        # Deliberately sets no actor. It must not inherit the last one used —
+        # attribution that is confidently wrong is worse than none.
+        plain.execute("INSERT INTO weight_logs (ts, weight_kg, ts_exact) VALUES ('x', 1, 0)")
+        plain.commit()
+    finally:
+        plain.close()
+
+    assert _actors(conn, start) == [("weight_logs", "I", "unknown")]
+
+
+def test_the_same_row_touched_twice_keeps_both_actors(client, conn):
+    wid = client.post("/api/weight", json={"weight_kg": 100.0}).get_json()["id"]
+    start = _seq(conn)
+
+    standalone = gymapp._db_connect_standalone()
+    try:
+        standalone.execute("UPDATE weight_logs SET notes = 'by the loop' WHERE id = ?", (wid,))
+        standalone.commit()
+    finally:
+        standalone.close()
+    client.put(f"/api/weight/{wid}", json={"weight_kg": 100.6})
+
+    # The history keeps both, which a single column on the table could not.
+    assert _actors(conn, start) == [
+        ("weight_logs", "U", "automation"),
+        ("weight_logs", "U", "user"),
+    ]
+
+
+def test_the_feed_carries_the_actor(client, conn):
+    start = _seq(conn)
+    client.post("/api/weight", json={"weight_kg": 100.9})
+
+    entry = _changes(client, since=start)["changes"][0]
+    assert entry["actor"] == "user"
