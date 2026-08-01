@@ -105,4 +105,46 @@ _AIRFLOW_DB_MIGRATE=true /entrypoint bash -c '
 '
 
 echo "[Pipeline Airflow] starting (LocalExecutor, metadata DB @ ${PG_HOST}:${PG_PORT}, UI :8080)"
-exec /entrypoint airflow standalone
+
+# Not `airflow standalone`. It overrides the auth manager on the way up —
+#
+#     if conf.get("core", "auth_manager") != simple_auth_manager_classpath:
+#         self.print_output("standalone", "Forcing auth manager to SimpleAuthManager")
+#
+# — so the admin account created above would exist while the running server
+# ignored it, which is exactly the "changeme doesn't work" symptom. standalone
+# is only a convenience wrapper around these four components anyway; the
+# entrypoint waits for the database for each of them.
+COMPONENTS=(api-server scheduler dag-processor triggerer)
+pids=()
+
+shutdown() {
+  trap - TERM INT
+  kill "${pids[@]}" 2>/dev/null || true
+  wait 2>/dev/null || true
+}
+trap shutdown TERM INT
+
+for component in "${COMPONENTS[@]}"; do
+  /entrypoint airflow "$component" &
+  pids+=("$!")
+  echo "[Pipeline Airflow] started $component (pid $!)"
+done
+
+# If any one of them dies the add-on is broken, so stop the rest and let Home
+# Assistant restart the lot rather than limping on half-running. Polled rather
+# than `wait -n`, which needs bash 4.3 and so can't be exercised on every
+# machine this is developed from; a few seconds' notice is ample here. The
+# sleep runs in the background and is waited on so a stop signal is acted on
+# immediately instead of after the current sleep.
+while true; do
+  for pid in "${pids[@]}"; do
+    if ! kill -0 "$pid" 2>/dev/null; then
+      echo "[Pipeline Airflow] a component exited — shutting the rest down"
+      shutdown
+      exit 1
+    fi
+  done
+  sleep 5 &
+  wait "$!" || true
+done

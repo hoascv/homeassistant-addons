@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.2.1
+
+- **Actually fix the login.** 1.2.0 created the admin account correctly, but the
+  add-on then started Airflow with `airflow standalone`, which forces its own
+  development auth manager on the way up and discarded it — so the account
+  existed while the running server ignored it. The four Airflow components are
+  now started directly, which is all `standalone` was doing anyway.
+- If one component stops, the add-on stops the rest so Home Assistant restarts
+  it, rather than limping along half-running.
+
 ## 1.2.0
 
 - **Fix not being able to log in.** `admin_user` and `admin_password` were
