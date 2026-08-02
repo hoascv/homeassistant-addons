@@ -1,5 +1,31 @@
 # Changelog
 
+## 2.0.0
+
+- **Spark jobs now run over Spark Connect.** The driver moves out of this
+  container and into the Pipeline Spark add-on. Previously it ran here: Spark
+  standalone cannot run a PySpark driver in cluster mode, so the only option was
+  a client-mode driver sharing this container with the scheduler and api-server,
+  and needing the executors to call back across the add-on boundary. Now this
+  add-on is a gRPC client and the whole Spark conversation stays inside the
+  Spark add-on.
+- **No JVM and no Spark distribution here any more** — about 700 MB less image.
+  `pyspark-client` replaces them; `delta-spark` stays for the client half of
+  Delta Connect only.
+- **The MinIO secret no longer touches this container.** There is no
+  `spark-defaults.conf` to write, because a Connect client cannot configure the
+  server. The `spark_default` connection is gone for the same reason.
+- **`spark_port` is replaced by `spark_connect_port`** (default 15002). It is
+  handed to the DAGs as the `spark_connect_url` Variable, so the endpoint is
+  configured in the add-on options and nowhere else.
+- The example DAG uses Connect too. It is yours to edit and is never
+  overwritten, so an older copy in `/share` still calling `SparkSubmitOperator`
+  will fail — the add-on now says so at startup. Delete it to get the new one.
+- **A Variable that exists but can't be found is now diagnosed, not guessed at.**
+  `fetch` distinguishes "no Variable with this exact key" from "set but empty",
+  and the first case says what actually causes it: a key with a trailing space
+  looks identical in the Variables list and defeats an exact lookup.
+
 ## 1.5.0
 
 - **The merge job flattens the feed in Spark, not on the driver.** It used to

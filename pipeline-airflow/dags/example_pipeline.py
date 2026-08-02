@@ -2,13 +2,19 @@
 
 Proves the four add-ons are wired together:
   1. generate a small CSV and upload it to MinIO (bucket `raw`) via the S3 API,
-  2. submit a PySpark job to the Spark standalone cluster that reads it from
-     `s3a://` and writes an aggregate to Postgres over JDBC,
+  2. run a Spark job over **Spark Connect** that reads it from `s3a://` and
+     writes an aggregate to Postgres over JDBC,
   3. assert the result table in Postgres has rows.
 
-Connections (`minio_default`, `spark_default`, `pipeline_pg`) and the pipeline
-Postgres settings are provided by the add-on via environment variables, so this
-DAG needs no manual setup — just unpause and trigger it.
+There is no spark-submit here and no Spark installation in this add-on. The
+session is a gRPC client; the driver runs inside the Pipeline Spark add-on,
+which already holds the S3A credentials and the JDBC driver. Standalone cannot
+run a PySpark driver in cluster mode at all, and a client-mode driver would put
+Spark's heap next to the scheduler.
+
+Connections (`minio_default`, `pipeline_pg`) and the pipeline Postgres settings
+are provided by the add-on via environment variables, so this DAG needs no
+manual setup — just unpause and trigger it.
 """
 from __future__ import annotations
 
@@ -16,15 +22,14 @@ import csv
 import datetime
 import io
 
-from airflow.decorators import dag, task
-from airflow.models import Variable
+from airflow.sdk import Variable, dag, task
 from airflow.providers.amazon.aws.hooks.s3 import S3Hook
-from airflow.providers.apache.spark.operators.spark_submit import SparkSubmitOperator
 from airflow.providers.common.sql.operators.sql import SQLCheckOperator
 
 BUCKET = "raw"
 KEY = "sample.csv"
 RESULT_TABLE = "pipeline_result"
+SPARK_CONNECT_URL = "sc://172.30.32.1:15002"
 
 
 @dag(
@@ -49,25 +54,44 @@ def example_pipeline():
         hook.load_string(buf.getvalue(), key=KEY, bucket_name=BUCKET, replace=True)
         return f"s3a://{BUCKET}/{KEY}"
 
-    input_path = generate_and_upload()
+    @task
+    def spark_transform(input_path: str) -> int:
+        # Imported here rather than at module scope: the dag-processor re-parses
+        # this folder constantly and needn't pay for pyspark each time.
+        from pyspark.sql import SparkSession, functions as F  # noqa: PLC0415
 
-    pg_host = Variable.get("pg_host", default_var="172.30.32.1")
-    pg_port = Variable.get("pg_port", default_var="5432")
-    pg_db = Variable.get("pipeline_pg_db", default_var="pipeline")
-    pg_user = Variable.get("pipeline_pg_user", default_var="pipeline")
-    pg_password = Variable.get("pipeline_pg_password", default_var="")
-    job_path = Variable.get("spark_job_path", default_var="/opt/pipeline/jobs/example_job.py")
-    jdbc_url = f"jdbc:postgresql://{pg_host}:{pg_port}/{pg_db}"
+        pg_host = Variable.get("pg_host", default="172.30.32.1")
+        pg_port = Variable.get("pg_port", default="5432")
+        pg_db = Variable.get("pipeline_pg_db", default="pipeline")
+        pg_user = Variable.get("pipeline_pg_user", default="pipeline")
+        pg_password = Variable.get("pipeline_pg_password", default="")
+        jdbc_url = f"jdbc:postgresql://{pg_host}:{pg_port}/{pg_db}"
 
-    spark_transform = SparkSubmitOperator(
-        task_id="spark_transform",
-        conn_id="spark_default",
-        application=job_path,
-        # Client mode: Spark standalone supports cluster deploy mode only for
-        # JVM applications and rejects a .py one outright.
-        name="pipeline-example",
-        application_args=[input_path, jdbc_url, RESULT_TABLE, pg_user, pg_password],
-    )
+        remote = Variable.get("spark_connect_url", default=SPARK_CONNECT_URL)
+        spark = (
+            SparkSession.builder.appName("pipeline-example").remote(remote).getOrCreate()
+        )
+        try:
+            df = spark.read.option("header", True).option("inferSchema", True).csv(
+                input_path
+            )
+            result = df.groupBy("category").agg(
+                F.count("*").alias("n"),
+                F.round(F.avg("value"), 2).alias("avg_value"),
+            )
+            (
+                result.write.format("jdbc")
+                .option("url", jdbc_url)
+                .option("dbtable", RESULT_TABLE)
+                .option("user", pg_user)
+                .option("password", pg_password)
+                .option("driver", "org.postgresql.Driver")
+                .mode("overwrite")
+                .save()
+            )
+            return result.count()
+        finally:
+            spark.stop()
 
     assert_result = SQLCheckOperator(
         task_id="assert_result",
@@ -75,7 +99,7 @@ def example_pipeline():
         sql=f"SELECT count(*) FROM {RESULT_TABLE}",
     )
 
-    input_path >> spark_transform >> assert_result
+    spark_transform(generate_and_upload()) >> assert_result
 
 
 example_pipeline()

@@ -134,17 +134,10 @@ def _snapshot(raw):
     )
 
 
-def main(source, raw_prefix, lakehouse_root):
-    spark = (
-        SparkSession.builder.appName(f"trackers-merge-{source}")
-        .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
-        .config(
-            "spark.sql.catalog.spark_catalog",
-            "org.apache.spark.sql.delta.catalog.DeltaCatalog",
-        )
-        .getOrCreate()
-    )
-
+def merge_batch(spark, source, raw_prefix, lakehouse_root):
+    """Apply one archived batch. Returns a row per table written, so a caller
+    that isn't reading this process's stdout — Airflow, over Spark Connect —
+    can still report what happened."""
     # wholetext, because each archived response is one JSON document. The feed
     # is written compactly and so has no embedded newlines, but relying on that
     # would make the read depend on how the archive happens to be formatted.
@@ -176,10 +169,9 @@ def main(source, raw_prefix, lakehouse_root):
     # is written to its own Delta path. Tens of strings, never the data.
     tables = sorted(row["table"] for row in rows.select("table").distinct().collect())
     if not tables:
-        print(f"[trackers_merge] nothing to merge for {source}")
-        spark.stop()
-        return
+        return []
 
+    written = []
     for table in tables:
         target_path = f"{lakehouse_root}/{source}/{table}"
         updates = (
@@ -215,14 +207,43 @@ def main(source, raw_prefix, lakehouse_root):
         else:
             updates.write.format("delta").mode("overwrite").save(target_path)
             action = "created"
-        print(f"[trackers_merge] {action} {updates.count()} row(s) into {target_path}")
+        written.append({"table": table, "action": action, "rows": updates.count()})
 
-    spark.stop()
+    return written
+
+
+def main(source, raw_prefix, lakehouse_root, remote=None):
+    builder = SparkSession.builder.appName(f"trackers-merge-{source}")
+    if remote:
+        # Spark Connect: the session lives in the Pipeline Spark add-on, which
+        # owns the Delta extensions and the S3A credentials. Setting them from
+        # here would be ignored — a Connect client cannot configure the server.
+        builder = builder.remote(remote)
+    else:
+        builder = builder.config(
+            "spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension"
+        ).config(
+            "spark.sql.catalog.spark_catalog",
+            "org.apache.spark.sql.delta.catalog.DeltaCatalog",
+        )
+    spark = builder.getOrCreate()
+    try:
+        written = merge_batch(spark, source, raw_prefix, lakehouse_root)
+        if not written:
+            print(f"[trackers_merge] nothing to merge for {source}")
+        for entry in written:
+            print(
+                f"[trackers_merge] {entry['action']} {entry['rows']} row(s) into "
+                f"{lakehouse_root}/{source}/{entry['table']}"
+            )
+    finally:
+        spark.stop()
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 4:
+    if len(sys.argv) not in (4, 5):
         raise SystemExit(
-            "usage: trackers_merge.py <source> <raw_prefix> <lakehouse_root>"
+            "usage: trackers_merge.py <source> <raw_prefix> <lakehouse_root> "
+            "[sc://connect-host:15002]"
         )
-    main(sys.argv[1], sys.argv[2], sys.argv[3])
+    main(*sys.argv[1:])

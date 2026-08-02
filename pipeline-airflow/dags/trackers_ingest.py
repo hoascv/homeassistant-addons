@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import datetime
 import json
+import sys
 import urllib.request
 
 import logging
@@ -45,16 +46,19 @@ import logging
 from airflow.sdk import Variable, dag, task
 from airflow.sdk.exceptions import AirflowFailException
 from airflow.providers.amazon.aws.hooks.s3 import S3Hook
-from airflow.providers.apache.spark.operators.spark_submit import SparkSubmitOperator
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 
 PG_CONN_ID = "pipeline_pg"
 MINIO_CONN_ID = "minio_default"
-SPARK_CONN_ID = "spark_default"
 RAW_BUCKET = "raw"
 LAKEHOUSE_ROOT = "s3a://lakehouse"
 META_SCHEMA = "pipeline_meta"
-MERGE_JOB = "/opt/pipeline/jobs/trackers_merge.py"
+# Where the merge module lives. Not on the DAGs path on purpose: importing it
+# pulls in pyspark, and the dag-processor re-parses this folder constantly.
+JOBS_DIR = "/opt/pipeline/jobs"
+# The Spark Connect endpoint of the Pipeline Spark add-on. Overridable with a
+# `spark_connect_url` Variable for a cluster somewhere else.
+SPARK_CONNECT_URL = "sc://172.30.32.1:15002"
 
 # One request per page; the feed caps this itself. Bounded so a very stale
 # watermark can't turn a single run into an unbounded loop.
@@ -105,16 +109,31 @@ def build_dag(source: str, default_url: str):
     def ingest():
         @task
         def fetch() -> dict:
-            token = Variable.get(f"{source}_api_token", default="").strip()
-            if not token:
+            # `missing` and `set but empty` are different problems with the same
+            # symptom, and telling them apart matters: a Variable that is listed
+            # in the UI but reads as missing here means the *key* differs from
+            # what is asked for — a trailing space in the name is invisible in
+            # the list and defeats an exact lookup. A default would flatten both
+            # cases into one unhelpful message.
+            key = f"{source}_api_token"
+            sentinel = object()
+            raw_token = Variable.get(key, default=sentinel)
+            if raw_token is sentinel:
                 # Fails rather than skips. A skip leaves the run green, and a
                 # pipeline that is quietly loading nothing looks exactly like a
                 # healthy one — the single state most worth noticing.
                 raise AirflowFailException(
-                    f"Airflow Variable {source}_api_token is not set, so there is nothing "
-                    f"to authenticate with. Set it to the api_token from the {source} "
-                    f"add-on's configuration, and {source}_base_url to the address its "
-                    "port is published on."
+                    f"No Airflow Variable named exactly {key!r} exists. If you can see it "
+                    "in Admin -> Variables, the key has something extra in it — a trailing "
+                    "space survives a paste and is invisible in the list. Delete it and "
+                    "re-create it, typing the name. It should hold the api_token from the "
+                    f"{source} add-on's configuration, alongside {source}_base_url."
+                )
+            token = (raw_token or "").strip()
+            if not token:
+                raise AirflowFailException(
+                    f"Airflow Variable {key!r} exists but is empty. Set it to the api_token "
+                    f"from the {source} add-on's configuration."
                 )
             base_url = Variable.get(f"{source}_base_url", default=default_url)
 
@@ -200,19 +219,44 @@ def build_dag(source: str, default_url: str):
         batch = fetch()
         gate = has_work(batch)
 
-        # Client mode, not cluster: Spark standalone refuses a *Python*
-        # application in cluster deploy mode ("Cluster deploy mode is currently
-        # not supported for python applications on standalone clusters"). The
-        # driver therefore runs inside the Airflow container, which is why the
-        # add-on writes S3A credentials and the Delta packages into this
-        # container's spark-defaults.conf — see run.sh.
-        merge = SparkSubmitOperator(
-            task_id="merge_into_delta",
-            conn_id=SPARK_CONN_ID,
-            application=MERGE_JOB,
-            name=f"trackers-merge-{source}",
-            application_args=[source, "{{ ti.xcom_pull(task_ids='fetch')['prefix'] }}", LAKEHOUSE_ROOT],
-        )
+        @task(task_id="merge_into_delta")
+        def merge_into_delta(batch: dict) -> list:
+            # Spark Connect. No spark-submit, no local driver: this task is a
+            # gRPC client and the driver runs in the Pipeline Spark add-on,
+            # which is where the Delta jars and the MinIO credentials already
+            # live. Standalone cannot run a PySpark driver in cluster mode, and
+            # the alternative — a client-mode driver in *this* container — put
+            # the driver's heap beside the scheduler and required the executors
+            # to call back across the add-on boundary.
+            #
+            # Imported inside the task so the dag-processor doesn't pay for
+            # pyspark on every parse.
+            if JOBS_DIR not in sys.path:
+                sys.path.insert(0, JOBS_DIR)
+            from trackers_merge import merge_batch  # noqa: PLC0415
+            from pyspark.sql import SparkSession  # noqa: PLC0415
+
+            remote = Variable.get("spark_connect_url", default=SPARK_CONNECT_URL)
+            spark = (
+                SparkSession.builder.appName(f"trackers-merge-{source}")
+                .remote(remote)
+                .getOrCreate()
+            )
+            try:
+                written = merge_batch(spark, source, batch["prefix"], LAKEHOUSE_ROOT)
+            finally:
+                spark.stop()
+
+            # The job's own prints go to the Connect server's log, not here, so
+            # the run summary is reported from the client side instead.
+            if not written:
+                log.info("nothing to merge for %s", source)
+            for entry in written:
+                log.info(
+                    "%s %s row(s) into %s/%s/%s",
+                    entry["action"], entry["rows"], LAKEHOUSE_ROOT, source, entry["table"],
+                )
+            return written
 
         @task
         def advance_watermark(batch: dict) -> dict:
@@ -235,7 +279,7 @@ def build_dag(source: str, default_url: str):
             )
             return {"source": source, "seq": batch["max_seq"], "mode": batch["mode"]}
 
-        gate >> merge >> advance_watermark(batch)
+        gate >> merge_into_delta(batch) >> advance_watermark(batch)
 
     return ingest()
 

@@ -16,13 +16,14 @@ Part of a four-add-on data pipeline: **Pipeline Postgres**, **Pipeline MinIO**,
   with **LocalExecutor**, web UI on host port **8085**.
 - Uses `postgresql://airflow@<postgres_host>:<postgres_port>/airflow` for metadata
   (the `airflow` DB the Pipeline Postgres add-on created).
-- Pre-creates three connections (via environment, so they always exist):
+- Pre-creates two connections (via environment, so they always exist):
   - **minio_default** — AWS/S3 connection pointed at MinIO's endpoint,
-  - **spark_default** — the Spark standalone master,
   - **pipeline_pg** — your pipeline Postgres database.
 - Seeds `example_pipeline` into `/share/pipeline-airflow/dags` on first boot. Put
   your own DAGs in that folder (editable via the Samba / File-editor add-ons).
-- Includes a Spark client so `SparkSubmitOperator` can submit to the cluster.
+- Talks to Spark over **Spark Connect** (`sc://…:15002`). There is no JVM and no
+  Spark installation in this add-on — just a gRPC client — so Spark's driver runs
+  in the Pipeline Spark add-on rather than beside the scheduler.
 
 ## Configuration
 
@@ -32,7 +33,9 @@ Part of a four-add-on data pipeline: **Pipeline Postgres**, **Pipeline MinIO**,
 - **postgres_host** / **postgres_port** / **airflow_db_password**: how to reach the
   metadata DB. Defaults target the Pipeline Postgres add-on via the host gateway
   (`172.30.32.1:5432`); `airflow_db_password` must match that add-on's value.
-- **spark_master** / **spark_port**: the Spark master (default `172.30.32.1:7077`).
+- **spark_master** / **spark_connect_port**: the Spark Connect endpoint (default
+  `172.30.32.1:15002`, i.e. the Pipeline Spark add-on). Supplied to the DAGs as
+  the `spark_connect_url` Variable, so it is configured here and nowhere else.
 - **minio_endpoint** / **minio_access_key** / **minio_secret_key**: the MinIO S3 API
   and credentials (match the Pipeline MinIO add-on).
 - **pipeline_pg_user** / **pipeline_pg_password** / **pipeline_pg_db**: the pipeline
@@ -70,12 +73,13 @@ may open it in a new tab instead.
 Watch the Spark master UI (`:8082`) to see the job run. If the first Spark task is
 slow, it's downloading `hadoop-aws` once (cached afterwards).
 
-> **Note:** Spark jobs submit in **client** deploy mode, because Spark standalone
-> supports cluster mode only for JVM applications and rejects a PySpark one
-> outright. The driver therefore runs inside *this* add-on: a job file must exist
-> here (`/opt/pipeline/jobs/`), not on the Spark worker, and the driver reads this
-> container's `spark-defaults.conf`, which the add-on writes at start with the
-> MinIO credentials and the Delta packages.
+> **Note:** Spark work runs over **Spark Connect**. A task here builds a session
+> with `.remote("sc://…:15002")` and the driver runs inside the Pipeline Spark
+> add-on, which already holds the S3A credentials and the Delta jars. Nothing is
+> submitted, so there is no `spark_default` connection and no `spark-defaults.conf`
+> in this container. A consequence worth knowing: a job's own `print()` output
+> goes to the Connect server's log, so the bundled DAGs return their results and
+> log them from the task instead.
 >
 > **Security:** the web UI is published on the host network. Use a strong admin
 > password and don't expose the host to the internet.

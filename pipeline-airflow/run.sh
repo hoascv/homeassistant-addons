@@ -15,7 +15,7 @@ PG_HOST="$(opt '.postgres_host // "172.30.32.1"')"
 PG_PORT="$(opt '.postgres_port // 5432')"
 AIRFLOW_DB_PASSWORD="$(opt '.airflow_db_password')"
 SPARK_MASTER="$(opt '.spark_master // "172.30.32.1"')"
-SPARK_PORT="$(opt '.spark_port // 7077')"
+SPARK_CONNECT_PORT="$(opt '.spark_connect_port // 15002')"
 export MINIO_ENDPOINT="$(opt '.minio_endpoint // "http://172.30.32.1:9000"')"
 export MINIO_KEY="$(opt '.minio_access_key')"
 export MINIO_SECRET="$(opt '.minio_secret_key')"
@@ -65,7 +65,11 @@ cp -f /opt/airflow/project-dags/trackers_ingest.py /share/pipeline-airflow/dags/
 # one exists, so changing admin_password later would never take effect.
 
 # --- Pre-wired connections (via env, always available) ---------------------
-export AIRFLOW_CONN_SPARK_DEFAULT="spark://${SPARK_MASTER}:${SPARK_PORT}"
+# No spark_default connection: there is no spark-submit to configure. The DAGs
+# read the Connect endpoint as a Variable, which this supplies from the add-on
+# options through the environment-variables secrets backend — so it is
+# configured in one place, the add-on's own settings.
+export AIRFLOW_VAR_SPARK_CONNECT_URL="sc://${SPARK_MASTER}:${SPARK_CONNECT_PORT}"
 export AIRFLOW_CONN_PIPELINE_PG="postgres://${PIPELINE_PG_USER}:${PIPELINE_PG_PASSWORD}@${PG_HOST}:${PG_PORT}/${PIPELINE_PG_DB}"
 # S3/MinIO connection with endpoint override (values URL-encoded safely).
 AIRFLOW_CONN_MINIO_DEFAULT="$(python - <<'PYEOF'
@@ -85,47 +89,21 @@ export AIRFLOW_VAR_PIPELINE_PG_USER="$PIPELINE_PG_USER"
 export AIRFLOW_VAR_PIPELINE_PG_PASSWORD="$PIPELINE_PG_PASSWORD"
 export AIRFLOW_VAR_SPARK_JOB_PATH="/opt/pipeline/jobs/example_job.py"
 
-# --- Spark client configuration --------------------------------------------
-# Jobs are submitted in client mode, because Spark standalone supports cluster
-# deploy mode only for JVM applications and rejects a .py one outright. That
-# means the *driver* runs in this container, so this container's spark-defaults
-# is the driver's configuration: without it the driver has no S3A credentials
-# and no Delta jars, however well configured the workers are. Written to a file
-# rather than passed per-task so the MinIO secret never reaches a command line
-# — a failed spark-submit echoes its whole invocation into the task log.
-SPARK_CONF_DIR="${SPARK_HOME}/conf"
-mkdir -p "$SPARK_CONF_DIR"
+# No Spark configuration is written here any more. Jobs run over Spark Connect,
+# so the driver lives in the Pipeline Spark add-on and reads *its* config: the
+# S3A credentials and Delta jars are its business, and a Connect client cannot
+# override server-side settings anyway. The MinIO secret consequently never
+# reaches this container's disk or any command line.
 
-# hadoop-aws has to match the Hadoop this client was built against, or its AWS
-# SDK dependency arrives at a version S3AFileSystem cannot use. Read from the
-# jars rather than hardcoded, so a Spark bump can't silently desync it.
-HADOOP_VER="$(ls "${SPARK_HOME}"/jars/hadoop-client-api-*.jar 2>/dev/null \
-  | sed -E 's#.*/hadoop-client-api-([0-9.]+)\.jar#\1#' | head -1)"
-
-case "$MINIO_ENDPOINT" in
-  https://*) S3A_SSL=true ;;
-  *)         S3A_SSL=false ;;
-esac
-
-{
-  printf 'spark.jars.packages org.apache.hadoop:hadoop-aws:%s,io.delta:delta-spark_4.1_2.13:4.3.1\n' "${HADOOP_VER:-3.4.2}"
-  printf 'spark.sql.extensions io.delta.sql.DeltaSparkSessionExtension\n'
-  printf 'spark.sql.catalog.spark_catalog org.apache.spark.sql.delta.catalog.DeltaCatalog\n'
-  printf 'spark.hadoop.fs.s3a.endpoint %s\n' "$MINIO_ENDPOINT"
-  printf 'spark.hadoop.fs.s3a.access.key %s\n' "$MINIO_KEY"
-  printf 'spark.hadoop.fs.s3a.secret.key %s\n' "$MINIO_SECRET"
-  printf 'spark.hadoop.fs.s3a.path.style.access true\n'
-  printf 'spark.hadoop.fs.s3a.connection.ssl.enabled %s\n' "$S3A_SSL"
-  # In client mode the executors open connections back to the driver, so it has
-  # to advertise an address they can reach — the container's address on the
-  # Supervisor network, not its loopback. Bind wide, advertise precisely.
-  DRIVER_IP="$(hostname -i 2>/dev/null | awk '{print $1}')"
-  case "$DRIVER_IP" in
-    ""|127.*) : ;;  # nothing usable — let Spark work it out for itself
-    *) printf 'spark.driver.host %s\nspark.driver.bindAddress 0.0.0.0\n' "$DRIVER_IP" ;;
-  esac
-} > "$SPARK_CONF_DIR/spark-defaults.conf"
-chmod 600 "$SPARK_CONF_DIR/spark-defaults.conf"
+# An example_pipeline.py left over from an older install still calls
+# SparkSubmitOperator, and there is no spark-submit here to answer it. It is
+# yours to edit, so it is never overwritten — but say so rather than let it fail
+# obscurely.
+EXAMPLE=/share/pipeline-airflow/dags/example_pipeline.py
+if [ -f "$EXAMPLE" ] && grep -q SparkSubmitOperator "$EXAMPLE" 2>/dev/null; then
+  echo "[Pipeline Airflow] NOTE: $EXAMPLE is the old spark-submit version and will"
+  echo "[Pipeline Airflow]       fail. Delete it and restart to get the Spark Connect one."
+fi
 
 echo "[Pipeline Airflow] preparing database and admin user"
 # One pass through the entrypoint (it waits for Postgres and migrates the core

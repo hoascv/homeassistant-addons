@@ -13,7 +13,12 @@ Part of a four-add-on data pipeline: **Pipeline Postgres**, **Pipeline MinIO**,
 ## What it does
 
 - Starts a Spark **master** (RPC `:7077`, standalone REST submission API `:6066`,
-  web UI `:8082` on the host) and one **worker** (web UI `:8083`).
+  web UI `:8082` on the host), one **worker** (web UI `:8083`), and a **Spark
+  Connect server** (`sc://…:15002`).
+- The Connect server is how Airflow runs jobs: it *is* the driver, so Spark's
+  memory and its S3A/Delta configuration stay in this add-on. Airflow holds only
+  a gRPC client. Delta's Connect plugins are loaded into it, so `DeltaTable` and
+  `MERGE` work remotely — note Delta Connect is upstream-flagged as **preview**.
 - Pre-configures the MinIO S3A endpoint and credentials in `spark-defaults.conf`.
 - Bakes in the **PostgreSQL JDBC driver** and pulls **hadoop-aws** (matched to the
   image's Hadoop version) on the first submit via `spark.jars.packages` — so the
@@ -40,15 +45,13 @@ Cluster deploy mode is currently not supported for python applications
 on standalone clusters
 ```
 
-So jobs here run in **client mode**: the driver runs wherever the submit came
-from — for scheduled jobs, inside the Pipeline Airflow add-on — and only the
-executors run here. Two consequences worth knowing:
+So scheduled jobs don't use spark-submit at all — they go through the **Spark
+Connect server** on `:15002`, whose own process is the driver and runs here. The
+client (Airflow) sends an unresolved query plan over gRPC and gets results back;
+it needs no Spark installation, no JVM, and no credentials of its own.
 
-- The job's `.py` file must exist **where you submit from**, not on the worker.
-  That is why the tracker merge job lives in the Airflow add-on.
-- The driver reads the *submitting* container's `spark-defaults.conf`. Airflow
-  writes its own with the MinIO credentials and Delta packages; the settings
-  below configure this add-on's executors.
+A hand-rolled `spark-submit` still works, in **client mode** — the driver then
+runs wherever you launched it, and must be reachable from this container.
 
 To submit by hand from inside this add-on:
 

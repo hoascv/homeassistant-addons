@@ -46,5 +46,26 @@ echo "[Pipeline Spark] starting worker (${WORKER_CORES} cores, ${WORKER_MEMORY})
     --cores "$WORKER_CORES" --memory "$WORKER_MEMORY" --webui-port 8081 &
 WORKER_PID=$!
 
-# If either process exits, stop the container so Supervisor restarts it.
-wait -n "$MASTER_PID" "$WORKER_PID"
+# Spark Connect: the driver for Airflow's jobs, running here rather than in the
+# Airflow add-on. Standalone can't run a PySpark driver in cluster mode, so the
+# alternative was a driver inside Airflow — sharing that container's memory with
+# the scheduler, and needing the executors to call back across the add-on
+# boundary. With Connect the whole conversation is gRPC on :15002 and everything
+# else stays inside this container.
+#
+# Started with spark-submit rather than sbin/start-connect-server.sh: that
+# script hands off to spark-daemon.sh, which backgrounds the process and returns
+# success immediately, so a server that died on startup would look like a
+# healthy one. This form stays in the foreground and can be supervised.
+sleep 3
+echo "[Pipeline Spark] starting Connect server (gRPC :15002)"
+"${SPARK_HOME}/bin/spark-submit" \
+    --class org.apache.spark.sql.connect.service.SparkConnectServer \
+    --name "Spark Connect server" \
+    --master "spark://localhost:7077" \
+    --conf spark.connect.grpc.binding.address=0.0.0.0 \
+    --conf spark.connect.grpc.binding.port=15002 &
+CONNECT_PID=$!
+
+# If any of them exits, stop the container so Supervisor restarts it.
+wait -n "$MASTER_PID" "$WORKER_PID" "$CONNECT_PID"

@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.3.0
+
+- **Runs a Spark Connect server** on `:15002`, alongside the master and worker.
+  This is how Pipeline Airflow submits work now: the Connect server process is
+  the driver, so Spark's heap, the S3A credentials and the Delta jars all stay
+  in this add-on, and Airflow needs no Spark installation at all.
+- Delta's Connect plugins (`delta-connect-server`) are loaded, so `DeltaTable`
+  and `MERGE` work over a remote session. Delta Connect is upstream-flagged as
+  **preview**; it is exercised here by the tracker merge job.
+- Started with `spark-submit` rather than `sbin/start-connect-server.sh`, which
+  hands off to `spark-daemon.sh` and returns success immediately — a server that
+  died on startup would have looked healthy. This form is supervised with the
+  master and worker.
+
 ## 1.2.2
 
 - Corrected the description of port 6066. It was documented as the port Airflow
