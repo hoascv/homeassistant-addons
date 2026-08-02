@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.2.2
+
+- Corrected the description of port 6066. It was documented as the port Airflow
+  submits through in cluster mode; since Pipeline Airflow 1.4.0 submits are
+  client mode over RPC 7077 and nothing here uses 6066. The port stays published
+  for JVM jobs submitted that way by hand.
+- The networking note now mentions the part that actually bites when submitting
+  from another machine: in client mode the executors connect **back** to your
+  driver, so your machine has to be reachable from the add-on too.
+
 ## 1.2.1
 
 - Documented that jobs run in **client mode**, not cluster mode: Spark

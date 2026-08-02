@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.26.0
+
+- **Today is no longer counted as a missed day before it's over.** A challenge
+  done yesterday and untouched this morning read *50% · 1 of 2 days*, with today
+  already drawn as missed. The same card showed 100% at bedtime and half that at
+  midnight, having done nothing wrong in between — an error that only ever ran
+  in the discouraging direction, worst first thing in the morning.
+
+  A due day that is today and unfinished is now **pending**: left out of the
+  completion rate and out of each item's rate until it closes. The streak
+  already worked this way; the rest of the card now agrees with it. Missing a
+  day still costs, from tomorrow rather than from midnight.
+- The adherence chart draws today in its own style — a dashed outline, with a
+  **today** key in the legend. It is neither a miss nor a rest day: something is
+  owed and there is still time, and all three now look different. The caption
+  says *today still open* so the count explains itself.
+- Volume is unaffected: a plank held this morning shows in the totals straight
+  away, whether or not the day is finished.
+
 ## 1.25.1
 
 - **Un-ticking something you've already done now asks first.** A challenge is a

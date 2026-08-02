@@ -1101,17 +1101,35 @@ function challengeStatsHtml(st) {
   const days = (st.days || []).slice(-ADHERENCE_DAYS);
   const bars = days
     .map((d) => {
-      // A rest day owed nothing, so it is neither a hit nor a miss.
+      // A rest day owed nothing, so it is neither a hit nor a miss. Today,
+      // still unfinished, owed something and has not failed at it yet — a
+      // third thing again, and drawn as one rather than as a miss.
       const rest = d.scheduled === false;
-      const state = rest ? "rest" : d.complete ? "full" : d.done > 0 ? "part" : "none";
+      const state = rest
+        ? "rest"
+        : d.pending
+          ? "pending"
+          : d.complete
+            ? "full"
+            : d.done > 0
+              ? "part"
+              : "none";
       const height = d.total ? Math.round((d.done / d.total) * 100) : 0;
-      const label = rest ? "rest day" : `${d.done}/${d.total}`;
+      const label = rest
+        ? "rest day"
+        : d.pending
+          ? `${d.done}/${d.total} · still open`
+          : `${d.done}/${d.total}`;
+      // Empty tracks are full height so "nothing done" can't read as "no data";
+      // a pending day keeps its real height, so progress so far still shows.
+      const empty = state === "none" || rest || (d.pending && !d.done);
       return `<span class="adh-slot" title="${d.day} · ${label}">
-        <span class="adh-bar adh-${state}" style="height:${state === "none" || rest ? 100 : Math.max(height, 8)}%"></span>
+        <span class="adh-bar adh-${state}" style="height:${empty ? 100 : Math.max(height, 8)}%"></span>
       </span>`;
     })
     .join("");
   const hasRest = days.some((d) => d.scheduled === false);
+  const hasPending = days.some((d) => d.pending);
 
   const items = (st.items || [])
     .map(
@@ -1144,7 +1162,7 @@ function challengeStatsHtml(st) {
         <div class="mini-stat"><span class="mini-value">🔥 ${st.current_streak}</span><span class="mini-label">Streak</span></div>
         <div class="mini-stat"><span class="mini-value">${st.longest_streak}</span><span class="mini-label">Longest</span></div>
       </div>
-      <p class="challenge-progress">${st.days_complete} of ${st.days_elapsed} ${schedule ? "due " : ""}days${schedule ? ` · ${escapeHtml(schedule)}` : ""}</p>
+      <p class="challenge-progress">${st.days_complete} of ${st.days_elapsed} ${schedule ? "due " : ""}days${st.pending_today ? " · today still open" : ""}${schedule ? ` · ${escapeHtml(schedule)}` : ""}</p>
 
       <figure class="chart-figure">
         <figcaption>Last ${Math.min(ADHERENCE_DAYS, days.length)} days</figcaption>
@@ -1153,6 +1171,7 @@ function challengeStatsHtml(st) {
           <span><i class="adh-key adh-full"></i>all done</span>
           <span><i class="adh-key adh-part"></i>partly</span>
           <span><i class="adh-key adh-none"></i>missed</span>
+          ${hasPending ? '<span><i class="adh-key adh-pending"></i>today</span>' : ""}
           ${hasRest ? '<span><i class="adh-key adh-rest"></i>rest</span>' : ""}
         </div>
         ${weightStripHtml(st, days)}

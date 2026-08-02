@@ -1,7 +1,7 @@
 name: "Pipeline Spark"
-version: "1.2.1"
+version: "1.2.2"
 slug: "pipeline-spark"
-description: "Apache Spark 4.2 single-node cluster (master + worker) for the data-pipeline stack"
+description: "Apache Spark 4.1 single-node cluster (master + worker) for the data-pipeline stack"
 url: "https://github.com/hoascv/homeassistant-addons/tree/main/pipeline-spark"
 arch:
   - amd64
@@ -15,7 +15,7 @@ ports:
   8081/tcp: 8083
 ports_description:
   7077/tcp: "Spark master RPC (spark://…:7077)"
-  6066/tcp: "Standalone REST submission API (used by Airflow, cluster mode)"
+  6066/tcp: "Standalone REST submission API (JVM cluster-mode jobs only; the bundled DAGs don't use it)"
   8080/tcp: "Spark master web UI"
   8081/tcp: "Spark worker web UI"
 options:

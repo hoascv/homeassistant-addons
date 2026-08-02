@@ -19,7 +19,7 @@ from flask import Flask, Response, g, jsonify, render_template, request, send_fi
 
 import garmin_client
 
-APP_VERSION = "1.25.1"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.26.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("GYM_DB_PATH", "/data/gym.db")
 OPTIONS_PATH = os.environ.get("GYM_OPTIONS_PATH", "/data/options.json")
@@ -1858,6 +1858,12 @@ def _challenge_days(conn, ch, membership=None):
 
     Rest days are still emitted so the adherence chart can show them; every
     figure derived from this filters on `scheduled`.
+
+    A due day that is *today* and not yet complete is marked `pending`. It is
+    not a miss — there is still time — and counting it as one makes every figure
+    wrong in the discouraging direction, worst first thing in the morning. The
+    streak already forgives an unfinished today; this is what lets the rest of
+    the numbers agree with it.
     """
     membership = membership if membership is not None else _challenge_membership(conn, ch["id"])
     by_day = _completions_by_day(conn, [row["id"] for row, _, _ in membership])
@@ -1865,20 +1871,23 @@ def _challenge_days(conn, ch, membership=None):
     days = []
     if start is None:
         return days
+    today = date.today().isoformat()
     cursor = start
     while cursor <= last:
         iso = cursor.isoformat()
         members = _members_on(membership, iso)
         done = len(by_day.get(iso, set()) & members)
         scheduled = _challenge_scheduled_on(ch, cursor)
+        complete = scheduled and bool(members) and done == len(members)
         days.append(
             {
                 "day": iso,
                 "done": done,
                 "total": len(members),
                 # Only meaningful on a day the challenge was actually due.
-                "complete": scheduled and bool(members) and done == len(members),
+                "complete": complete,
                 "scheduled": scheduled,
+                "pending": scheduled and not complete and iso == today,
             }
         )
         cursor += timedelta(days=1)
@@ -2816,8 +2825,11 @@ def _challenge_stats(conn, ch):
     ids = {row["id"] for row, _, _ in membership}
     days = _challenge_days(conn, ch, membership)
     by_day = _completions_by_day(conn, list(ids))
-    # Rest days are in `days` for the chart, but every figure counts due days.
-    due_days = [d for d in days if d["scheduled"]]
+    # Rest days are in `days` for the chart, but every figure counts due days —
+    # and today, while it is still open, is not one of them. Scoring an
+    # unfinished today as a miss makes every number below wrong in the
+    # discouraging direction, and worst first thing in the morning.
+    due_days = [d for d in days if d["scheduled"] and not d["pending"]]
     elapsed = len(due_days)
     complete_days = sum(1 for d in due_days if d["complete"])
 
@@ -2880,7 +2892,11 @@ def _challenge_stats(conn, ch):
         "days_elapsed": elapsed,
         "days_complete": complete_days,
         "completion_pct": round(complete_days / elapsed * 100, 1) if elapsed else None,
+        # So the card can say why today is not in the count above.
+        "pending_today": any(d["pending"] for d in days),
         "current_streak": _challenge_streak(conn, ch["id"]),
+        # Needs no guard against a pending today: it is always the last entry,
+        # so `best` is settled before the run resets to zero.
         "longest_streak": _longest_streak(days),
         "item_count": sum(1 for row, _, _ in membership if not row["archived"]),
         # Capped: the adherence chart only ever draws a window of this.

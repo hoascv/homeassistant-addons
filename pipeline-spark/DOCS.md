@@ -59,6 +59,12 @@ spark-submit --master spark://<host-ip>:7077 \
 ```
 
 > **Networking note:** Spark standalone across the add-on boundary uses the host
-> gateway (`172.30.32.1`) and the REST submission API. If you submit from another
-> machine, use the Home Assistant host's LAN IP and make sure ports 7077/6066 are
-> reachable.
+> gateway (`172.30.32.1`). A client-mode submit needs only the master RPC port,
+> `7077` — the REST API on `6066` is for JVM jobs submitted in cluster mode and
+> is not used by the bundled DAGs.
+>
+> Submitting from another machine takes one more thing than people expect: in
+> client mode the driver runs on *your* machine and the executors here connect
+> **back** to it, so that machine has to be reachable from the add-on, not only
+> the other way round. Use the Home Assistant host's LAN IP for `--master`, and
+> set `spark.driver.host` to an address this container can reach you on.

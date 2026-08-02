@@ -325,6 +325,103 @@ def test_stats_only_count_days_the_challenge_was_running(client, conn):
     stats = next(s for s in client.get("/api/challenges/stats").get_json() if s["id"] == cid)
     assert stats["days_elapsed"] == 5
     assert stats["finished"] is True
+    # Its last day is its end date, so nothing is ever still open.
+    assert stats["pending_today"] is False
+
+
+# --- Today is still open, not already missed --------------------------------
+
+
+def _stats_for(client, cid):
+    return next(s for s in client.get("/api/challenges/stats").get_json() if s["id"] == cid)
+
+
+def test_an_unfinished_today_is_not_counted_as_a_miss(client, conn):
+    """The Plank case: done yesterday, not yet today, read in the morning."""
+    from datetime import date, timedelta
+
+    today = date.today()
+    cid = _new_challenge(client, "Plank", (today - timedelta(days=1)).isoformat())
+    item = _add_exercise_item(client, conn, cid, "plank")
+    client.post("/api/challenge/toggle", json={
+        "item_id": item, "day": (today - timedelta(days=1)).isoformat(),
+    })
+
+    stats = _stats_for(client, cid)
+    # One day has closed, and it was completed. Today has not.
+    assert stats["days_elapsed"] == 1
+    assert stats["days_complete"] == 1
+    assert stats["completion_pct"] == 100.0
+    assert stats["pending_today"] is True
+    # The per-item rate agrees rather than reporting 50%.
+    assert stats["items"][0]["rate_pct"] == 100.0
+
+
+def test_completing_today_counts_it(client, conn):
+    from datetime import date, timedelta
+
+    today = date.today()
+    cid = _new_challenge(client, "Plank", (today - timedelta(days=1)).isoformat())
+    item = _add_exercise_item(client, conn, cid, "plank")
+    for off in (1, 0):
+        client.post("/api/challenge/toggle", json={
+            "item_id": item, "day": (today - timedelta(days=off)).isoformat(),
+        })
+
+    stats = _stats_for(client, cid)
+    assert stats["pending_today"] is False
+    assert stats["days_elapsed"] == 2 and stats["days_complete"] == 2
+    assert stats["completion_pct"] == 100.0
+
+
+def test_a_missed_day_still_costs_once_it_is_over(client, conn):
+    """Forgiving today must not become forgiving yesterday."""
+    from datetime import date, timedelta
+
+    today = date.today()
+    cid = _new_challenge(client, "Plank", (today - timedelta(days=2)).isoformat())
+    item = _add_exercise_item(client, conn, cid, "plank")
+    client.post("/api/challenge/toggle", json={
+        "item_id": item, "day": (today - timedelta(days=2)).isoformat(),
+    })
+
+    stats = _stats_for(client, cid)
+    # Two closed days, one of them missed. Today is excluded, not forgiven.
+    assert stats["days_elapsed"] == 2
+    assert stats["days_complete"] == 1
+    assert stats["completion_pct"] == 50.0
+
+
+def test_only_today_is_ever_pending(client, conn):
+    from datetime import date, timedelta
+
+    today = date.today()
+    cid = _new_challenge(client, "Plank", (today - timedelta(days=3)).isoformat())
+    _add_exercise_item(client, conn, cid, "plank")
+
+    days = _stats_for(client, cid)["days"]
+    pending = [d["day"] for d in days if d["pending"]]
+    assert pending == [today.isoformat()]
+
+
+def test_a_rest_day_is_never_pending(client, conn):
+    """A day the challenge isn't due owes nothing, so it can't be outstanding."""
+    from datetime import date
+
+    today = date.today()
+    # Due only on the weekday *after* today, so today is a rest day.
+    tomorrow_weekday = (today.weekday() + 1) % 7
+    cid = _scheduled_challenge(
+        client, "Weekdays only", today.isoformat(),
+        schedule_kind="weekdays", schedule_weekdays=str(tomorrow_weekday),
+    )
+    _add_exercise_item(client, conn, cid, "plank")
+
+    stats = _stats_for(client, cid)
+    today_entry = next(d for d in stats["days"] if d["day"] == today.isoformat())
+    assert today_entry["scheduled"] is False
+    assert today_entry["pending"] is False
+    assert stats["pending_today"] is False
 
 
 def test_stats_include_volume_from_the_challenge(client, conn):
@@ -376,16 +473,28 @@ def test_adding_an_item_does_not_invalidate_earlier_days(client, conn):
     before = next(s for s in client.get("/api/challenges/stats").get_json() if s["id"] == cid)
     assert before["completion_pct"] == 100.0 and before["current_streak"] == 10
 
-    _add_exercise_item(client, conn, cid, "push-up")  # added today
+    later = _add_exercise_item(client, conn, cid, "push-up")  # added today
     after = next(s for s in client.get("/api/challenges/stats").get_json() if s["id"] == cid)
 
     # Only today is affected: the nine days before the item existed still count.
     assert after["days_complete"] == 9
-    assert after["completion_pct"] == 90.0
     assert after["current_streak"] == 9
-    # And the newcomer is scored over its one day, not the whole run.
-    newcomer = next(i for i in after["items"] if i["days_member"] == 1)
-    assert newcomer["days_done"] == 0 and newcomer["rate_pct"] == 0.0
+    # And today, now unfinished, is still open rather than already lost — so
+    # adding an item doesn't dock the rate for a day you can still complete.
+    assert after["pending_today"] is True
+    assert after["days_elapsed"] == 9
+    assert after["completion_pct"] == 100.0
+    # The newcomer has no closed day yet, so there is no rate to report.
+    newcomer = next(i for i in after["items"] if i["id"] == later)
+    assert newcomer["days_member"] == 0 and newcomer["rate_pct"] is None
+
+    # Finishing today counts it, for the challenge and for the newcomer alike.
+    client.post("/api/challenge/toggle", json={"item_id": later})
+    done = next(s for s in client.get("/api/challenges/stats").get_json() if s["id"] == cid)
+    assert done["pending_today"] is False
+    assert done["days_elapsed"] == 10 and done["days_complete"] == 10
+    scored = next(i for i in done["items"] if i["id"] == later)
+    assert scored["days_member"] == 1 and scored["days_done"] == 1
 
 
 def test_backfilling_an_item_pulls_its_membership_back(client, conn):
@@ -406,7 +515,9 @@ def test_backfilling_an_item_pulls_its_membership_back(client, conn):
 
     stats = next(s for s in client.get("/api/challenges/stats").get_json() if s["id"] == cid)
     newcomer = next(i for i in stats["items"] if i["id"] == later)
-    assert newcomer["days_member"] == 4  # from that backfilled day to today
+    # From that backfilled day up to yesterday: today is still open, so it is
+    # not yet one of the days the item is scored over.
+    assert newcomer["days_member"] == 3
     assert newcomer["days_done"] == 1
     assert any(d["day"] == day and d["complete"] for d in stats["days"])
 
@@ -983,4 +1094,6 @@ def test_an_explicit_join_date_outranks_an_earlier_tick(client, conn):
     })
     stats = next(s for s in client.get("/api/challenges/stats").get_json() if s["id"] == cid)
     entry = next(i for i in stats["items"] if i["id"] == item)
-    assert entry["days_member"] == 4  # from the stated day, not the early tick
+    # From the stated day, not the early tick — and up to yesterday, today
+    # being still open rather than a day the item has been scored over.
+    assert entry["days_member"] == 3

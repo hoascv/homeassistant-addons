@@ -162,6 +162,13 @@ body {
 /* A missed day is a full-height empty track, not a bar of zero height: the
    difference between "nothing done" and "no data" has to stay visible. */
 .adh-none { background: var(--surface-2); border: 1px solid var(--border); }
+/* Today, owed but not finished. Deliberately not the rest-day hatch: "nothing
+   was owed" and "owed and still open" must not look alike. A dashed accent
+   outline reads as the same colour family as a done day, but unsettled. */
+.adh-pending {
+  background: var(--surface-2);
+  border: 1px dashed var(--accent);
+}
 .adh-legend {
   display: flex; gap: 0.75rem; margin-top: 0.35rem;
   font-size: 0.72rem; color: var(--text-muted);
