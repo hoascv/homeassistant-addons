@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.5.0
+
+- **The merge job flattens the feed in Spark, not on the driver.** It used to
+  `collect()` every archived response and pick it apart with Python loops, so
+  Spark only did the write — and after the move to client mode that parsing
+  happened inside this add-on, next to the scheduler. The payloads are now
+  flattened with Spark expressions on the executors: `map<string,string>` and
+  `array<string>` over the raw JSON, which `from_json` fills with re-serialised
+  JSON text, so nothing is inferred and nothing is typed. The only thing that
+  reaches the driver is the list of table names.
+- Verified end-to-end against a real backup: a 254-row bootstrap plus a
+  146-change page, checked row by row against an independently computed
+  expectation — payloads, soft deletes, actors — and re-applied to confirm the
+  merge is idempotent.
+
 ## 1.4.0
 
 - **The tracker DAGs can actually read their Variables.** `fetch` read the API
