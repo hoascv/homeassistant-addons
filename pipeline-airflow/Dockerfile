@@ -1,6 +1,8 @@
 FROM docker.io/apache/airflow:3.3.0
 
 # --- System dependencies (as root) -----------------------------------------
+# The base image runs as the `airflow` user, which cannot write /var/lib/apt.
+USER root
 # No JVM and no Spark distribution: jobs go to the Pipeline Spark add-on over
 # Spark Connect, so this container is a gRPC client and never runs a driver.
 # That removes ~700 MB of image and, more to the point, keeps Spark's heap out
@@ -37,8 +39,9 @@ RUN pip install --no-cache-dir "pyspark-client==4.1.3" \
 
 # --- Back to root so the add-on can write /data and /share -----------------
 USER root
-# The DAGs (seeded into /share on boot) and the PySpark jobs they submit. The
-# jobs live here rather than in the Spark add-on because the driver is local.
+# The DAGs (seeded into /share on boot) and the merge module they import. It
+# lives here rather than in the Spark add-on because it is client code now:
+# Connect ships the query plan, not the file.
 COPY dags/ /opt/airflow/project-dags/
 COPY jobs/ /opt/pipeline/jobs/
 COPY run.sh /run.sh

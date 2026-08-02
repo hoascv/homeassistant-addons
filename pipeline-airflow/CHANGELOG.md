@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.0.1
+
+- Fix the 2.0.0 build. Removing the JDK and the Spark client took the `USER
+  root` line with it, so `apt-get update` ran as the `airflow` user and failed
+  with `Permission denied` on `/var/lib/apt/lists/partial`. 2.0.0 could not be
+  installed at all.
+
 ## 2.0.0
 
 - **Spark jobs now run over Spark Connect.** The driver moves out of this
