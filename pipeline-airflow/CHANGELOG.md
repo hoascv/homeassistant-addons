@@ -1,5 +1,23 @@
 # Changelog
 
+## 2.1.0
+
+- **The tracker credentials are add-on options now**: `gym_tracker_base_url`,
+  `gym_tracker_api_token`, `coop_tracker_base_url`, `coop_tracker_api_token`.
+  They are supplied to the DAGs as Airflow Variables through the environment
+  secrets backend, which Airflow consults *before* the metastore — so they win
+  over a UI Variable of the same name.
+
+  This exists because a Variable created in the web UI kept coming back as
+  missing: the execution API answered 404 for a key the UI listed quite happily.
+  A key with a stray character looks identical in that list and can never be
+  looked up. Options can't fail that way, and it puts the whole stack's
+  configuration in one place. An option left blank is not exported at all, so it
+  never shadows a Variable you set on purpose.
+- A stop requested by Supervisor now exits 0. Every normal stop was logged as
+  `exited with non-zero exit code 1`, which made a real crash indistinguishable
+  from a restart.
+
 ## 2.0.1
 
 - Fix the 2.0.0 build. Removing the JDK and the Spark client took the `USER

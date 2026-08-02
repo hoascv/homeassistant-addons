@@ -102,14 +102,20 @@ To set it up, for each tracker:
 1. In the tracker add-on's configuration, set an **api_token**.
 2. In its **Network** section, publish a host port (they both listen on 8099
    internally, so give them different host ports).
-3. Add the Airflow Variables:
+3. In **this** add-on's configuration, fill in the matching options and restart:
 
-   | Variable | Example |
+   | Option | Example |
    |---|---|
    | `gym_tracker_base_url` | `http://172.30.32.1:8099` |
    | `gym_tracker_api_token` | the token you set |
    | `coop_tracker_base_url` | `http://172.30.32.1:8098` |
    | `coop_tracker_api_token` | the token you set |
+
+   Airflow Variables of the same names also work, but the options are the
+   reliable route: they are read *first*, and they can't suffer the failure a UI
+   Variable can, where a stray character in the **key** is invisible in the list
+   and makes the Variable impossible to find. An option left blank is not
+   exported, so it never shadows a Variable you set deliberately.
 
 A source whose token isn't set **fails** the run rather than skipping it. A skip
 would leave the run green, and a pipeline quietly loading nothing looks exactly

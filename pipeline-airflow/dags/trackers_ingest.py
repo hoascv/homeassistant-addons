@@ -123,11 +123,12 @@ def build_dag(source: str, default_url: str):
                 # pipeline that is quietly loading nothing looks exactly like a
                 # healthy one — the single state most worth noticing.
                 raise AirflowFailException(
-                    f"No Airflow Variable named exactly {key!r} exists. If you can see it "
-                    "in Admin -> Variables, the key has something extra in it — a trailing "
-                    "space survives a paste and is invisible in the list. Delete it and "
-                    "re-create it, typing the name. It should hold the api_token from the "
-                    f"{source} add-on's configuration, alongside {source}_base_url."
+                    f"No Airflow Variable named exactly {key!r} exists. The reliable place "
+                    f"to set it is the Pipeline Airflow add-on's own configuration: put the "
+                    f"{source} add-on's api_token in the {key} option and restart. That is "
+                    "read ahead of the web UI's Variables, so it also works when a Variable "
+                    "typed into the UI has a stray character in its key — which looks "
+                    "identical in the list and cannot be looked up."
                 )
             token = (raw_token or "").strip()
             if not token:

@@ -89,6 +89,27 @@ export AIRFLOW_VAR_PIPELINE_PG_USER="$PIPELINE_PG_USER"
 export AIRFLOW_VAR_PIPELINE_PG_PASSWORD="$PIPELINE_PG_PASSWORD"
 export AIRFLOW_VAR_SPARK_JOB_PATH="/opt/pipeline/jobs/example_job.py"
 
+# --- Tracker credentials (Airflow Variables via env) -----------------------
+# Set here rather than only in the web UI, so the whole stack is configured in
+# one place. Airflow checks the environment secrets backend before the
+# metastore, so these win over a UI Variable of the same name — which is the
+# point: a Variable typed into the UI with a stray character in its *key* is
+# invisible in the list and impossible to look up, and that failure has cost
+# real time. Anything set here cannot suffer that.
+#
+# Exported only when non-empty. An empty AIRFLOW_VAR_* would resolve ahead of
+# the metastore and shadow a UI Variable that was perfectly fine.
+for tracker in gym coop; do
+  url="$(opt ".${tracker}_tracker_base_url // \"\"")"
+  tok="$(opt ".${tracker}_tracker_api_token // \"\"")"
+  upper="$(echo "$tracker" | tr '[:lower:]' '[:upper:]')"
+  [ -n "$url" ] && export "AIRFLOW_VAR_${upper}_TRACKER_BASE_URL=$url"
+  if [ -n "$tok" ]; then
+    export "AIRFLOW_VAR_${upper}_TRACKER_API_TOKEN=$tok"
+    echo "[Pipeline Airflow] ${tracker}_tracker token supplied from add-on options"
+  fi
+done
+
 # No Spark configuration is written here any more. Jobs run over Spark Connect,
 # so the driver lives in the Pipeline Spark add-on and reads *its* config: the
 # S3A credentials and Delta jars are its business, and a Connect client cannot
@@ -149,7 +170,17 @@ shutdown() {
   kill "${pids[@]}" 2>/dev/null || true
   wait 2>/dev/null || true
 }
-trap shutdown TERM INT
+
+# A stop asked for by Supervisor is a success, so exit 0 rather than falling
+# through to the loop below, which would see the components gone and report a
+# crash. Every normal stop was being logged as "exited with non-zero exit
+# code 1", which makes the one that matters impossible to spot.
+on_signal() {
+  echo "[Pipeline Airflow] stop requested — shutting down"
+  shutdown
+  exit 0
+}
+trap on_signal TERM INT
 
 for component in "${COMPONENTS[@]}"; do
   /entrypoint airflow "$component" &
