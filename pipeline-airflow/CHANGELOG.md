@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.4.1
+
+- Fix the JupyterLab instructions. 2.4.0 said the seeded notebook would be found
+  under `/share/pipeline-airflow/notebooks/`, but that add-on pins its file
+  browser to `c.ServerApp.root_dir = '/config/notebooks'`, so nothing under
+  `/share` can ever appear in the tree — mapping it `rw` is necessary and not
+  sufficient. A symlink `init_command` puts it there, and the docs now say so.
+  (Python in a notebook could always read `/share` directly; only the file
+  browser was confined.)
+
 ## 2.4.0
 
 - **The pipeline code can be edited and tested from JupyterLab.** `jobs/` is

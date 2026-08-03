@@ -163,15 +163,29 @@ a JupyterLab add-on on the same machine can import exactly what the scheduler
 runs — they cannot drift, because the copy is refreshed each boot. A starter
 notebook is seeded once into `/share/pipeline-airflow/notebooks/`.
 
-JupyterLab needs the Spark Connect client, which is **pure Python — no JVM and no
-Spark installation**. Add this to the JupyterLab add-on's own configuration so it
-survives restarts and updates:
+**The JupyterLab file browser will not show `/share`.** That add-on pins its root:
+
+```python
+c.ServerApp.root_dir = '/config/notebooks'
+```
+
+so nothing under `/share` can appear in the file tree, however it is mapped. The
+mount is still there — Python in a notebook can `open()` and import from `/share`
+perfectly well — it is only the browser that is confined. Symlink it in.
+
+JupyterLab also needs the Spark Connect client, which is **pure Python — no JVM
+and no Spark installation**. Both go in the JupyterLab add-on's own
+configuration, where they re-run at every start and so survive updates:
 
 ```yaml
 init_commands:
+  - ln -sfn /share/pipeline-airflow /config/notebooks/pipeline
   - pip install --no-cache-dir "pyspark-client==4.1.3"
   - pip install --no-cache-dir --no-deps "delta-spark==4.3.1"
 ```
+
+The symlink puts `pipeline/` at the top of the file browser, with `dags/`,
+`lib/` and `notebooks/` inside it — so the DAGs are editable there too.
 
 `--no-deps` on `delta-spark` because it pins `pyspark<=4.1.1` and would otherwise
 pull the full ~400 MB distribution in on top of the slim client.
