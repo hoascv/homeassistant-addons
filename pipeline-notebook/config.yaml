@@ -1,5 +1,5 @@
 name: "Pipeline Notebook"
-version: "1.0.0"
+version: "1.0.1"
 slug: "pipeline-notebook"
 description: "JupyterLab wired to the pipeline: Spark Connect, the Delta lakehouse, and the tracker feeds"
 url: "https://github.com/hoascv/homeassistant-addons/tree/main/pipeline-notebook"

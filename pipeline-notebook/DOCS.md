@@ -22,7 +22,11 @@ If you already use the community one, nothing here replaces it — they coexist.
 
 ## What it does
 
-- Serves JupyterLab **through Home Assistant ingress only**. There is no `ports:`
+- Serves JupyterLab **through Home Assistant ingress only**, with nginx in front.
+  That is not decoration: Home Assistant strips the ingress prefix before
+  forwarding, while JupyterLab needs it in `base_url` to build its asset and
+  websocket URLs, so nginx adds it back. Jupyter itself binds loopback, and nginx
+  answers only Home Assistant's ingress address. There is no `ports:`
   section, so the notebook is never reachable from your LAN. That is deliberate:
   a notebook server executes arbitrary code as root on the Home Assistant host,
   and Home Assistant's own login is a better gate than a token to mislay.

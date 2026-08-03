@@ -1,10 +1,12 @@
 FROM docker.io/library/python:3.12-slim
 
 # jq drives the entrypoint; curl reads this add-on's ingress path from the
-# Supervisor API at startup.
+# Supervisor API at startup. nginx is not optional: Home Assistant strips the
+# ingress prefix before forwarding, while JupyterLab needs that prefix in
+# base_url to build its asset and websocket URLs — nginx puts it back.
 # hadolint ignore=DL3008
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends jq curl \
+    && apt-get install -y --no-install-recommends jq curl nginx \
     && rm -rf /var/lib/apt/lists/*
 
 # No JVM and no Spark distribution. The Spark Connect client is pure Python over
@@ -22,6 +24,7 @@ RUN pip install --no-cache-dir \
         "pyspark-client==4.1.3" \
     && pip install --no-cache-dir --no-deps "delta-spark==4.3.1"
 
+COPY nginx.conf.template /etc/nginx/nginx.conf.template
 COPY run.sh /run.sh
 RUN chmod +x /run.sh
 

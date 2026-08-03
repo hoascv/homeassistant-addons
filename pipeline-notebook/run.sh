@@ -17,8 +17,17 @@ INGRESS_ENTRY="$(curl -fsSL \
 if [ -z "$INGRESS_ENTRY" ]; then
   echo "[Pipeline Notebook] could not read the ingress path from the Supervisor;"
   echo "[Pipeline Notebook]   the UI will not load until this works"
-  INGRESS_ENTRY="/"
+  exit 1
 fi
+
+# nginx takes the ingress port; Jupyter sits behind it on a loopback port.
+INGRESS_PORT=8888
+JUPYTER_PORT=8889
+sed -e "s|%%INGRESS_PORT%%|${INGRESS_PORT}|g" \
+    -e "s|%%JUPYTER_PORT%%|${JUPYTER_PORT}|g" \
+    -e "s|%%INGRESS_ENTRY%%|${INGRESS_ENTRY}|g" \
+    /etc/nginx/nginx.conf.template > /etc/nginx/nginx.conf
+nginx -t
 
 # The pipeline's own modules, published by the Pipeline Airflow add-on and
 # refreshed there on every start. On PYTHONPATH so a notebook imports exactly
@@ -47,6 +56,9 @@ export COOP_TRACKER_API_TOKEN="$(opt '.coop_tracker_api_token // ""')"
 echo "[Pipeline Notebook] serving $NOTEBOOK_ROOT at ingress path $INGRESS_ENTRY"
 echo "[Pipeline Notebook] lib on PYTHONPATH: $LIB_DIR"
 
+# Bound to loopback, so nothing but nginx in this container can reach it, and
+# nginx only answers Home Assistant's ingress address.
+#
 # Authentication is Home Assistant's, not Jupyter's. `ingress: true` with no
 # `ports:` section means the only route in is through Home Assistant, which has
 # already authenticated the user before the request reaches this container; a
@@ -55,9 +67,9 @@ echo "[Pipeline Notebook] lib on PYTHONPATH: $LIB_DIR"
 # sound *because* the port is unpublished — if a `ports:` entry is ever added
 # here, a token becomes mandatory, since a notebook server executes arbitrary
 # code as root on the Home Assistant host.
-exec jupyter lab \
-  --ip=0.0.0.0 \
-  --port=8888 \
+jupyter lab \
+  --ip=127.0.0.1 \
+  --port="$JUPYTER_PORT" \
   --no-browser \
   --allow-root \
   --ServerApp.base_url="$INGRESS_ENTRY" \
@@ -68,4 +80,22 @@ exec jupyter lab \
   --ServerApp.allow_remote_access=True \
   --ServerApp.trust_xheaders=True \
   --LabApp.user_settings_dir=/data/user-settings \
-  --LabApp.workspaces_dir=/data/workspaces
+  --LabApp.workspaces_dir=/data/workspaces &
+JUPYTER_PID=$!
+
+nginx -g 'daemon off;' &
+NGINX_PID=$!
+
+# Either one dying makes the add-on useless, so stop the other and let
+# Supervisor restart the pair rather than serving 502s indefinitely.
+shutdown() {
+  trap - TERM INT
+  kill "$JUPYTER_PID" "$NGINX_PID" 2>/dev/null || true
+  wait 2>/dev/null || true
+}
+trap 'echo "[Pipeline Notebook] stop requested"; shutdown; exit 0' TERM INT
+
+wait -n "$JUPYTER_PID" "$NGINX_PID"
+echo "[Pipeline Notebook] a component exited — shutting the rest down"
+shutdown
+exit 1
