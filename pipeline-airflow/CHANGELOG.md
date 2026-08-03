@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.3.0
+
+- **The startup line for each tracker token now reports its length**, to be
+  compared with the tracker's own `API token auth: ON — api_token is set (N
+  characters)`. A 403 from a tracker means the two tokens differ, and until now
+  neither side said anything that could be compared without writing a secret
+  down. Two numbers in two logs settle it.
+- The token and base URL are trimmed before being exported, so the reported
+  length is the length actually presented — the DAG strips the token anyway, and
+  a value that merely looked a character longer would send you hunting a
+  difference that wasn't there.
+
 ## 2.2.0
 
 - **The trackers are found rather than configured, and need no published host

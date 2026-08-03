@@ -99,14 +99,23 @@ export AIRFLOW_VAR_SPARK_JOB_PATH="/opt/pipeline/jobs/example_job.py"
 #
 # Exported only when non-empty. An empty AIRFLOW_VAR_* would resolve ahead of
 # the metastore and shadow a UI Variable that was perfectly fine.
+trim() { printf '%s' "$1" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'; }
+
 for tracker in gym coop; do
-  url="$(opt ".${tracker}_tracker_base_url // \"\"")"
-  tok="$(opt ".${tracker}_tracker_api_token // \"\"")"
+  url="$(trim "$(opt ".${tracker}_tracker_base_url // \"\"")")"
+  # Trimmed before export so the length reported below is the length actually
+  # presented to the tracker: the DAG strips it anyway, and a token that looks
+  # one character longer than the tracker's would send us hunting a difference
+  # that isn't there.
+  tok="$(trim "$(opt ".${tracker}_tracker_api_token // \"\"")")"
   upper="$(echo "$tracker" | tr '[:lower:]' '[:upper:]')"
   [ -n "$url" ] && export "AIRFLOW_VAR_${upper}_TRACKER_BASE_URL=$url"
   if [ -n "$tok" ]; then
     export "AIRFLOW_VAR_${upper}_TRACKER_API_TOKEN=$tok"
-    echo "[Pipeline Airflow] ${tracker}_tracker token supplied from add-on options"
+    # The length, so it can be compared with the tracker's own startup line
+    # without either value being written down. A 403 from the tracker means the
+    # two didn't match, and two numbers settle that in one glance.
+    echo "[Pipeline Airflow] ${tracker}_tracker token supplied from add-on options (${#tok} characters)"
   fi
 done
 
