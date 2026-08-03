@@ -56,7 +56,38 @@ jobs:
           hadolint --failure-threshold error pipeline-*/Dockerfile
 
       - name: Compile Python (DAGs + jobs)
-        run: python -m py_compile pipeline-airflow/dags/*.py pipeline-spark/jobs/*.py
+        run: |
+          python -m py_compile pipeline-airflow/dags/*.py \
+                               pipeline-airflow/jobs/*.py \
+                               pipeline-spark/jobs/*.py
+
+  test-pipeline:
+    # Its own job rather than the matrix above, which assumes an app/ directory.
+    # Java is installed because the Spark tests are the only thing that exercises
+    # the Delta MERGE, and they must not be quietly skipped here.
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: pipeline-airflow
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: pipeline-airflow/requirements-dev.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Run tests
+        run: pytest
 
   e2e:
     runs-on: ubuntu-latest

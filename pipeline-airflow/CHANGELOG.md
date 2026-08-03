@@ -1,5 +1,30 @@
 # Changelog
 
+## 2.4.0
+
+- **The pipeline code can be edited and tested from JupyterLab.** `jobs/` is
+  published to `/share/pipeline-airflow/lib/` on every start, so a JupyterLab
+  add-on on the same machine imports exactly what the scheduler runs — refreshed
+  each boot, so the two cannot drift. A starter notebook is seeded once into
+  `/share/pipeline-airflow/notebooks/`, covering the feed, querying the Delta
+  tables, and running a merge against a scratch path. `DOCS.md` gives the
+  `init_commands` for the client packages; no JVM is needed, because the Spark
+  Connect client is pure Python.
+- **`manage_bundled_dags`** (default `true`). Set it `false` to own
+  `trackers_ingest.py` in `/share` — it is otherwise overwritten on every start,
+  which is what lets fixes reach an existing installation, and equally what
+  discards anything edited there. Still seeded when absent, so dev mode on a
+  fresh install isn't empty.
+- **A test suite**, run with `./scripts/dev-setup.sh && .venv/bin/python -m pytest`:
+  the HTTP contract and every failure message, the bootstrap-vs-paging decision,
+  address discovery across every hostname shape, and the Delta MERGE itself —
+  including that replaying a batch changes nothing, which is the property the
+  watermark design rests on. The Spark tests skip themselves without a working
+  JVM and run in CI, which now installs Java for them.
+- The feed logic moved from the DAG into `jobs/trackers_feed.py` so it can be
+  imported at all: the DAG module pulls in Airflow and builds its DAGs on
+  import, so nothing in it was testable. No behaviour changed.
+
 ## 2.3.1
 
 - Create the `lakehouse` bucket, not only `raw`. Spark writes objects but never

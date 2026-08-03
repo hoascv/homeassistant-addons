@@ -1,0 +1,4 @@
+.venv/
+.jdk/
+__pycache__/
+.pytest_cache/

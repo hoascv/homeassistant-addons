@@ -16,6 +16,7 @@ PG_PORT="$(opt '.postgres_port // 5432')"
 AIRFLOW_DB_PASSWORD="$(opt '.airflow_db_password')"
 SPARK_MASTER="$(opt '.spark_master // "172.30.32.1"')"
 SPARK_CONNECT_PORT="$(opt '.spark_connect_port // 15002')"
+MANAGE_BUNDLED_DAGS="$(opt '.manage_bundled_dags // true')"
 export MINIO_ENDPOINT="$(opt '.minio_endpoint // "http://172.30.32.1:9000"')"
 export MINIO_KEY="$(opt '.minio_access_key')"
 export MINIO_SECRET="$(opt '.minio_secret_key')"
@@ -53,10 +54,29 @@ export AIRFLOW__CORE__AUTH_MANAGER="airflow.providers.fab.auth_manager.fab_auth_
 mkdir -p /share/pipeline-airflow/dags
 cp -n /opt/airflow/project-dags/example_pipeline.py /share/pipeline-airflow/dags/ 2>/dev/null || true
 
-# The tracker DAGs ship with the add-on and are replaced on every start.
-# With cp -n a fix to them could never reach an installation that already had
-# the old copy. Edit them in the repository, not here.
-cp -f /opt/airflow/project-dags/trackers_ingest.py /share/pipeline-airflow/dags/ 2>/dev/null || true
+# The tracker DAGs normally ship with the add-on and are replaced on every start:
+# with cp -n a fix to them could never reach an installation that already had the
+# old copy. Set manage_bundled_dags to false to take ownership instead — useful
+# when editing them from JupyterLab, at the cost of no longer receiving fixes.
+if [ "$MANAGE_BUNDLED_DAGS" = "false" ]; then
+  # Still seeded when absent, so a fresh install in dev mode isn't empty.
+  cp -n /opt/airflow/project-dags/trackers_ingest.py /share/pipeline-airflow/dags/ 2>/dev/null || true
+  echo "[Pipeline Airflow] dev mode: leaving /share/pipeline-airflow/dags/trackers_ingest.py alone"
+  echo "[Pipeline Airflow]   (you own it now; add-on updates will not change it)"
+else
+  cp -f /opt/airflow/project-dags/trackers_ingest.py /share/pipeline-airflow/dags/ 2>/dev/null || true
+fi
+
+# Publish the importable modules so anything else on the machine — a JupyterLab
+# add-on, say — can run the same code the scheduler runs. Refreshed on every
+# start regardless of dev mode, so a notebook and the DAG can never disagree
+# about what `merge_batch` does.
+mkdir -p /share/pipeline-airflow/lib
+cp -f /opt/pipeline/jobs/*.py /share/pipeline-airflow/lib/ 2>/dev/null || true
+
+# A starting point for using them, seeded once and then yours.
+mkdir -p /share/pipeline-airflow/notebooks
+cp -n /opt/pipeline/notebooks/*.ipynb /share/pipeline-airflow/notebooks/ 2>/dev/null || true
 
 # --- Database and admin user ------------------------------------------------
 # Done here rather than through the entrypoint's _AIRFLOW_WWW_USER_CREATE,

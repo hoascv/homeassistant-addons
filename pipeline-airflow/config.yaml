@@ -1,5 +1,5 @@
 name: "Pipeline Airflow"
-version: "2.3.1"
+version: "2.4.0"
 slug: "pipeline-airflow"
 description: "Apache Airflow 3.3 orchestrator for the data-pipeline stack (LocalExecutor)"
 url: "https://github.com/hoascv/homeassistant-addons/tree/main/pipeline-airflow"
@@ -25,6 +25,7 @@ options:
   airflow_db_password: "changeme"
   spark_master: "172.30.32.1"
   spark_connect_port: 15002
+  manage_bundled_dags: true
   minio_endpoint: "http://172.30.32.1:9000"
   minio_access_key: "minioadmin"
   minio_secret_key: "changeme"
@@ -43,6 +44,7 @@ schema:
   airflow_db_password: "password"
   spark_master: "str"
   spark_connect_port: "port"
+  manage_bundled_dags: "bool?"
   minio_endpoint: "str"
   minio_access_key: "str"
   minio_secret_key: "password"

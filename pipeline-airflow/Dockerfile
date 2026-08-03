@@ -44,6 +44,8 @@ USER root
 # Connect ships the query plan, not the file.
 COPY dags/ /opt/airflow/project-dags/
 COPY jobs/ /opt/pipeline/jobs/
+# Seeded into /share once, for a JupyterLab elsewhere on the machine to pick up.
+COPY notebooks/ /opt/pipeline/notebooks/
 COPY run.sh /run.sh
 RUN chmod +x /run.sh
 

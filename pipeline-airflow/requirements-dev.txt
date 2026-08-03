@@ -1,0 +1,6 @@
+pytest>=7.4,<9
+# The Spark tests run a real local Spark with Delta, which is the only way to
+# exercise the MERGE. delta-spark pins pyspark<=4.1.1; pin pyspark to match so
+# pip resolves in one pass rather than backtracking.
+pyspark==4.1.1
+delta-spark==4.3.1

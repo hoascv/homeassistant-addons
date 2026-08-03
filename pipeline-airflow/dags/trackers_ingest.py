@@ -23,9 +23,9 @@ value in the matching option on the Pipeline Airflow add-on —
 `gym_tracker_api_token` / `coop_tracker_api_token`.
 
 That is the whole of it. The address is worked out from this add-on's own
-hostname (see `_discover_base_url`), so the trackers need no published host port
-and nothing has to be kept in sync when the repository is re-added or the
-add-ons are installed locally. Set `<source>_base_url` only to override that —
+hostname (see `discover_base_url` in jobs/trackers_feed.py), so the trackers
+need no published host port and nothing has to be kept in sync when the
+repository is re-added or the add-ons are installed locally. Set `<source>_base_url` only to override that —
 for a tracker somewhere else entirely.
 
 Airflow Variables of those names work too, but the options are read first and
@@ -38,10 +38,7 @@ from __future__ import annotations
 
 import datetime
 import json
-import socket
 import sys
-import urllib.error
-import urllib.request
 
 import logging
 
@@ -68,80 +65,12 @@ JOBS_DIR = "/opt/pipeline/jobs"
 # `spark_connect_url` Variable for a cluster somewhere else.
 SPARK_CONNECT_URL = "sc://172.30.32.1:15002"
 
-# One request per page; the feed caps this itself. Bounded so a very stale
-# watermark can't turn a single run into an unbounded loop.
-PAGE_SIZE = 1000
-MAX_PAGES = 50
-HTTP_TIMEOUT = 30
-
 SOURCES = {
     "gym_tracker": "http://172.30.32.1:8099",
     "coop_tracker": "http://172.30.32.1:8098",
 }
 
-# Both trackers listen on this inside their own containers, always — it is only
-# the *host* port that has to differ, and reaching them by hostname sidesteps
-# host ports entirely.
-TRACKER_PORT = 8099
-OUR_SLUG = "pipeline-airflow"
-
 log = logging.getLogger(__name__)
-
-
-def _discover_base_url(source: str) -> str | None:
-    """Where the tracker add-on lives, worked out rather than configured.
-
-    Add-ons on the Supervisor network resolve each other by hostname, and every
-    add-on from one repository shares a prefix: this container is
-    `<prefix>-pipeline-airflow`, so the trackers are `<prefix>-gym-tracker` and
-    `<prefix>-coop-tracker`. Taking the prefix from our *own* hostname means it
-    survives the things that would otherwise silently break a pinned address —
-    the prefix is the repository's hash, so it changes if the repository is
-    re-added, and it is `local` for a locally installed copy. Either way we move
-    with it, because we are named the same way.
-
-    It also means the trackers need no published host port at all, so their API
-    is never exposed on the LAN with only an api_token in front of it.
-
-    Returns None when the hostname doesn't look like an add-on's, e.g. running
-    outside Supervisor; the caller then falls back to the configured default.
-    """
-    host = socket.gethostname().split(".")[0]
-    suffix = f"-{OUR_SLUG}"
-    if not host.endswith(suffix) or host == suffix:
-        return None
-    prefix = host[: -len(suffix)]
-    return f"http://{prefix}-{source.replace('_', '-')}:{TRACKER_PORT}"
-
-
-def _get(source: str, base_url: str, token: str, path: str) -> dict:
-    url = f"{base_url.rstrip('/')}{path}"
-    request = urllib.request.Request(
-        url,
-        headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT) as response:
-            return json.loads(response.read().decode())
-    except urllib.error.HTTPError as exc:
-        # 401 is worth naming: it means we reached the add-on and it rejected
-        # the token, which is a different fix from not reaching it at all.
-        if exc.code in (401, 403):
-            raise AirflowFailException(
-                f"{url} rejected the token ({exc.code}). The {source}_api_token option "
-                f"must match the api_token in the {source} add-on's own configuration."
-            ) from exc
-        raise AirflowFailException(f"{url} returned HTTP {exc.code}") from exc
-    except urllib.error.URLError as exc:
-        # "Connection refused" on its own doesn't say what was dialled, which is
-        # exactly the thing you need to know.
-        raise AirflowFailException(
-            f"Could not reach {url} ({exc.reason}). Check the {source} add-on is running. "
-            f"If {source}_base_url is set, it must name a host port that add-on actually "
-            "publishes under its Network settings; leaving the option blank is usually "
-            "better, as the address is then derived from this add-on's own hostname and "
-            "needs no published port at all."
-        ) from exc
 
 
 def _ensure_meta(cursor) -> None:
@@ -176,6 +105,10 @@ def build_dag(source: str, default_url: str):
             # what is asked for — a trailing space in the name is invisible in
             # the list and defeats an exact lookup. A default would flatten both
             # cases into one unhelpful message.
+            if JOBS_DIR not in sys.path:
+                sys.path.insert(0, JOBS_DIR)
+            from trackers_feed import FeedError, discover_base_url, read_batch  # noqa: PLC0415
+
             key = f"{source}_api_token"
             sentinel = object()
             raw_token = Variable.get(key, default=sentinel)
@@ -203,7 +136,7 @@ def build_dag(source: str, default_url: str):
             if base_url:
                 log.info("%s: using the configured address %s", source, base_url)
             else:
-                base_url = _discover_base_url(source) or default_url
+                base_url = discover_base_url(source) or default_url
                 log.info("%s: no address configured, using %s", source, base_url)
 
             pg = PostgresHook(postgres_conn_id=PG_CONN_ID)
@@ -237,47 +170,16 @@ def build_dag(source: str, default_url: str):
                     replace=True,
                 )
 
-            # A first run, or a watermark the feed can no longer bridge.
-            probe = _get(source, base_url, token, f"/api/changes?since={watermark}&limit=1")
-            if watermark == 0 or probe.get("full_reload_required"):
-                snapshot = _get(source, base_url, token, "/api/export")
-                archive("export.json", snapshot)
-                rows = sum(len(v) for v in snapshot["tables"].values())
-                log.info(
-                    "bootstrap: %s rows across %s tables, up to seq %s (watermark was %s)",
-                    rows, len(snapshot["tables"]), snapshot["max_seq"], watermark,
-                )
-                return {
-                    "mode": "bootstrap",
-                    "prefix": f"s3a://{RAW_BUCKET}/{prefix}",
-                    "max_seq": snapshot["max_seq"],
-                    "from_seq": watermark,
-                    "pages": 1,
-                }
-
-            since, pages, changes_seen = watermark, 0, 0
-            while pages < MAX_PAGES:
-                page = _get(source, base_url, token, f"/api/changes?since={since}&limit={PAGE_SIZE}")
-                changes = page.get("changes") or []
-                if not changes:
-                    break
-                archive(f"changes-{since}.json", page)
-                since = changes[-1]["seq"]
-                changes_seen += len(changes)
-                pages += 1
-                if len(changes) < PAGE_SIZE:
-                    break
-            log.info(
-                "incremental: %s change(s) over %s page(s), seq %s -> %s",
-                changes_seen, pages, watermark, since,
-            )
-            return {
-                "mode": "incremental",
-                "prefix": f"s3a://{RAW_BUCKET}/{prefix}",
-                "max_seq": since,
-                "from_seq": watermark,
-                "pages": pages,
-            }
+            try:
+                batch = read_batch(source, base_url, token, watermark, archive, log)
+            except FeedError as exc:
+                # The feed module stays Airflow-free so a test or a notebook can
+                # import it; translating here is the entire cost of that.
+                raise AirflowFailException(str(exc)) from exc
+            # The prefix is this task's business, not the feed's: it is where
+            # the archive went, which only the caller that owns the bucket knows.
+            batch["prefix"] = f"s3a://{RAW_BUCKET}/{prefix}"
+            return batch
 
         @task.short_circuit
         def has_work(batch: dict) -> bool:

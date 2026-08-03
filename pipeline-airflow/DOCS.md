@@ -141,3 +141,78 @@ these apps do delete (un-ticking a challenge removes the tick *and* the workout
 it logged), and "logged then taken back" is worth keeping. The payload stays
 JSON rather than typed columns because both apps gain columns regularly; parse
 it downstream with `from_json` and an explicit schema for the tables you query.
+
+## Developing
+
+The pipeline code is three files, and none of them need a rebuild to read:
+
+| File | What it is |
+|---|---|
+| `dags/trackers_ingest.py` | orchestration only — Variables, watermark, S3 archiving |
+| `jobs/trackers_feed.py` | reading a tracker: discovery, HTTP, bootstrap-vs-paging |
+| `jobs/trackers_merge.py` | the Spark job that MERGEs a batch into Delta |
+
+The DAG module is kept thin deliberately: it imports `airflow.sdk` and two
+providers and builds its DAGs on import, so nothing in it can be unit-tested.
+Anything worth testing lives in `jobs/`, which is plain Python.
+
+### From JupyterLab
+
+The add-on publishes `jobs/` to `/share/pipeline-airflow/lib/` on every start, so
+a JupyterLab add-on on the same machine can import exactly what the scheduler
+runs — they cannot drift, because the copy is refreshed each boot. A starter
+notebook is seeded once into `/share/pipeline-airflow/notebooks/`.
+
+JupyterLab needs the Spark Connect client, which is **pure Python — no JVM and no
+Spark installation**. Add this to the JupyterLab add-on's own configuration so it
+survives restarts and updates:
+
+```yaml
+init_commands:
+  - pip install --no-cache-dir "pyspark-client==4.1.3"
+  - pip install --no-cache-dir --no-deps "delta-spark==4.3.1"
+```
+
+`--no-deps` on `delta-spark` because it pins `pyspark<=4.1.1` and would otherwise
+pull the full ~400 MB distribution in on top of the slim client.
+
+```python
+import sys; sys.path.insert(0, "/share/pipeline-airflow/lib")
+from trackers_merge import merge_batch
+spark = SparkSession.builder.remote("sc://172.30.32.1:15002").getOrCreate()
+```
+
+### Editing the tracker DAG in place
+
+`trackers_ingest.py` is normally overwritten in `/share` on every start, so fixes
+reach an installation that already has an old copy. That also means edits made
+there are lost. Set **`manage_bundled_dags: false`** to take ownership:
+
+```
+[Pipeline Airflow] dev mode: leaving /share/.../trackers_ingest.py alone
+[Pipeline Airflow]   (you own it now; add-on updates will not change it)
+```
+
+The trade is real: you stop receiving DAG fixes with add-on updates, and will
+have to merge them yourself. `example_pipeline.py` and the notebooks are yours
+either way and are never overwritten.
+
+### Tests
+
+```
+./scripts/dev-setup.sh          # .venv, and a JDK in .jdk only if you need one
+.venv/bin/python -m pytest
+```
+
+`dev-setup.sh` fetches a Temurin JDK into `.jdk` rather than installing Java
+system-wide, because the Spark tests need a JVM and wanting to run a test suite
+is not a reason to change your machine. Without one:
+
+```
+.venv/bin/python -m pytest -m "not spark"
+```
+
+The Spark tests also skip themselves automatically when no *working* JVM is
+present — `java` existing is not the same as `java` running, which macOS in
+particular gets wrong. They are the only tests that exercise the MERGE, so CI
+installs Java and runs them.
