@@ -1,5 +1,5 @@
 name: "Pipeline Airflow"
-version: "2.1.1"
+version: "2.2.0"
 slug: "pipeline-airflow"
 description: "Apache Airflow 3.3 orchestrator for the data-pipeline stack (LocalExecutor)"
 url: "https://github.com/hoascv/homeassistant-addons/tree/main/pipeline-airflow"
@@ -31,9 +31,9 @@ options:
   pipeline_pg_user: "pipeline"
   pipeline_pg_password: "changeme"
   pipeline_pg_db: "pipeline"
-  gym_tracker_base_url: "http://172.30.32.1:8099"
+  gym_tracker_base_url: ""
   gym_tracker_api_token: ""
-  coop_tracker_base_url: "http://172.30.32.1:8098"
+  coop_tracker_base_url: ""
   coop_tracker_api_token: ""
 schema:
   admin_user: "str"

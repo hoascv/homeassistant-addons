@@ -100,16 +100,26 @@ double-counting.
 To set it up, for each tracker:
 
 1. In the tracker add-on's configuration, set an **api_token**.
-2. In its **Network** section, publish a host port (they both listen on 8099
-   internally, so give them different host ports).
-3. In **this** add-on's configuration, fill in the matching options and restart:
+2. In **this** add-on's configuration, put the same value in
+   `gym_tracker_api_token` / `coop_tracker_api_token`, and restart.
+
+That's all. **No host port needs publishing.** Add-ons reach each other by
+hostname on the Supervisor network, and every add-on from one repository shares
+a prefix — this container is `<prefix>-pipeline-airflow`, so the trackers are
+`<prefix>-gym-tracker` and `<prefix>-coop-tracker`. The prefix is read from this
+container's own hostname, so it follows the repository being re-added (the
+prefix is its hash) or a local install (`local-…`) without being reconfigured.
+
+Keeping the trackers off any host port also keeps their API off your LAN, where
+an `api_token` would be the only thing in front of it.
+
+Set `gym_tracker_base_url` / `coop_tracker_base_url` only to **override** that —
+a tracker on another machine, say. A published host port then has to match:
 
    | Option | Example |
    |---|---|
    | `gym_tracker_base_url` | `http://172.30.32.1:8099` |
-   | `gym_tracker_api_token` | the token you set |
    | `coop_tracker_base_url` | `http://172.30.32.1:8098` |
-   | `coop_tracker_api_token` | the token you set |
 
    Airflow Variables of the same names also work, but the options are the
    reliable route: they are read *first*, and they can't suffer the failure a UI

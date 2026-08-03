@@ -18,15 +18,15 @@ One DAG per source, each:
   3. **advance_watermark** — only after the merge succeeds. A failure therefore
      re-runs the batch instead of stepping over it.
 
-Setup, per tracker: set an `api_token` in its configuration, publish a host port
-under its Network settings (both listen on 8099 inside their containers, so they
-need different host ports), then fill in the matching options on the Pipeline
-Airflow add-on:
+Setup, per tracker: set an `api_token` in its configuration, and put the same
+value in the matching option on the Pipeline Airflow add-on —
+`gym_tracker_api_token` / `coop_tracker_api_token`.
 
-    gym_tracker_base_url    http://172.30.32.1:8099
-    gym_tracker_api_token   <the token>
-    coop_tracker_base_url   http://172.30.32.1:8098
-    coop_tracker_api_token  <the token>
+That is the whole of it. The address is worked out from this add-on's own
+hostname (see `_discover_base_url`), so the trackers need no published host port
+and nothing has to be kept in sync when the repository is re-added or the
+add-ons are installed locally. Set `<source>_base_url` only to override that —
+for a tracker somewhere else entirely.
 
 Airflow Variables of those names work too, but the options are read first and
 can't suffer a key with an invisible stray character in it.
@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import datetime
 import json
+import socket
 import sys
 import urllib.error
 import urllib.request
@@ -77,7 +78,39 @@ SOURCES = {
     "coop_tracker": "http://172.30.32.1:8098",
 }
 
+# Both trackers listen on this inside their own containers, always — it is only
+# the *host* port that has to differ, and reaching them by hostname sidesteps
+# host ports entirely.
+TRACKER_PORT = 8099
+OUR_SLUG = "pipeline-airflow"
+
 log = logging.getLogger(__name__)
+
+
+def _discover_base_url(source: str) -> str | None:
+    """Where the tracker add-on lives, worked out rather than configured.
+
+    Add-ons on the Supervisor network resolve each other by hostname, and every
+    add-on from one repository shares a prefix: this container is
+    `<prefix>-pipeline-airflow`, so the trackers are `<prefix>-gym-tracker` and
+    `<prefix>-coop-tracker`. Taking the prefix from our *own* hostname means it
+    survives the things that would otherwise silently break a pinned address —
+    the prefix is the repository's hash, so it changes if the repository is
+    re-added, and it is `local` for a locally installed copy. Either way we move
+    with it, because we are named the same way.
+
+    It also means the trackers need no published host port at all, so their API
+    is never exposed on the LAN with only an api_token in front of it.
+
+    Returns None when the hostname doesn't look like an add-on's, e.g. running
+    outside Supervisor; the caller then falls back to the configured default.
+    """
+    host = socket.gethostname().split(".")[0]
+    suffix = f"-{OUR_SLUG}"
+    if not host.endswith(suffix) or host == suffix:
+        return None
+    prefix = host[: -len(suffix)]
+    return f"http://{prefix}-{source.replace('_', '-')}:{TRACKER_PORT}"
 
 
 def _get(source: str, base_url: str, token: str, path: str) -> dict:
@@ -102,10 +135,11 @@ def _get(source: str, base_url: str, token: str, path: str) -> dict:
         # "Connection refused" on its own doesn't say what was dialled, which is
         # exactly the thing you need to know.
         raise AirflowFailException(
-            f"Could not reach {url} ({exc.reason}). The {source} add-on must publish a "
-            "host port under its Network settings — both trackers listen on 8099 inside "
-            f"their containers, so they need different host ports — and {source}_base_url "
-            "must name the host port you gave it."
+            f"Could not reach {url} ({exc.reason}). Check the {source} add-on is running. "
+            f"If {source}_base_url is set, it must name a host port that add-on actually "
+            "publishes under its Network settings; leaving the option blank is usually "
+            "better, as the address is then derived from this add-on's own hostname and "
+            "needs no published port at all."
         ) from exc
 
 
@@ -162,7 +196,14 @@ def build_dag(source: str, default_url: str):
                     f"Airflow Variable {key!r} exists but is empty. Set it to the api_token "
                     f"from the {source} add-on's configuration."
                 )
-            base_url = Variable.get(f"{source}_base_url", default=default_url)
+            # Configured wins; otherwise find it. Left blank on purpose is the
+            # normal case, and means "work it out" rather than "no address".
+            base_url = (Variable.get(f"{source}_base_url", default="") or "").strip()
+            if base_url:
+                log.info("%s: using the configured address %s", source, base_url)
+            else:
+                base_url = _discover_base_url(source) or default_url
+                log.info("%s: no address configured, using %s", source, base_url)
 
             pg = PostgresHook(postgres_conn_id=PG_CONN_ID)
             with pg.get_conn() as connection, connection.cursor() as cursor:

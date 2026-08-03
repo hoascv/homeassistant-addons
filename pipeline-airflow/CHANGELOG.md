@@ -1,5 +1,20 @@
 # Changelog
 
+## 2.2.0
+
+- **The trackers are found rather than configured, and need no published host
+  port.** Add-ons reach each other by hostname on the Supervisor network, and
+  add-ons from one repository share a prefix, so this container being
+  `<prefix>-pipeline-airflow` is enough to know the trackers are
+  `<prefix>-gym-tracker` and `<prefix>-coop-tracker`. The prefix comes from our
+  own hostname, so it follows the repository being re-added — the prefix is its
+  hash — or a local install, with nothing to keep in sync. Outside Supervisor
+  the derivation returns nothing and the configured default is used.
+- Consequently the tracker API need not be exposed on the LAN at all, where an
+  `api_token` would be the only thing guarding it.
+- `gym_tracker_base_url` / `coop_tracker_base_url` now default to blank, meaning
+  "work it out". Set one only to point somewhere else.
+
 ## 2.1.1
 
 - **A tracker that can't be reached now says which address was tried.** The
