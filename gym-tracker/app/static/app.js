@@ -25,6 +25,88 @@ function toast(msg) {
   toastTimer = setTimeout(() => { el.hidden = true; }, 2600);
 }
 
+// --- Celebrations -----------------------------------------------------------
+// Finishing is the point of a challenge, so it should feel like something. Two
+// weights: a burst when the day is done, and a proper moment when a whole
+// challenge is completed — the daily one stays small so it doesn't wear out.
+
+const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+
+function confetti(count = 90) {
+  // Hand-rolled rather than a library: the page is served from an add-on with
+  // no CDN access, and this is ~30 lines. Skipped entirely for anyone who has
+  // asked for less motion — they still get the message.
+  if (reducedMotion.matches) return;
+  const canvas = document.getElementById("confetti");
+  const ctx = canvas.getContext("2d");
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = canvas.clientWidth * dpr;
+  canvas.height = canvas.clientHeight * dpr;
+  ctx.scale(dpr, dpr);
+  canvas.hidden = false;
+
+  const w = canvas.clientWidth;
+  const colors = ["#6c8cff", "#7ee2b8", "#ffd166", "#ff8fa3", "#c3a6ff"];
+  const bits = Array.from({ length: count }, () => ({
+    x: w / 2 + (Math.random() - 0.5) * w * 0.5,
+    y: canvas.clientHeight * 0.35 + (Math.random() - 0.5) * 60,
+    vx: (Math.random() - 0.5) * 9,
+    vy: Math.random() * -11 - 3,
+    rot: Math.random() * Math.PI,
+    vr: (Math.random() - 0.5) * 0.3,
+    size: 5 + Math.random() * 6,
+    color: colors[Math.floor(Math.random() * colors.length)],
+  }));
+
+  let frames = 0;
+  (function tick() {
+    ctx.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
+    let alive = false;
+    for (const b of bits) {
+      b.vy += 0.32;           // gravity
+      b.vx *= 0.99;           // drag
+      b.x += b.vx;
+      b.y += b.vy;
+      b.rot += b.vr;
+      if (b.y < canvas.clientHeight + 20) alive = true;
+      ctx.save();
+      ctx.translate(b.x, b.y);
+      ctx.rotate(b.rot);
+      ctx.fillStyle = b.color;
+      ctx.globalAlpha = Math.max(0, 1 - frames / 150);
+      ctx.fillRect(-b.size / 2, -b.size / 4, b.size, b.size / 2);
+      ctx.restore();
+    }
+    frames += 1;
+    if (alive && frames < 160) requestAnimationFrame(tick);
+    else { canvas.hidden = true; ctx.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight); }
+  })();
+}
+
+function celebrateDay(challenge) {
+  confetti(60);
+  const streak = challenge && challenge.streak;
+  toast(streak > 1 ? `Day done — ${streak} day streak 🔥` : "Day done 🎉");
+}
+
+function celebrateChallenge(view, stats) {
+  const el = document.getElementById("celebration");
+  const pct = stats && stats.completion_pct != null ? `${stats.completion_pct}%` : null;
+  const lines = [];
+  if (stats) {
+    lines.push(`${stats.days_complete} of ${stats.days_elapsed} days${pct ? ` · ${pct}` : ""}`);
+    if (stats.longest_streak) lines.push(`longest streak ${stats.longest_streak}`);
+  }
+  el.querySelector(".celebration-name").textContent = view.name;
+  el.querySelector(".celebration-stats").textContent = lines.join(" · ");
+  el.hidden = false;
+  confetti(160);
+}
+
+function dismissCelebration() {
+  document.getElementById("celebration").hidden = true;
+}
+
 function openSheet(id) { document.getElementById(id).classList.add("open"); }
 function closeSheet(id) { document.getElementById(id).classList.remove("open"); }
 
@@ -480,6 +562,40 @@ let challengeItemsFor = null;
 async function loadChallenge() {
   try { challengeData = await fetchJSON("api/challenges"); } catch (e) { return; }
   renderChallenge(challengeData);
+  maybeCelebrateFinished();
+}
+
+// A challenge that ran out while the app was closed still deserves its moment,
+// so this is driven by the server's `awaiting_celebration` rather than by
+// noticing the transition live. Marked seen only once shown, so a reload does
+// not replay it and a missed one is not lost.
+let celebrationPending = false;
+async function maybeCelebrateFinished() {
+  if (celebrationPending) return;
+  const done = (challengeData || []).find((c) => c.awaiting_celebration);
+  if (!done) return;
+  celebrationPending = true;
+  let stats = null;
+  try {
+    const all = await fetchJSON("api/challenges/stats");
+    stats = (all || []).find((s) => s.id === done.id) || null;
+  } catch (e) { /* the numbers are a bonus; the moment is not */ }
+  celebrateChallenge(done, stats);
+  try {
+    await fetchJSON(`api/challenges/${done.id}/celebrated`, { method: "POST" });
+    done.awaiting_celebration = false;
+  } catch (e) {
+    // Unmarked, so it will be offered again next load rather than lost.
+  }
+  celebrationPending = false;
+}
+
+// Computed locally so the optimistic tick can tell the moment it lands, rather
+// than waiting for the server to say so.
+function isChallengeComplete(challenge) {
+  const items = (challenge && challenge.items) || [];
+  const live = items.filter((i) => !i.archived);
+  return live.length > 0 && live.every((i) => i.done_today);
 }
 
 function challengeById(id) {
@@ -578,7 +694,13 @@ document.getElementById("challenge-cards").addEventListener("click", (e) => {
   // like a live app. The POST reconciles against the server; on failure we roll
   // the same change back and tell the user.
   const nextDone = !item.done_today;
+  const wasComplete = isChallengeComplete(found.challenge);
   applyChallengeToggle(item, nextDone, found.challenge);
+  // The tick that finishes the day, not merely any tick, and never on the way
+  // back down — un-ticking is not an achievement.
+  if (nextDone && !wasComplete && isChallengeComplete(found.challenge)) {
+    celebrateDay(found.challenge);
+  }
 
   fetchJSON("api/challenge/toggle", {
     method: "POST",

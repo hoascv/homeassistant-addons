@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.28.0
+
+- **Finishing is celebrated.** Two moments, weighted differently so the frequent
+  one doesn't wear out:
+  - **The day** — ticking the last item sets off a short confetti burst and says
+    what the streak is now. Only on the tick that completes the day, and never
+    on the way back down: un-ticking is not an achievement.
+  - **The challenge** — completing one that has an end date brings up the name
+    and what you actually did: days completed, the rate, the longest streak.
+- The end-of-challenge moment counts **the last day the moment it is finished**,
+  not the following morning — finishing a 31-day challenge on the 31st should be
+  congratulated while it still feels like one.
+- It is also shown **once**, and is not lost if you were away. The server records
+  when it was displayed rather than when the challenge ended, so a challenge that
+  ran out while the app was closed is still celebrated next time you open it,
+  and a reload doesn't replay it.
+- Challenges that had already ended before this existed are not queued up: the
+  migration marks them as already celebrated, or upgrading would have set off a
+  run of them at once.
+- Confetti is skipped for anyone whose system asks for reduced motion. The
+  message and the numbers still appear — the celebration is the point, the
+  animation is the decoration.
+
 ## 1.27.0
 
 - **The add-on log now says whether token auth is usable.** A data pipeline that

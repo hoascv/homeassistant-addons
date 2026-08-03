@@ -484,6 +484,21 @@
 
 <div class="toast" id="toast" hidden></div>
 
+<!-- Sits above everything and ignores pointer events, so a burst never blocks
+     a tap on the checklist underneath. -->
+<canvas class="confetti" id="confetti" hidden></canvas>
+
+<div class="celebration" id="celebration" hidden role="dialog" aria-modal="true"
+     aria-labelledby="celebration-title">
+  <div class="celebration-card">
+    <div class="celebration-emoji" aria-hidden="true">🏆</div>
+    <p class="celebration-kicker" id="celebration-title">Challenge complete</p>
+    <h2 class="celebration-name"></h2>
+    <p class="celebration-stats"></p>
+    <button type="button" class="btn-primary" onclick="dismissCelebration()">Nice</button>
+  </div>
+</div>
+
 <script>
   window.GYM = {
     goal: {{ goal | tojson }},

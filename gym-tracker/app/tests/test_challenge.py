@@ -1097,3 +1097,91 @@ def test_an_explicit_join_date_outranks_an_earlier_tick(client, conn):
     # From the stated day, not the early tick — and up to yesterday, today
     # being still open rather than a day the item has been scored over.
     assert entry["days_member"] == 3
+
+
+# --- Celebrating the end of a challenge -------------------------------------
+
+
+def test_a_challenge_with_no_end_date_never_awaits_celebration(client, conn):
+    """It never ends, so there is no moment. The daily completion carries it."""
+    from datetime import date
+
+    cid = _new_challenge(client, "Open ended", date.today().isoformat())
+    _add_exercise_item(client, conn, cid, "squat")
+    view = next(c for c in client.get("/api/challenges").get_json() if c["id"] == cid)
+    assert view["awaiting_celebration"] is False
+
+
+def test_finishing_the_last_day_awaits_celebration_the_same_day(client, conn):
+    """The 31st of a 31-day challenge should be congratulated on the 31st, while
+    it still feels like an achievement — not the following morning."""
+    from datetime import date, timedelta
+
+    today = date.today()
+    cid = _new_challenge(client, "Ends today", (today - timedelta(days=2)).isoformat(),
+                         today.isoformat())
+    item = _add_exercise_item(client, conn, cid, "squat")
+
+    before = next(c for c in client.get("/api/challenges").get_json() if c["id"] == cid)
+    assert before["awaiting_celebration"] is False  # last day, not yet done
+
+    client.post("/api/challenge/toggle", json={"item_id": item})
+    after = next(c for c in client.get("/api/challenges").get_json() if c["id"] == cid)
+    assert after["complete_today"] is True
+    assert after["awaiting_celebration"] is True
+
+
+def test_a_challenge_that_ended_while_away_still_awaits_celebration(client, conn):
+    from datetime import date, timedelta
+
+    today = date.today()
+    cid = _new_challenge(client, "Ended", (today - timedelta(days=9)).isoformat(),
+                         (today - timedelta(days=2)).isoformat())
+    _add_exercise_item(client, conn, cid, "squat")
+    view = next(c for c in client.get("/api/challenges").get_json() if c["id"] == cid)
+    # Missed at the time, not lost: it is offered next time the app is opened.
+    assert view["awaiting_celebration"] is True
+
+
+def test_marking_it_celebrated_shows_it_once(client, conn):
+    from datetime import date, timedelta
+
+    today = date.today()
+    cid = _new_challenge(client, "Ended", (today - timedelta(days=9)).isoformat(),
+                         (today - timedelta(days=2)).isoformat())
+    _add_exercise_item(client, conn, cid, "squat")
+
+    assert client.post(f"/api/challenges/{cid}/celebrated").status_code == 200
+    view = next(c for c in client.get("/api/challenges").get_json() if c["id"] == cid)
+    assert view["awaiting_celebration"] is False
+
+    # Idempotent: a double-tap or a retry says so rather than re-stamping.
+    again = client.post(f"/api/challenges/{cid}/celebrated").get_json()
+    assert again["already"] is True
+
+
+def test_marking_an_unknown_challenge_celebrated_is_a_404(client):
+    assert client.post("/api/challenges/9999/celebrated").status_code == 404
+
+
+def test_challenges_that_ended_before_the_feature_are_not_all_celebrated_at_once(client, conn):
+    """The migration back-stamps them: otherwise every old challenge would
+    queue up a celebration on the first launch after upgrading."""
+    import app as gymapp
+    from datetime import date, timedelta
+
+    today = date.today()
+    cid = _new_challenge(client, "Long done", (today - timedelta(days=40)).isoformat(),
+                         (today - timedelta(days=30)).isoformat())
+    _add_exercise_item(client, conn, cid, "squat")
+    # Genuinely the pre-feature schema: dropping the column is what makes
+    # init_db take the migration branch, which is the thing under test.
+    conn.execute("DROP TRIGGER IF EXISTS challenges_ai")
+    conn.execute("DROP TRIGGER IF EXISTS challenges_au")
+    conn.execute("DROP TRIGGER IF EXISTS challenges_ad")
+    conn.execute("ALTER TABLE challenges DROP COLUMN celebrated_at")
+    conn.commit()
+    gymapp.init_db()
+
+    view = next(c for c in client.get("/api/challenges").get_json() if c["id"] == cid)
+    assert view["awaiting_celebration"] is False

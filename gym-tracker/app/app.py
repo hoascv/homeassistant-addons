@@ -19,7 +19,7 @@ from flask import Flask, Response, g, jsonify, render_template, request, send_fi
 
 import garmin_client
 
-APP_VERSION = "1.27.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.28.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("GYM_DB_PATH", "/data/gym.db")
 OPTIONS_PATH = os.environ.get("GYM_OPTIONS_PATH", "/data/options.json")
@@ -454,7 +454,8 @@ def init_db():
             repeat_of INTEGER REFERENCES challenges(id),
             schedule_kind TEXT NOT NULL DEFAULT 'daily',
             schedule_interval INTEGER,
-            schedule_weekdays TEXT
+            schedule_weekdays TEXT,
+            celebrated_at TEXT
         )
         """
     )
@@ -770,6 +771,16 @@ def _migrate_columns(conn):
         )
         conn.execute("ALTER TABLE challenges ADD COLUMN schedule_interval INTEGER")
         conn.execute("ALTER TABLE challenges ADD COLUMN schedule_weekdays TEXT")
+    if "celebrated_at" not in challenge_cols:
+        # When the end-of-challenge celebration was shown. Recorded so it shows
+        # once and not on every page load — and NULL for challenges that ended
+        # before this existed, which would otherwise all celebrate at once.
+        conn.execute("ALTER TABLE challenges ADD COLUMN celebrated_at TEXT")
+        conn.execute(
+            "UPDATE challenges SET celebrated_at = ? "
+            "WHERE end_date IS NOT NULL AND end_date < ?",
+            (_now_ts(), date.today().isoformat()),
+        )
 
     item_cols = {row[1] for row in conn.execute("PRAGMA table_info(challenge_items)")}
     if "challenge_id" not in item_cols:
@@ -1859,6 +1870,24 @@ def _challenge_next_due(ch, from_day=None):
     return None
 
 
+def _challenge_over(ch, complete_today, today=None):
+    """Whether a challenge has run its course — the moment worth celebrating.
+
+    Its last day counts the instant it is completed, not the following morning:
+    finishing a 31-day challenge on the 31st should be congratulated then, while
+    it still feels like an achievement. A challenge with no end date never ends,
+    so there is nothing to celebrate; the daily completion carries it instead.
+    """
+    today = today or date.today()
+    if not ch.get("end_date"):
+        return False
+    try:
+        end = date.fromisoformat(ch["end_date"])
+    except (ValueError, TypeError):
+        return False
+    return end < today or (end == today and complete_today)
+
+
 def _challenge_finished(ch, today=None):
     today = today or date.today()
     if not ch.get("end_date"):
@@ -2777,6 +2806,7 @@ def _challenge_view(conn, ch):
             day_number = min(max((today - start).days + 1, 0), total_days)
         except ValueError:
             total_days = None
+    complete_today = bool(ids) and set(ids) <= done_today
     return {
         "id": ch["id"],
         "name": ch["name"],
@@ -2793,7 +2823,12 @@ def _challenge_view(conn, ch):
         "next_due": _challenge_next_due(ch, today),
         "items": items,
         "streak": _challenge_streak(conn, ch["id"]),
-        "complete_today": bool(ids) and set(ids) <= done_today,
+        "complete_today": complete_today,
+        # The end-of-challenge moment, shown once. The client marks it seen, so
+        # a reload doesn't replay it and a missed one isn't lost.
+        "awaiting_celebration": (
+            not ch["celebrated_at"] and _challenge_over(ch, complete_today, today)
+        ),
         "last_7_days": last_7,
     }
 
@@ -3051,6 +3086,28 @@ def api_repeat_challenge(challenge_id):
         )
     db.commit()
     return jsonify({"status": "created", "id": new_id}), 201
+
+
+@app.route("/api/challenges/<int:challenge_id>/celebrated", methods=["POST"])
+def api_mark_celebrated(challenge_id):
+    """Record that the end-of-challenge celebration has been shown.
+
+    Written when the client has actually displayed it, rather than when the
+    challenge ends: a challenge that finished while you were away should still
+    be celebrated the next time you open the app, not silently marked as seen.
+    """
+    db = get_db()
+    row = db.execute("SELECT celebrated_at FROM challenges WHERE id = ?", (challenge_id,)).fetchone()
+    if row is None:
+        return jsonify({"error": "no such challenge"}), 404
+    if row["celebrated_at"]:
+        return jsonify({"ok": True, "already": True})
+    db.execute(
+        "UPDATE challenges SET celebrated_at = ?, updated_at = ? WHERE id = ?",
+        (_now_ts(), _now_ts(), challenge_id),
+    )
+    db.commit()
+    return jsonify({"ok": True})
 
 
 @app.route("/api/challenges/<int:challenge_id>", methods=["DELETE"])
