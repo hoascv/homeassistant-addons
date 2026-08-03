@@ -58,7 +58,8 @@ from airflow.providers.postgres.hooks.postgres import PostgresHook
 PG_CONN_ID = "pipeline_pg"
 MINIO_CONN_ID = "minio_default"
 RAW_BUCKET = "raw"
-LAKEHOUSE_ROOT = "s3a://lakehouse"
+LAKEHOUSE_BUCKET = "lakehouse"
+LAKEHOUSE_ROOT = f"s3a://{LAKEHOUSE_BUCKET}"
 META_SCHEMA = "pipeline_meta"
 # Where the merge module lives. Not on the DAGs path on purpose: importing it
 # pulls in pyspark, and the dag-processor re-parses this folder constantly.
@@ -216,9 +217,15 @@ def build_dag(source: str, default_url: str):
                 watermark = int(row[0]) if row else 0
                 connection.commit()
 
+            # Both buckets, not just the one this task writes to. Spark creates
+            # objects but never buckets, so a missing `lakehouse` surfaces much
+            # later as an S3A UnknownStoreException from inside the merge, long
+            # after the batch has been fetched and archived.
             s3 = S3Hook(aws_conn_id=MINIO_CONN_ID)
-            if not s3.check_for_bucket(RAW_BUCKET):
-                s3.create_bucket(bucket_name=RAW_BUCKET)
+            for bucket in (RAW_BUCKET, LAKEHOUSE_BUCKET):
+                if not s3.check_for_bucket(bucket):
+                    log.info("creating bucket %s", bucket)
+                    s3.create_bucket(bucket_name=bucket)
             stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
             prefix = f"{source}/{stamp}"
 

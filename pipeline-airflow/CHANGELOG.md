@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.3.1
+
+- Create the `lakehouse` bucket, not only `raw`. Spark writes objects but never
+  creates buckets, so a MinIO without it failed inside the merge with
+  `UnknownStoreException: s3a://lakehouse/...` — after the batch had already
+  been fetched and archived, and with an error naming a path rather than the
+  missing bucket.
+
 ## 2.3.0
 
 - **The startup line for each tracker token now reports its length**, to be
