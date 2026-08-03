@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.27.0
+
+- **The add-on log now says whether token auth is usable.** A data pipeline that
+  presents a bearer token gets the same 403 whether the token is wrong or no
+  `api_token` is configured here at all — the two are indistinguishable from the
+  caller's side. Startup now states which it is, with the token's length so it
+  can be compared against the caller's copy. The value itself is never logged.
+- `/api/debug` reports the same as `api_token_set`, `api_token_length` and
+  `restrict_to_user_ids_set`.
+
 ## 1.26.0
 
 - **Today is no longer counted as a missed day before it's over.** A challenge

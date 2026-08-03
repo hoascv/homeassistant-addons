@@ -19,7 +19,7 @@ from flask import Flask, Response, g, jsonify, render_template, request, send_fi
 
 import garmin_client
 
-APP_VERSION = "1.26.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.27.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("GYM_DB_PATH", "/data/gym.db")
 OPTIONS_PATH = os.environ.get("GYM_OPTIONS_PATH", "/data/options.json")
@@ -123,6 +123,24 @@ def get_allowed_user_ids():
 
 def get_api_token():
     return (_read_options().get("api_token") or "").strip()
+
+
+def _api_access_summary():
+    """One line saying whether token auth is usable, for the add-on log.
+
+    A pipeline that presents a token gets a flat 403 when none is configured
+    here, which looks identical to presenting the wrong one. Saying so at
+    startup turns that into something you can read off rather than deduce. The
+    length is included so it can be compared against the caller's copy — the
+    value itself is never logged.
+    """
+    token = get_api_token()
+    if not token:
+        return (
+            "API token auth: OFF — no api_token configured, so every bearer "
+            "token is rejected. A data pipeline needs this set."
+        )
+    return f"API token auth: ON — api_token is set ({len(token)} characters)"
 
 
 def _request_has_api_token():
@@ -3777,6 +3795,12 @@ def api_debug():
             "ha_time_zone": (ha_config or {}).get("time_zone") if ha_config else None,
             "options_path": OPTIONS_PATH,
             "options_path_exists": os.path.exists(OPTIONS_PATH),
+            # Whether a pipeline can authenticate at all, and how long the
+            # token is so it can be compared with the caller's copy. Never the
+            # value: this endpoint is reachable by any allowed ingress user.
+            "api_token_set": bool(get_api_token()),
+            "api_token_length": len(get_api_token()),
+            "restrict_to_user_ids_set": bool(get_allowed_user_ids()),
             "db_path": DB_PATH,
             "db_ok": db_ok,
             "db_error": db_error,
@@ -3916,6 +3940,7 @@ if __name__ == "__main__":
     signal.signal(signal.SIGTERM, _handle_shutdown_signal)
     init_db()
     _log(f"starting Gym Tracker {APP_VERSION}")
+    _log(_api_access_summary())
     threading.Thread(target=_background_loop, daemon=True).start()
     port = int(os.environ.get("GYM_PORT", "8099"))
     _log(f"serving on 0.0.0.0:{port} (waitress)")
