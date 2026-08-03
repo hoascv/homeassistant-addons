@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.1.1
+
+- **A tracker that can't be reached now says which address was tried.** The
+  failure was a bare `URLError: <urlopen error [Errno 111] Connection refused>`,
+  which withholds the one fact you need. It now names the URL and points at the
+  cause: the tracker add-on has no host port published, or `<source>_base_url`
+  names the wrong one.
+- **A rejected token is told apart from an unreachable add-on.** A 401 or 403
+  means the request arrived and the token was wrong — a different fix from not
+  arriving at all — so it says so, rather than being lumped in with other HTTP
+  errors.
+
 ## 2.1.0
 
 - **The tracker credentials are add-on options now**: `gym_tracker_base_url`,

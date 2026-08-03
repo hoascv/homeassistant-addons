@@ -18,13 +18,18 @@ One DAG per source, each:
   3. **advance_watermark** — only after the merge succeeds. A failure therefore
      re-runs the batch instead of stepping over it.
 
-Setup: publish each tracker's port (add-on → Network), set an `api_token` in
-its configuration, then set these Airflow Variables:
+Setup, per tracker: set an `api_token` in its configuration, publish a host port
+under its Network settings (both listen on 8099 inside their containers, so they
+need different host ports), then fill in the matching options on the Pipeline
+Airflow add-on:
 
     gym_tracker_base_url    http://172.30.32.1:8099
     gym_tracker_api_token   <the token>
     coop_tracker_base_url   http://172.30.32.1:8098
     coop_tracker_api_token  <the token>
+
+Airflow Variables of those names work too, but the options are read first and
+can't suffer a key with an invisible stray character in it.
 
 A source with no token set fails loudly rather than skipping: a pipeline that is
 quietly loading nothing looks exactly like a healthy one.
@@ -34,6 +39,7 @@ from __future__ import annotations
 import datetime
 import json
 import sys
+import urllib.error
 import urllib.request
 
 import logging
@@ -74,13 +80,33 @@ SOURCES = {
 log = logging.getLogger(__name__)
 
 
-def _get(base_url: str, token: str, path: str) -> dict:
+def _get(source: str, base_url: str, token: str, path: str) -> dict:
+    url = f"{base_url.rstrip('/')}{path}"
     request = urllib.request.Request(
-        f"{base_url.rstrip('/')}{path}",
+        url,
         headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
     )
-    with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT) as response:
-        return json.loads(response.read().decode())
+    try:
+        with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT) as response:
+            return json.loads(response.read().decode())
+    except urllib.error.HTTPError as exc:
+        # 401 is worth naming: it means we reached the add-on and it rejected
+        # the token, which is a different fix from not reaching it at all.
+        if exc.code in (401, 403):
+            raise AirflowFailException(
+                f"{url} rejected the token ({exc.code}). The {source}_api_token option "
+                f"must match the api_token in the {source} add-on's own configuration."
+            ) from exc
+        raise AirflowFailException(f"{url} returned HTTP {exc.code}") from exc
+    except urllib.error.URLError as exc:
+        # "Connection refused" on its own doesn't say what was dialled, which is
+        # exactly the thing you need to know.
+        raise AirflowFailException(
+            f"Could not reach {url} ({exc.reason}). The {source} add-on must publish a "
+            "host port under its Network settings — both trackers listen on 8099 inside "
+            f"their containers, so they need different host ports — and {source}_base_url "
+            "must name the host port you gave it."
+        ) from exc
 
 
 def _ensure_meta(cursor) -> None:
@@ -164,9 +190,9 @@ def build_dag(source: str, default_url: str):
                 )
 
             # A first run, or a watermark the feed can no longer bridge.
-            probe = _get(base_url, token, f"/api/changes?since={watermark}&limit=1")
+            probe = _get(source, base_url, token, f"/api/changes?since={watermark}&limit=1")
             if watermark == 0 or probe.get("full_reload_required"):
-                snapshot = _get(base_url, token, "/api/export")
+                snapshot = _get(source, base_url, token, "/api/export")
                 archive("export.json", snapshot)
                 rows = sum(len(v) for v in snapshot["tables"].values())
                 log.info(
@@ -183,7 +209,7 @@ def build_dag(source: str, default_url: str):
 
             since, pages, changes_seen = watermark, 0, 0
             while pages < MAX_PAGES:
-                page = _get(base_url, token, f"/api/changes?since={since}&limit={PAGE_SIZE}")
+                page = _get(source, base_url, token, f"/api/changes?since={since}&limit={PAGE_SIZE}")
                 changes = page.get("changes") or []
                 if not changes:
                     break
