@@ -15,17 +15,23 @@ Personal Home Assistant add-on repository.
 
 A pre-wired data-engineering stack, one service per add-on. Meant for an
 **amd64 host with 8–16 GB+ RAM** — not a Raspberry Pi. Install and **start them
-in this order**: `postgres → minio → spark → airflow`.
+in this order**: `postgres → minio → spark → airflow → notebook`.
 
 - **[Pipeline Postgres](pipeline-postgres/DOCS.md)** — PostgreSQL 16 (pipeline DB
   + Airflow metadata DB).
 - **[Pipeline MinIO](pipeline-minio/DOCS.md)** — MinIO S3-compatible object storage.
-- **[Pipeline Spark](pipeline-spark/DOCS.md)** — Apache Spark 4.2 single-node cluster.
+- **[Pipeline Spark](pipeline-spark/DOCS.md)** — Apache Spark 4.1 single-node
+  cluster with a Spark Connect server.
 - **[Pipeline Airflow](pipeline-airflow/DOCS.md)** — Apache Airflow 3.3 orchestrator,
-  pre-wired to the above with an example end-to-end DAG.
+  pre-wired to the above, with DAGs that load the trackers into Delta tables.
+- **[Pipeline Notebook](pipeline-notebook/DOCS.md)** — JupyterLab opening on the
+  pipeline, with the Spark Connect client and the pipeline modules ready to
+  import. Ingress only.
 
 The add-ons reach each other over the host gateway (`172.30.32.1`) using each
-service's published port; every connection target is an overridable option.
+service's published port; every connection target is an overridable option. The
+trackers are the exception — Airflow finds them by add-on hostname, so they need
+no published port at all.
 
 ## Installing this repository
 

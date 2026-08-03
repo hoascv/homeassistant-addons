@@ -1,0 +1,36 @@
+name: "Pipeline Notebook"
+version: "1.0.0"
+slug: "pipeline-notebook"
+description: "JupyterLab wired to the pipeline: Spark Connect, the Delta lakehouse, and the tracker feeds"
+url: "https://github.com/hoascv/homeassistant-addons/tree/main/pipeline-notebook"
+arch:
+  - amd64
+startup: application
+boot: manual
+init: false
+# Ingress only, deliberately: a notebook server runs arbitrary code as root on
+# the Home Assistant host, so it is reached through Home Assistant's own login
+# and is never exposed on the LAN. There is no `ports:` section on purpose.
+ingress: true
+ingress_port: 8888
+panel_icon: mdi:notebook-outline
+panel_title: "Notebook"
+# To read this add-on's own ingress path at startup, which JupyterLab needs as
+# its base_url. Nothing else is asked of the Supervisor.
+hassio_api: true
+map:
+  - share:rw
+options:
+  spark_connect_url: "sc://172.30.32.1:15002"
+  minio_endpoint: "http://172.30.32.1:9000"
+  minio_access_key: "minioadmin"
+  minio_secret_key: "changeme"
+  gym_tracker_api_token: ""
+  coop_tracker_api_token: ""
+schema:
+  spark_connect_url: "str"
+  minio_endpoint: "str"
+  minio_access_key: "str"
+  minio_secret_key: "password"
+  gym_tracker_api_token: "password?"
+  coop_tracker_api_token: "password?"
