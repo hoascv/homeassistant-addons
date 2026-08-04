@@ -1,5 +1,27 @@
 # Changelog
 
+## 2.5.0
+
+- **`jobs/lakehouse.py`** — reading the Delta tables back as something you can
+  analyse. The merge stores each payload as a JSON string deliberately; this
+  declares the schema once per table, so `table(spark, "gym_tracker",
+  "workout_logs")` gives typed columns, live rows only, and the change metadata
+  (`_seq`, `_changed_at`, `_actor`, `_deleted_at`) alongside. `include_deleted=True`
+  answers the question a last-modified column never could: what was logged and
+  then taken back.
+- Two helpers that encode traps found while writing it: `total_reps()` counts a
+  missing `sets` as one — the app stores none for single-set entries, so a plain
+  `sets * reps` silently nulls whole days — and `held_seconds()` keeps duration
+  exercises out of the same hole.
+- **`notebooks/explore_lakehouse.ipynb`** — training volume by day and by
+  exercise, challenge adherence and what gets un-ticked, weight against the goal,
+  Garmin sleep and resting heart rate, and the coop's eggs and costs. Every cell
+  was executed against the real backup before shipping.
+- `tables()` no longer returns an empty dict when nothing can be read. One table
+  missing means the DAG hasn't loaded it; *all* of them missing means something
+  systemic — no Delta jars, wrong root — and saying so beats sending you to look
+  for the wrong problem.
+
 ## 2.4.1
 
 - Fix the JupyterLab instructions. 2.4.0 said the seeded notebook would be found

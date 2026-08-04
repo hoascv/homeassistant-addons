@@ -151,6 +151,7 @@ The pipeline code is three files, and none of them need a rebuild to read:
 | `dags/trackers_ingest.py` | orchestration only — Variables, watermark, S3 archiving |
 | `jobs/trackers_feed.py` | reading a tracker: discovery, HTTP, bootstrap-vs-paging |
 | `jobs/trackers_merge.py` | the Spark job that MERGEs a batch into Delta |
+| `jobs/lakehouse.py` | reading those tables back, with a schema per table |
 
 The DAG module is kept thin deliberately: it imports `airflow.sdk` and two
 providers and builds its DAGs on import, so nothing in it can be unit-tested.
