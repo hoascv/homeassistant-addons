@@ -1,7 +1,7 @@
 name: "Pipeline Postgres"
-version: "1.0.1"
+version: "1.1.0"
 slug: "pipeline-postgres"
-description: "PostgreSQL 16 for the data-pipeline stack (also hosts Airflow's metadata database)"
+description: "PostgreSQL 16 + TimescaleDB for the data-pipeline stack (also hosts Airflow's metadata database)"
 url: "https://github.com/hoascv/homeassistant-addons/tree/main/pipeline-postgres"
 arch:
   - amd64

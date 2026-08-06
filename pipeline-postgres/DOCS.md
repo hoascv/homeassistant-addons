@@ -1,8 +1,8 @@
 # Pipeline Postgres
 
-PostgreSQL 16 for the data-pipeline stack. It stores your pipeline data **and**
-hosts Apache Airflow's metadata database, so you only need one Postgres instance
-for the whole stack.
+PostgreSQL 16 with **TimescaleDB** for the data-pipeline stack. It stores your
+pipeline data **and** hosts Apache Airflow's metadata database, so you only need
+one Postgres instance for the whole stack.
 
 Part of a four-add-on data pipeline: **Pipeline Postgres**, **Pipeline MinIO**,
 **Pipeline Spark**, **Pipeline Airflow**. Start them in this order:
@@ -16,6 +16,8 @@ Part of a four-add-on data pipeline: **Pipeline Postgres**, **Pipeline MinIO**,
 
 - Runs PostgreSQL 16, listening on host port **5432**.
 - Creates your main pipeline database (default `pipeline`) owned by your user.
+- Enables **TimescaleDB** in that database, for hypertables, continuous
+  aggregates and compression on time-series data.
 - On first start only, provisions a separate **`airflow`** role and database that
   the Pipeline Airflow add-on uses for its metadata.
 - Stores all data in the add-on's persistent volume (`/data/pgdata`), so it
@@ -32,6 +34,27 @@ Part of a four-add-on data pipeline: **Pipeline Postgres**, **Pipeline MinIO**,
 > The user, databases and passwords are applied **only on the first start** (when
 > the data directory is empty). To change them afterwards you must either use SQL
 > (`ALTER ROLE … PASSWORD …`) or reset the add-on's data.
+
+## TimescaleDB
+
+The extension is enabled in the pipeline database only — Airflow's metadata
+database is left as plain Postgres. Turn a table into a hypertable once it has a
+time column:
+
+```sql
+CREATE TABLE readings (ts timestamptz NOT NULL, sensor text, value double precision);
+SELECT create_hypertable('readings', 'ts');
+```
+
+Notes:
+
+- Telemetry is disabled (`timescaledb.telemetry_level=off`); nothing is reported
+  to Timescale.
+- Upgrading an add-on that was created before 1.1.0 keeps your data: the
+  extension is added to the existing pipeline database on the next start. Check
+  the add-on log for `TimescaleDB extension ready`.
+- Other databases you create yourself need their own
+  `CREATE EXTENSION timescaledb;`.
 
 ## Connecting
 

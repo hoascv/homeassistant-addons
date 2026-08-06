@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.1.0
+
+- Added TimescaleDB (`timescaledb-2-postgresql-16`). It is preloaded by the
+  server and the extension is enabled in the pipeline database — on first start
+  for new installs, and on the next start for an existing data directory.
+- TimescaleDB telemetry is disabled (`timescaledb.telemetry_level=off`).
+
 ## 1.0.1
 
 - Set the base image directly in the Dockerfile and removed `build.yaml`

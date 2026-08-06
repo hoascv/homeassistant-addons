@@ -17,8 +17,8 @@ A pre-wired data-engineering stack, one service per add-on. Meant for an
 **amd64 host with 8–16 GB+ RAM** — not a Raspberry Pi. Install and **start them
 in this order**: `postgres → minio → spark → airflow → notebook`.
 
-- **[Pipeline Postgres](pipeline-postgres/DOCS.md)** — PostgreSQL 16 (pipeline DB
-  + Airflow metadata DB).
+- **[Pipeline Postgres](pipeline-postgres/DOCS.md)** — PostgreSQL 16 with
+  TimescaleDB (pipeline DB + Airflow metadata DB).
 - **[Pipeline MinIO](pipeline-minio/DOCS.md)** — MinIO S3-compatible object storage.
 - **[Pipeline Spark](pipeline-spark/DOCS.md)** — Apache Spark 4.1 single-node
   cluster with a Spark Connect server.
