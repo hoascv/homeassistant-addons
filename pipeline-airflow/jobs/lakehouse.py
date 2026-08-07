@@ -11,6 +11,11 @@ ones that don't exist yet.
     workouts = table(spark, "gym_tracker", "workout_logs")
     workouts.orderBy("ts", ascending=False).show()
 
+With the optional Pipeline Metastore add-on running, `register(spark)` gives
+the same tables names, and SQL becomes an alternative to the functions here:
+
+    SELECT count(*) FROM gym_tracker.workout_logs_typed
+
 Every table also carries the change metadata the merge wrote: `seq`,
 `changed_at`, `actor` (user / automation / migration) and `deleted_at`. By
 default `table()` gives you the live rows with the payload flattened; pass
@@ -181,6 +186,75 @@ def tables(spark, source, root=None):
             f"{failures[next(iter(failures))]}"
         )
     return out
+
+
+def catalog_available(spark):
+    """True when this session is wired to a Hive metastore.
+
+    The Pipeline Metastore add-on is optional and the Spark add-on ships with
+    it switched off, so anything catalog-shaped has to ask first rather than
+    assume. Everything else in this module works either way — the paths below
+    are what the DAGs write, with or without a catalog to name them.
+    """
+    try:
+        return spark.conf.get("spark.sql.catalogImplementation") == "hive"
+    except Exception:  # noqa: BLE001 - unset conf, or a session that can't be asked
+        return False
+
+
+def register(spark, source=None, root=None, typed_views=True):
+    """Give the Delta tables names, so SQL can find them without a path.
+
+        register(spark)                      # every source
+        spark.sql("SELECT count(*) FROM gym_tracker.workout_logs_typed")
+
+    Registration is metadata only: `CREATE TABLE ... LOCATION` over an existing
+    Delta directory moves and rewrites nothing, and Delta keeps the schema in
+    its own transaction log, so a tracker gaining a column needs no re-run.
+
+    Two names per table, because the raw shape is rarely what you want to
+    query. `<name>` is the table as the merge wrote it, payload still a JSON
+    string; `<name>_typed` is a view applying the same schema, live-row filter
+    and `_`-prefixed change metadata that `table()` gives you in Python.
+
+    Tables that aren't in the lakehouse yet are skipped, not fatal — a DAG that
+    hasn't run is the usual reason. Returns {"registered": [...], "skipped": []}.
+    """
+    if not catalog_available(spark):
+        raise RuntimeError(
+            "this session has no Hive catalog, so there is nowhere to register "
+            "tables. Install the Pipeline Metastore add-on and set the Pipeline "
+            "Spark add-on's metastore_uris (thrift://172.30.32.1:9083)."
+        )
+
+    sources = [source] if source else sorted(SCHEMAS)
+    registered, skipped = [], []
+    for src in sources:
+        spark.sql(f"CREATE DATABASE IF NOT EXISTS {src}")
+        for name, schema in SCHEMAS.get(src, {}).items():
+            location = f"{_root(root)}/{src}/{name}"
+            try:
+                # Cheapest honest existence check: Delta refuses a path with no
+                # transaction log, which is exactly the "not loaded yet" case.
+                spark.read.format("delta").load(location).schema
+            except Exception:  # noqa: BLE001 - not written yet, or unreadable
+                skipped.append(f"{src}.{name}")
+                continue
+            spark.sql(
+                f"CREATE TABLE IF NOT EXISTS {src}.{name} "
+                f"USING DELTA LOCATION '{location}'"
+            )
+            if typed_views:
+                spark.sql(
+                    f"CREATE OR REPLACE VIEW {src}.{name}_typed AS "
+                    f"SELECT d.*, seq AS _seq, changed_at AS _changed_at, "
+                    f"actor AS _actor, deleted_at AS _deleted_at FROM ("
+                    f"SELECT from_json(data, '{schema}') AS d, seq, changed_at, "
+                    f"actor, deleted_at FROM {src}.{name} "
+                    f"WHERE deleted_at IS NULL)"
+                )
+            registered.append(f"{src}.{name}")
+    return {"registered": registered, "skipped": skipped}
 
 
 def day(col="ts"):

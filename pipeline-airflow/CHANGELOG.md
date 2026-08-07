@@ -1,5 +1,20 @@
 # Changelog
 
+## 2.6.0
+
+- `lakehouse.register(spark)` gives the Delta tables names in the optional
+  Pipeline Metastore add-on, so they can be queried as
+  `gym_tracker.workout_logs` instead of an `s3a://` path. Registration is
+  metadata only — nothing is moved or rewritten — and each table also gets a
+  `<name>_typed` view applying the same schema and live-row filter that
+  `table()` applies in Python.
+- `lakehouse.catalog_available(spark)` reports whether a session has a Hive
+  catalog at all. Both notebooks use it to add a metastore section that skips
+  itself, with an explanation, when the add-on isn't installed — which is the
+  default.
+- Everything else is unchanged: the DAGs still address tables by path, and
+  `table()` / `tables()` behave exactly as before with or without a catalog.
+
 ## 2.5.0
 
 - **`jobs/lakehouse.py`** — reading the Delta tables back as something you can

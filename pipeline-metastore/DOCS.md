@@ -63,25 +63,33 @@ lives on the Spark side of that connection.
 
 ## Registering the tracker tables
 
-The DAGs write Delta tables by path and do not register them. Do it once, from
-JupyterLab or any Spark session:
+The DAGs write Delta tables by path and do not register them. `lakehouse.py`
+(Pipeline Airflow 2.6.0+) does it in one call, from JupyterLab or any Spark
+session:
 
 ```python
-spark.sql("CREATE DATABASE IF NOT EXISTS gym_tracker")
-spark.sql("""
-    CREATE TABLE IF NOT EXISTS gym_tracker.workout_logs
-    USING DELTA LOCATION 's3a://lakehouse/gym_tracker/workout_logs'
-""")
-spark.sql("SELECT count(*) FROM gym_tracker.workout_logs").show()
+from lakehouse import register
+register(spark)
+# {'registered': ['gym_tracker.workout_logs', ...], 'skipped': []}
+
+spark.sql("SELECT count(*) FROM gym_tracker.workout_logs_typed").show()
 ```
 
-`CREATE TABLE … LOCATION` over an existing Delta directory registers it without
-moving or rewriting anything, and Delta keeps the schema in its own transaction
-log — so a tracker gaining a column does not need the table re-registered.
+Each table gets **two** names. `<name>` is the table as the merge wrote it,
+whose payload is still a JSON string; `<name>_typed` is a view applying the
+same schema, live-row filter and `_`-prefixed change metadata that
+`lakehouse.table()` applies in Python — usually what you actually want to query.
+Tables the DAGs haven't written yet are skipped rather than failing.
 
-Note that these register the **raw** tables, whose payload is a JSON string.
-`lakehouse.py` still owns the typed reading; the two are complementary, and
-`lakehouse.table()` keeps working exactly as before.
+Underneath it is just `CREATE TABLE … LOCATION` over the existing Delta
+directory, which registers without moving or rewriting anything; Delta keeps
+the schema in its own transaction log, so a tracker gaining a column does not
+need the table re-registered. Re-running `register()` is free.
+
+`lakehouse.table()` and `tables()` keep working exactly as before, with or
+without a catalog — the metastore adds a way in, it does not replace one. Both
+bundled notebooks have a section that uses it when present and skips itself,
+with an explanation, when it isn't.
 
 ## Notes
 

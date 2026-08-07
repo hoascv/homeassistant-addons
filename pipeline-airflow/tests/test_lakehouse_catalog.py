@@ -1,0 +1,74 @@
+"""The catalog helpers, and specifically what they do with no catalog.
+
+The Pipeline Metastore add-on is optional and Spark ships with it switched off,
+so the *absence* of a catalog is the default configuration rather than an edge
+case. These run without a JVM: `catalog_available` only asks the session for a
+conf value, which a stub can answer.
+"""
+import pytest
+
+# At module scope for the same reason test_merge_spark.py does it: lakehouse.py
+# imports pyspark at import time, so a machine without the package must skip
+# this file at collection rather than error and take the whole run down. No JVM
+# is needed beyond that — the stub below answers everything these tests ask.
+pytest.importorskip("pyspark")
+
+from lakehouse import catalog_available, register  # noqa: E402
+
+
+class _Session:
+    """Just enough SparkSession to answer a conf lookup."""
+
+    def __init__(self, impl):
+        self._impl = impl
+        self.statements = []
+
+    class _Conf:
+        def __init__(self, impl):
+            self._impl = impl
+
+        def get(self, key):
+            if self._impl is None:
+                # Spark raises rather than returning a default for an unset conf.
+                raise Exception(f"no such conf: {key}")
+            return self._impl
+
+    @property
+    def conf(self):
+        return self._Conf(self._impl)
+
+    def sql(self, statement):
+        self.statements.append(statement)
+
+
+def test_hive_catalog_is_detected():
+    assert catalog_available(_Session("hive")) is True
+
+
+def test_in_memory_catalog_is_not_a_catalog():
+    assert catalog_available(_Session("in-memory")) is False
+
+
+def test_unset_conf_is_not_fatal():
+    """An older or stripped-down session may not answer at all; that is a no,
+    not a crash — this runs inside notebooks people are editing."""
+    assert catalog_available(_Session(None)) is False
+
+
+def test_register_refuses_without_a_catalog():
+    session = _Session("in-memory")
+    with pytest.raises(RuntimeError) as exc:
+        register(session)
+    # The message has to name the fix: whoever hits this has the metastore
+    # add-on switched off, and the option to change is not in this repo.
+    assert "metastore_uris" in str(exc.value)
+    assert session.statements == [], "nothing should be created on the way out"
+
+
+@pytest.mark.spark
+def test_real_session_without_metastore_reports_no_catalog(spark):
+    """The fixture is a plain local Spark, which is what the pipeline looks like
+    before the metastore add-on is installed."""
+    assert catalog_available(spark) is False
+    with pytest.raises(RuntimeError):
+        register(spark)
