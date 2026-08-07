@@ -9,6 +9,7 @@ WORKER_CORES="$(jq -r '.worker_cores // 2' "$OPTIONS")"
 MINIO_ENDPOINT="$(jq -r '.minio_endpoint // "http://172.30.32.1:9000"' "$OPTIONS")"
 MINIO_KEY="$(jq -r '.minio_access_key' "$OPTIONS")"
 MINIO_SECRET="$(jq -r '.minio_secret_key' "$OPTIONS")"
+METASTORE_URIS="$(jq -r '.metastore_uris // ""' "$OPTIONS")"
 
 # The image has no writable $SPARK_HOME/conf, so keep our config (and the
 # worker scratch dir + Ivy cache) under /data and point Spark at it.
@@ -31,6 +32,25 @@ spark.hadoop.fs.s3a.path.style.access true
 spark.hadoop.fs.s3a.connection.ssl.enabled false
 spark.hadoop.fs.s3a.aws.credentials.provider org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider
 EOF
+
+# Empty (the default) leaves Spark on its session-local in-memory catalog, which
+# is what every version before 1.4.0 did: tables are addressed by path only.
+# Point this at the Pipeline Metastore add-on and table names become real.
+#
+# The version has to be declared because Spark's built-in Hive client is 2.3.10
+# and cannot speak to a 4.1.0 metastore; `jars maven` makes Spark fetch a
+# matching client into an isolated classloader on first use. That download is
+# one-time — HOME is /data/spark, so the Ivy cache it lands in is persisted —
+# but it does mean the first query after enabling this needs internet.
+if [ -n "$METASTORE_URIS" ]; then
+    cat >> "$CONF" <<EOF
+spark.sql.catalogImplementation hive
+spark.hadoop.hive.metastore.uris ${METASTORE_URIS}
+spark.sql.hive.metastore.version 4.1.0
+spark.sql.hive.metastore.jars maven
+EOF
+    echo "[Pipeline Spark] Hive catalog enabled -> ${METASTORE_URIS}"
+fi
 
 echo "[Pipeline Spark] uid=$(id -u); wrote $CONF"
 echo "[Pipeline Spark] starting master (RPC :7077, REST :6066, UI :8080)"

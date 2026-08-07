@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.4.0
+
+- New `metastore_uris` option. Set it to the Pipeline Metastore add-on
+  (`thrift://172.30.32.1:9083`) and Spark uses a Hive catalog, so tables have
+  names; empty — the default — keeps the session-local catalog and path-only
+  addressing that 1.3.0 and earlier had.
+- When it is set, Spark is told `spark.sql.hive.metastore.version 4.1.0` with
+  `jars maven`: the built-in Hive client is 2.3.10 and cannot talk to a 4.1.0
+  metastore, so a matching client is fetched once into the persisted Ivy cache.
+
 ## 1.3.0
 
 - **Runs a Spark Connect server** on `:15002`, alongside the master and worker.

@@ -34,6 +34,11 @@ Part of a four-add-on data pipeline: **Pipeline Postgres**, **Pipeline MinIO**,
   `http://172.30.32.1:9000`, i.e. the Pipeline MinIO add-on).
 - **minio_access_key** / **minio_secret_key**: match the MinIO add-on's
   `root_user` / `root_password`.
+- **metastore_uris**: empty by default, which leaves Spark on a session-local
+  catalog where tables are addressed by path. Set it to the Pipeline Metastore
+  add-on (`thrift://172.30.32.1:9083`) to get a Hive catalog and real table
+  names — see that add-on's docs. The first query afterwards downloads a
+  matching Hive 4.1.0 client, once.
 
 ## Submitting jobs
 

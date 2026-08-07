@@ -1,0 +1,42 @@
+name: "Pipeline Metastore"
+version: "1.0.0"
+slug: "pipeline-metastore"
+description: "Hive standalone metastore 4.1.0 for the data-pipeline stack, so Delta tables have names instead of paths"
+url: "https://github.com/hoascv/homeassistant-addons/tree/main/pipeline-metastore"
+arch:
+  - amd64
+startup: services
+boot: manual
+init: false
+ports:
+  9083/tcp: 9083
+ports_description:
+  9083/tcp: "Hive metastore Thrift API (thrift://…:9083) — how Spark finds tables"
+options:
+  postgres_host: "172.30.32.1"
+  postgres_port: 5432
+  postgres_admin_user: "pipeline"
+  postgres_admin_password: "changeme"
+  postgres_admin_db: "pipeline"
+  metastore_db: "metastore"
+  metastore_db_user: "hive"
+  metastore_db_password: "changeme"
+  warehouse_dir: "s3a://lakehouse/warehouse"
+  minio_endpoint: "http://172.30.32.1:9000"
+  minio_access_key: "minioadmin"
+  minio_secret_key: "changeme"
+  heap_mb: 512
+schema:
+  postgres_host: "str"
+  postgres_port: "port"
+  postgres_admin_user: "str"
+  postgres_admin_password: "password"
+  postgres_admin_db: "str"
+  metastore_db: "str"
+  metastore_db_user: "str"
+  metastore_db_password: "password"
+  warehouse_dir: "str"
+  minio_endpoint: "str"
+  minio_access_key: "str"
+  minio_secret_key: "password"
+  heap_mb: "int(256,8192)"

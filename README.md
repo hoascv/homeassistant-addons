@@ -15,7 +15,7 @@ Personal Home Assistant add-on repository.
 
 A pre-wired data-engineering stack, one service per add-on. Meant for an
 **amd64 host with 8–16 GB+ RAM** — not a Raspberry Pi. Install and **start them
-in this order**: `postgres → minio → spark → airflow → notebook`.
+in this order**: `postgres → minio → [metastore] → spark → airflow → notebook`.
 
 - **[Pipeline Postgres](pipeline-postgres/DOCS.md)** — PostgreSQL 16 with
   TimescaleDB (pipeline DB + Airflow metadata DB).
@@ -27,6 +27,9 @@ in this order**: `postgres → minio → spark → airflow → notebook`.
 - **[Pipeline Notebook](pipeline-notebook/DOCS.md)** — JupyterLab opening on the
   pipeline, with the Spark Connect client and the pipeline modules ready to
   import. Ingress only.
+- **[Pipeline Metastore](pipeline-metastore/DOCS.md)** — optional Hive metastore,
+  so the Delta tables have names instead of paths. Nothing uses it until Spark's
+  `metastore_uris` points at it.
 
 The add-ons reach each other over the host gateway (`172.30.32.1`) using each
 service's published port; every connection target is an overridable option. The
