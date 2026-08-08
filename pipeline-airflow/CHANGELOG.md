@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.8.0
+
+- `lakehouse.catalog_diagnostics(spark)` reports every conf that decides
+  whether SQL-by-name works, and `explore_catalog.ipynb` prints them when it
+  finds no catalog. "No Hive catalog" has two causes needing opposite fixes —
+  `metastore_uris` never set, or set and not reported — and the notebook now
+  says which rather than leaving it to be guessed at.
+
 ## 2.7.1
 
 - Fix `catalog_available()` reporting no Hive catalog on a correctly configured
