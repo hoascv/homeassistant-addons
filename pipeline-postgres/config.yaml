@@ -1,5 +1,5 @@
 name: "Pipeline Postgres"
-version: "1.1.0"
+version: "1.2.0"
 slug: "pipeline-postgres"
 description: "PostgreSQL 16 + TimescaleDB for the data-pipeline stack (also hosts Airflow's metadata database)"
 url: "https://github.com/hoascv/homeassistant-addons/tree/main/pipeline-postgres"
@@ -8,6 +8,11 @@ arch:
 startup: services
 boot: manual
 init: false
+# The backup repository lives under /share so Home Assistant's own backups
+# include it, and so it can be pointed at a mounted NAS share without changing
+# anything here.
+map:
+  - share:rw
 ports:
   5432/tcp: 5432
 ports_description:
@@ -17,8 +22,25 @@ options:
   postgres_password: "changeme"
   postgres_db: "pipeline"
   airflow_db_password: "changeme"
+  replication_user: "replicator"
+  replication_password: "changeme"
+  # Off by default on purpose: switching it on turns on archive_mode, and from
+  # then on Postgres keeps WAL until the archive accepts it. Read the DOCS
+  # section on that before enabling — MinIO must be running.
+  backup_enabled: false
+  backup_path: "/share/pipeline-postgres-backup"
+  backup_retention_full: 4
+  backup_full_interval_days: 7
+  backup_incr_interval_hours: 24
 schema:
   postgres_user: "str"
   postgres_password: "password"
   postgres_db: "str"
   airflow_db_password: "password"
+  replication_user: "str"
+  replication_password: "password"
+  backup_enabled: "bool"
+  backup_path: "str"
+  backup_retention_full: "int(1,52)"
+  backup_full_interval_days: "int(1,90)"
+  backup_incr_interval_hours: "int(1,168)"

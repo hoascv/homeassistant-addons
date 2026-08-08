@@ -7,7 +7,10 @@ single word, because that word becomes a sensor state people write automations
 against.
 """
 import json
+import pathlib
 import socket
+
+import yaml
 
 import pytest
 
@@ -88,10 +91,22 @@ def test_every_known_slug_matches_itself():
         assert match_slug(slug) == slug
 
 
-def test_probe_table_covers_every_known_addon():
-    """A new add-on added to PROBES without a decision about how to check it
-    would silently report as `running` forever."""
-    assert set(watchdog.PROBES) == set(watchdog.KNOWN_SLUGS)
+def test_every_addon_in_the_repository_has_a_probe_decision():
+    """The check that actually bites: a new add-on added to this repository and
+    never added to PROBES would simply not appear on the dashboard.
+
+    Asserting PROBES against KNOWN_SLUGS cannot fail — KNOWN_SLUGS is derived
+    from PROBES — so this reads the sibling add-on directories instead. A probe
+    of None is a legitimate answer (pipeline-notebook); *absence* is not.
+    """
+    repo = pathlib.Path(__file__).resolve().parents[3]
+    slugs = {
+        yaml.safe_load(config.read_text())["slug"]
+        for config in repo.glob("*/config.yaml")
+    }
+    assert slugs, f"no add-ons found under {repo}; the path assumption is wrong"
+    missing = slugs - set(watchdog.PROBES) - {"addon-watchdog"}
+    assert not missing, f"add-ons with no PROBES entry: {sorted(missing)}"
 
 
 # --- probes -------------------------------------------------------------------

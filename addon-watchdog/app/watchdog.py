@@ -52,6 +52,9 @@ PROBES = {
     "gym-tracker": Probe("http", 8099, "/", "web UI answers"),
     "coop-tracker": Probe("http", 8099, "/", "web UI answers"),
     "pipeline-postgres": Probe("tcp", 5432, None, "accepting connections"),
+    # The replica publishes 5433 on the host but still listens on 5432 inside
+    # its container, and probes go to container ports.
+    "pipeline-postgres-replica": Probe("tcp", 5432, None, "standby accepting connections"),
     "pipeline-minio": Probe("http", 9000, "/minio/health/live", "reports live"),
     "pipeline-spark": Probe("http", 8080, "/", "master UI answers"),
     "pipeline-metastore": Probe("tcp", 9083, None, "Thrift port open"),

@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.7.0
+
+- Reports the new Pipeline Postgres Replica add-on, probing its standby port.
+- The "every add-on has a probe" test now reads the sibling add-on directories
+  instead of comparing `PROBES` against a list derived from `PROBES` — the old
+  assertion could not fail, so a new add-on could have been added to the
+  repository and silently never appear on the dashboard.
+
 ## 1.6.0
 
 - The Records column now counts every table in a tracker's database, and the

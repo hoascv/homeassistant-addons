@@ -1,0 +1,26 @@
+name: "Pipeline Postgres Replica"
+version: "1.0.0"
+slug: "pipeline-postgres-replica"
+description: "A streaming read replica of Pipeline Postgres, for read-only queries and fast promotion"
+url: "https://github.com/hoascv/homeassistant-addons/tree/main/pipeline-postgres-replica"
+arch:
+  - amd64
+startup: services
+boot: manual
+init: false
+ports:
+  5432/tcp: 5433
+ports_description:
+  5432/tcp: "PostgreSQL (read-only standby) — 5433 on the host so it does not collide with the primary"
+options:
+  primary_host: "172.30.32.1"
+  primary_port: 5432
+  replication_user: "replicator"
+  replication_password: "changeme"
+  slot_name: "replica1"
+schema:
+  primary_host: "str"
+  primary_port: "port"
+  replication_user: "str"
+  replication_password: "password"
+  slot_name: "str"

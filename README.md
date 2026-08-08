@@ -33,6 +33,9 @@ in this order**: `postgres → minio → [metastore] → spark → airflow → n
 - **[Pipeline Metastore](pipeline-metastore/DOCS.md)** — optional Hive metastore,
   so the Delta tables have names instead of paths. Nothing uses it until Spark's
   `metastore_uris` points at it.
+- **[Pipeline Postgres Replica](pipeline-postgres-replica/DOCS.md)** — optional
+  streaming read-only standby on port 5433, for read queries and fast promotion.
+  Not a backup: the primary's `backup_enabled` covers that.
 
 The add-ons reach each other over the host gateway (`172.30.32.1`) using each
 service's published port; every connection target is an overridable option. The

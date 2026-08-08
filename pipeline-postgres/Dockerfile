@@ -3,9 +3,12 @@ FROM docker.io/library/postgres:16
 # jq parses the add-on options file (/data/options.json) in run.sh.
 # TimescaleDB comes from Timescale's own apt repo; the Debian codename is read
 # from the base image so a codename bump of postgres:16 keeps building.
+# pgbackrest needs no new source: the base image already has apt.postgresql.org
+# configured (it installs postgresql-16 from there), which carries a far newer
+# pgbackrest than Debian's own.
 # hadolint ignore=DL3008
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends jq ca-certificates curl \
+    && apt-get install -y --no-install-recommends jq ca-certificates curl pgbackrest \
     && mkdir -p /etc/apt/keyrings \
     && curl -fsSL https://packagecloud.io/timescale/timescaledb/gpgkey \
        -o /etc/apt/keyrings/timescaledb.asc \
