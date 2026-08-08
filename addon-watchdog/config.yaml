@@ -1,5 +1,5 @@
 name: "Add-on Watchdog"
-version: "1.5.0"
+version: "1.6.0"
 slug: "addon-watchdog"
 description: "Health, resource use and update status for the add-ons in this repository"
 url: "https://github.com/hoascv/homeassistant-addons/tree/main/addon-watchdog"

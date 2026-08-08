@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.43.0
+
+- `/api/stats` now counts **every** table, not only the tracked ones, split into
+  `counts` and `other_counts` with `total_all` alongside. Here that matters:
+  `egg_vision_samples` and `egg_vision_models` hold images and dominate the
+  database while contributing nothing to the tracked count — 75 records in
+  10.5 MB was the pairing that prompted this.
+- `total` keeps its original meaning (tracked tables only), so a consumer
+  written against 1.41.0 keeps its number.
+
 ## 1.42.0
 
 - Dropped `armhf`, `armv7` and `i386` from `arch`. Supervisor now reports all

@@ -356,3 +356,28 @@ def test_stats_total_ignores_unavailable_tables(client):
 
 def test_stats_reports_the_database_size(client):
     assert client.get("/api/stats").get_json()["db_bytes"] > 0
+
+
+def test_stats_counts_every_table_not_just_tracked_ones(client, conn):
+    """A row count beside a whole-file size invites a division that does not
+    hold; counting the untracked tables too is what makes the pair honest."""
+    payload = client.get("/api/stats").get_json()
+    all_tables = {
+        r["name"] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+        )
+    }
+    assert set(payload["counts"]) | set(payload["other_counts"]) == all_tables
+    assert set(payload["counts"]).isdisjoint(payload["other_counts"])
+    assert payload["total_all"] == payload["total"] + payload["other_total"]
+
+
+def test_stats_total_keeps_meaning_tracked_only(client):
+    """A consumer written against the first release must keep its number."""
+    payload = client.get("/api/stats").get_json()
+    assert payload["total"] == sum(n for n in payload["counts"].values() if n is not None)
+
+
+def test_change_log_is_reported_as_untracked(client):
+    """It is a real table taking real space, and it is not in the feed."""
+    assert "change_log" in client.get("/api/stats").get_json()["other_counts"]

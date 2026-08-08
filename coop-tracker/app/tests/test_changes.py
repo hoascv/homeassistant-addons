@@ -245,3 +245,28 @@ def test_stats_agrees_with_export_without_serialising_it(client):
 
 def test_stats_reports_the_database_size(client):
     assert client.get("/api/stats").get_json()["db_bytes"] > 0
+
+
+def test_stats_counts_every_table_not_just_tracked_ones(client, conn):
+    """Coop's egg-vision tables hold images and dominate the database while
+    contributing nothing to the tracked count — 75 records in 10.5 MB was the
+    pairing that prompted this."""
+    payload = client.get("/api/stats").get_json()
+    all_tables = {
+        r["name"] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+        )
+    }
+    assert set(payload["counts"]) | set(payload["other_counts"]) == all_tables
+    assert set(payload["counts"]).isdisjoint(payload["other_counts"])
+    assert payload["total_all"] == payload["total"] + payload["other_total"]
+
+
+def test_the_image_tables_are_reported_as_untracked(client):
+    others = client.get("/api/stats").get_json()["other_counts"]
+    assert "egg_vision_samples" in others and "egg_vision_models" in others
+
+
+def test_stats_total_keeps_meaning_tracked_only(client):
+    payload = client.get("/api/stats").get_json()
+    assert payload["total"] == sum(n for n in payload["counts"].values() if n is not None)

@@ -78,7 +78,7 @@ ROW_KEYS = (
     "slug", "installed_slug", "name", "installed", "state", "status", "version",
     "version_latest", "update_available", "cpu_percent", "memory_usage",
     "memory_percent", "probe", "probe_ok", "probe_detail", "error",
-    "records", "record_counts", "db_bytes",
+    "records", "record_counts", "other_counts", "db_bytes",
     "stats_error", "records_error",
 )
 
@@ -199,9 +199,15 @@ def fetch_stats(slug, host, timeout, token=None):
     counts = body.get("counts")
     if not isinstance(counts, dict):
         return None, "response had no 'counts' object"
+    others = body.get("other_counts")
+    others = others if isinstance(others, dict) else {}
     return {
-        "records": body.get("total"),
+        # total_all covers every table in the file; total is the tracked subset
+        # a tracker older than that split reports, and is the right fallback
+        # rather than showing nothing.
+        "records": body.get("total_all", body.get("total")),
         "record_counts": counts,
+        "other_counts": others,
         "db_bytes": body.get("db_bytes"),
     }, None
 
@@ -413,6 +419,7 @@ def publish(snapshot, prefix="addon_watchdog", ignore_stopped=True):
                     {
                         "records": row["records"],
                         "record_counts": row.get("record_counts"),
+                        "other_counts": row.get("other_counts"),
                         "db_size_mb": _mb(row.get("db_bytes")),
                     }
                     if row.get("records") is not None

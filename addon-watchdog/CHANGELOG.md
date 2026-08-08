@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.6.0
+
+- The Records column now counts every table in a tracker's database, and the
+  hover splits it into `tracked` and `other`. Coop Tracker previously read as
+  75 records in a 10.5 MB file, which invited exactly the wrong conclusion; the
+  image tables it was omitting are now visible and can be watched as they grow.
+- A tracker without the split (before Gym Tracker 1.31.0 / Coop Tracker 1.43.0)
+  still reports its tracked total rather than nothing.
+
 ## 1.5.0
 
 - Anything that cannot be retrieved is now logged with its reason. Supervisor

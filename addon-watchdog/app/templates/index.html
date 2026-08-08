@@ -95,10 +95,11 @@
       <td>{% if a.memory_usage %}{{ mb(a.memory_usage) }} MB{% else %}&mdash;{% endif %}</td>
       <td>
         {% if a.records is not none %}
-          {# Per-table breakdown on hover: useful when a number looks wrong,
-             and not worth a column of its own for a dozen tables. #}
-          <b title="{% for t, n in (a.record_counts or {}) | dictsort %}{{ t }}: {{ n }}
-{% endfor %}">{{ '{:,}'.format(a.records) }}</b>
+          {# Per-table breakdown on hover, split the way the endpoint splits it:
+             the tracked tables the change feed carries, then everything else in
+             the file. Coop Tracker's image tables live in the second group and
+             explain a database far larger than its tracked count suggests. #}
+          <b title="tracked&#10;{% for t, n in (a.record_counts or {}) | dictsort %}  {{ t }}: {{ n }}&#10;{% endfor %}{% if a.other_counts %}other&#10;{% for t, n in a.other_counts | dictsort %}  {{ t }}: {{ n }}&#10;{% endfor %}{% endif %}">{{ '{:,}'.format(a.records) }}</b>
           {% if a.db_bytes %}<div class="detail">{{ mb(a.db_bytes) }} MB</div>{% endif %}
         {% else %}&mdash;{% endif %}
       </td>

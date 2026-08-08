@@ -6,6 +6,7 @@ worth pinning down is the mapping from (Supervisor state, probe outcome) to a
 single word, because that word becomes a sensor state people write automations
 against.
 """
+import json
 import socket
 
 import pytest
@@ -332,3 +333,36 @@ def test_tokens_reach_the_probe_and_the_stats_call(monkeypatch):
     watchdog.collect(tokens={"gym-tracker": "tok123"})
     assert seen["probe"] == "tok123"
     assert seen["stats"] == "tok123"
+
+
+def test_records_prefers_the_all_tables_total(monkeypatch):
+    """total_all covers the file; total is the tracked subset."""
+    class _Resp:
+        status = 200
+        def read(self, *a): return json.dumps({
+            "counts": {"logs": 75}, "other_counts": {"egg_vision_samples": 120},
+            "total": 75, "other_total": 120, "total_all": 195, "db_bytes": 11010048,
+        }).encode()
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    monkeypatch.setattr(watchdog.urllib.request, "urlopen", lambda *a, **kw: _Resp())
+    data, err = watchdog.fetch_stats("coop-tracker", "coop", 1)
+    assert err is None
+    assert data["records"] == 195, "the headline number covers every table"
+    assert data["other_counts"] == {"egg_vision_samples": 120}
+
+
+def test_records_falls_back_for_a_tracker_without_the_split(monkeypatch):
+    """A tracker on the previous release reports only `total`; showing its
+    number beats showing nothing."""
+    class _Resp:
+        status = 200
+        def read(self, *a): return json.dumps({"counts": {"logs": 75}, "total": 75}).encode()
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    monkeypatch.setattr(watchdog.urllib.request, "urlopen", lambda *a, **kw: _Resp())
+    data, _ = watchdog.fetch_stats("coop-tracker", "coop", 1)
+    assert data["records"] == 75
+    assert data["other_counts"] == {}

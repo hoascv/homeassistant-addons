@@ -19,7 +19,7 @@ from flask import Flask, Response, g, jsonify, render_template, request, send_fi
 
 import garmin_client
 
-APP_VERSION = "1.30.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.31.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("GYM_DB_PATH", "/data/gym.db")
 OPTIONS_PATH = os.environ.get("GYM_OPTIONS_PATH", "/data/options.json")
@@ -3725,18 +3725,34 @@ def api_stats():
     here and a number in the lakehouse are counting the same thing.
     """
     db = get_db()
-    counts = {}
-    for table in TRACKED_TABLES:
+
+    def count(table):
         try:
-            counts[table] = db.execute(f"SELECT COUNT(*) AS n FROM {table}").fetchone()["n"]
+            return db.execute(f"SELECT COUNT(*) AS n FROM {table}").fetchone()["n"]
         except sqlite3.Error:
             # A table added in a later migration than the running schema is
             # absent rather than broken; reporting null beats failing the call.
-            counts[table] = None
+            return None
+
+    counts = {table: count(table) for table in TRACKED_TABLES}
+    # Everything else in the file. `counts` covers what the change feed carries,
+    # but the untracked tables still occupy the database and still grow, and
+    # reporting a row count beside a file size that measures a wider scope
+    # invites a division that does not hold.
+    others = {
+        row["name"]: count(row["name"])
+        for row in db.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' "
+            "AND name NOT LIKE 'sqlite_%' ORDER BY name"
+        )
+        if row["name"] not in TRACKED_TABLES
+    }
     try:
         size = os.path.getsize(DB_PATH)
     except OSError:
         size = None
+    tracked_total = sum(n for n in counts.values() if n is not None)
+    other_total = sum(n for n in others.values() if n is not None)
     return jsonify(
         {
             "app_version": APP_VERSION,
@@ -3746,7 +3762,12 @@ def api_stats():
                 "SELECT COALESCE(MAX(seq), 0) AS n FROM change_log"
             ).fetchone()["n"],
             "counts": counts,
-            "total": sum(n for n in counts.values() if n is not None),
+            "other_counts": others,
+            # `total` keeps its original meaning — tracked tables only — so a
+            # consumer written against the first release keeps its number.
+            "total": tracked_total,
+            "other_total": other_total,
+            "total_all": tracked_total + other_total,
         }
     )
 

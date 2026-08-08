@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.31.0
+
+- `/api/stats` now counts **every** table, not only the tracked ones, split into
+  `counts` and `other_counts` with `total_all` alongside. Reporting a row count
+  beside a whole-file size invited a division that did not hold — `change_log`
+  and `app_state` take real space and appeared nowhere.
+- `total` keeps its original meaning (tracked tables only), so a consumer
+  written against 1.29.0 keeps its number.
+
 ## 1.30.0
 
 - Dropped `armhf`, `armv7` and `i386` from `arch`. Supervisor now reports all
