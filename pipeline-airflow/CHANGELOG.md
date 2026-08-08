@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.7.1
+
+- Fix `catalog_available()` reporting no Hive catalog on a correctly configured
+  cluster. It tested `spark.sql.catalogImplementation`, a *static* SQL conf
+  fixed when the Connect server started, and a Spark Connect session does not
+  reliably surface those to `spark.conf.get` — so the answer could be "no
+  catalog" with the metastore wired up and working, and `register()` would
+  refuse. The metastore URI is written at the same moment by the Spark add-on
+  and is an ordinary conf, so it is now consulted as a second, independent
+  signal.
+
 ## 2.7.0
 
 - New notebook, `explore_catalog.ipynb`: the lakehouse by name rather than by

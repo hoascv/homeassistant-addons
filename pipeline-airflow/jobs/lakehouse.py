@@ -195,11 +195,42 @@ def catalog_available(spark):
     it switched off, so anything catalog-shaped has to ask first rather than
     assume. Everything else in this module works either way — the paths below
     are what the DAGs write, with or without a catalog to name them.
+
+    Two confs are consulted, not one. `spark.sql.catalogImplementation` is the
+    direct answer, but it is a *static* SQL conf fixed when the Connect server
+    started, and a Connect session does not reliably surface those to
+    `spark.conf.get` — so a correctly configured cluster could answer "no". The
+    Spark add-on writes the metastore URI at the same moment, and that is an
+    ordinary conf, which makes it a second and independent way to tell.
     """
+    if _conf(spark, "spark.sql.catalogImplementation") == "hive":
+        return True
+    return bool(_conf(spark, "spark.hadoop.hive.metastore.uris"))
+
+
+def _conf(spark, key):
+    """A conf value, or None if the session will not answer for it."""
     try:
-        return spark.conf.get("spark.sql.catalogImplementation") == "hive"
+        return spark.conf.get(key)
     except Exception:  # noqa: BLE001 - unset conf, or a session that can't be asked
-        return False
+        return None
+
+
+def catalog_diagnostics(spark):
+    """Every conf that decides whether SQL-by-name works, as the session sees it.
+
+    `catalog_available()` returning False has two very different causes — the
+    Spark add-on's `metastore_uris` was never set, or it was set and the session
+    will not report it — and they need opposite fixes. Printing the values
+    settles it without another round of guessing.
+    """
+    keys = (
+        "spark.sql.catalogImplementation",
+        "spark.hadoop.hive.metastore.uris",
+        "spark.sql.hive.metastore.version",
+        "spark.sql.hive.metastore.jars",
+    )
+    return {key: _conf(spark, key) for key in keys}
 
 
 def register(spark, source=None, root=None, typed_views=True):

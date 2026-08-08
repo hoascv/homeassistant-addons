@@ -72,3 +72,29 @@ def test_real_session_without_metastore_reports_no_catalog(spark):
     assert catalog_available(spark) is False
     with pytest.raises(RuntimeError):
         register(spark)
+
+
+def test_a_connect_session_that_hides_the_static_conf_is_still_detected():
+    """spark.sql.catalogImplementation is a static SQL conf fixed at server
+    start, and a Spark Connect session does not reliably surface those — so a
+    correctly configured cluster answered "no catalog" and register() refused.
+    The metastore URI is written at the same moment and is an ordinary conf."""
+    class _Session:
+        class _Conf:
+            def get(self, key):
+                if key == "spark.hadoop.hive.metastore.uris":
+                    return "thrift://172.30.32.1:9083"
+                raise Exception(f"no such conf: {key}")
+        conf = _Conf()
+
+    assert catalog_available(_Session()) is True
+
+
+def test_neither_conf_still_means_no_catalog():
+    class _Session:
+        class _Conf:
+            def get(self, key):
+                raise Exception(f"no such conf: {key}")
+        conf = _Conf()
+
+    assert catalog_available(_Session()) is False
