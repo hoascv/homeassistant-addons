@@ -10,6 +10,7 @@ MINIO_ENDPOINT="$(jq -r '.minio_endpoint // "http://172.30.32.1:9000"' "$OPTIONS
 MINIO_KEY="$(jq -r '.minio_access_key' "$OPTIONS")"
 MINIO_SECRET="$(jq -r '.minio_secret_key' "$OPTIONS")"
 METASTORE_URIS="$(jq -r '.metastore_uris // ""' "$OPTIONS")"
+METASTORE_JARS="$(jq -r '.metastore_jars // "path"' "$OPTIONS")"
 
 # The image has no writable $SPARK_HOME/conf, so keep our config (and the
 # worker scratch dir + Ivy cache) under /data and point Spark at it.
@@ -38,18 +39,32 @@ EOF
 # Point this at the Pipeline Metastore add-on and table names become real.
 #
 # The version has to be declared because Spark's built-in Hive client is 2.3.10
-# and cannot speak to a 4.1.0 metastore; `jars maven` makes Spark fetch a
-# matching client into an isolated classloader on first use. That download is
-# one-time — HOME is /data/spark, so the Ivy cache it lands in is persisted —
-# but it does mean the first query after enabling this needs internet.
+# and cannot speak to a 4.1.0 metastore, so a matching client is loaded into an
+# isolated classloader.
+#
+# `path` uses the jars baked into the image at build time. `maven` resolves them
+# over the network instead — a ~270-module Ivy resolution on *every* Connect
+# server start, which measured over four minutes on a real install and repeats
+# with a warm cache, because the metadata lookup still goes to Maven Central.
+# It is kept only as an escape hatch if the baked jars ever prove wrong.
 if [ -n "$METASTORE_URIS" ]; then
     cat >> "$CONF" <<EOF
 spark.sql.catalogImplementation hive
 spark.hadoop.hive.metastore.uris ${METASTORE_URIS}
 spark.sql.hive.metastore.version 4.1.0
-spark.sql.hive.metastore.jars maven
 EOF
-    echo "[Pipeline Spark] Hive catalog enabled -> ${METASTORE_URIS}"
+    if [ "$METASTORE_JARS" = "maven" ]; then
+        echo "spark.sql.hive.metastore.jars maven" >> "$CONF"
+        echo "[Pipeline Spark] Hive catalog -> ${METASTORE_URIS} (client from Maven," \
+             "expect a slow first query after every restart)"
+    else
+        cat >> "$CONF" <<EOF
+spark.sql.hive.metastore.jars path
+spark.sql.hive.metastore.jars.path file:///opt/pipeline/hive-jars/*
+EOF
+        echo "[Pipeline Spark] Hive catalog -> ${METASTORE_URIS}" \
+             "(client: $(ls /opt/pipeline/hive-jars/*.jar 2>/dev/null | wc -l) jars from the image)"
+    fi
 fi
 
 echo "[Pipeline Spark] uid=$(id -u); wrote $CONF"

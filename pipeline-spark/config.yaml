@@ -1,5 +1,5 @@
 name: "Pipeline Spark"
-version: "1.5.0"
+version: "1.6.0"
 slug: "pipeline-spark"
 description: "Apache Spark 4.1 single-node cluster (master + worker) for the data-pipeline stack"
 url: "https://github.com/hoascv/homeassistant-addons/tree/main/pipeline-spark"
@@ -32,6 +32,7 @@ options:
   minio_access_key: "minioadmin"
   minio_secret_key: "changeme"
   metastore_uris: ""
+  metastore_jars: "path"
 schema:
   worker_memory: "str"
   worker_cores: "int(1,64)"
@@ -39,3 +40,4 @@ schema:
   minio_access_key: "str"
   minio_secret_key: "password"
   metastore_uris: "str?"
+  metastore_jars: "list(path|maven)"

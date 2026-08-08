@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.6.0
+
+- The Hive metastore client is baked into the image and used via
+  `spark.sql.hive.metastore.jars=path`. Resolving it from Maven — what 1.4.0
+  introduced — turned out to re-run a ~270-module Ivy resolution on *every*
+  Connect server start rather than only the first, since the metadata lookup
+  still goes to Maven Central with a warm cache. Measured on a real install:
+  over four minutes before a query reached the metastore, repeated after each
+  restart, and SQL-by-name simply unavailable without internet.
+- The jars are resolved in a separate build stage, so maven and its build
+  clutter stay out of the add-on image; only the resolved jars are copied in.
+- `metastore_jars: maven` restores the old behaviour if the baked jars ever
+  prove wrong.
+
 ## 1.5.0
 
 - The **Spark Connect application UI** is published on host port 4040 — running

@@ -1,7 +1,30 @@
+# The Hive metastore client, resolved here rather than at run time.
+#
+# `spark.sql.hive.metastore.jars=maven` makes Spark resolve a ~270-module tree
+# through Ivy every time the Connect server builds its isolated Hive client —
+# which is every restart, not just the first. Observed on a real install: over
+# four minutes before a single query reached the metastore, and it repeats with
+# a warm cache because the metadata resolution still goes out to Maven Central.
+# It also means SQL-by-name simply does not work without internet.
+#
+# A separate stage so maven and its ~600 MB of build clutter stay out of the
+# add-on image; only the resolved jars are copied across.
+FROM docker.io/library/maven:3.9-eclipse-temurin-17 AS hive-client
+COPY hive-client-pom.xml /build/pom.xml
+WORKDIR /build
+RUN mvn -B -q dependency:copy-dependencies \
+        -DoutputDirectory=/hive-jars \
+        -DincludeScope=runtime \
+        -Dmdep.useRepositoryLayout=false
+
 # Pinned to 4.1.x because Delta Lake publishes no build for Spark 4.2 — its
 # newest release (4.3.1) declares spark-sql 4.1.0 as its provided dependency,
 # and Delta binds to Catalyst internals that a minor version can move.
 FROM docker.io/apache/spark:4.1.3
+
+# Only the driver instantiates the metastore client, so these never need to
+# reach an executor.
+COPY --from=hive-client /hive-jars /opt/pipeline/hive-jars
 
 # HA runs add-ons as root; the upstream image defaults to the 'spark' user.
 USER root

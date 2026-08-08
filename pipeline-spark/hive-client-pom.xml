@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  The Hive metastore client Spark needs, resolved once at image build time
+  instead of over the network on every Connect server start.
+
+  These four artifacts are exactly what Spark's IsolatedClientLoader resolves
+  for `spark.sql.hive.metastore.jars=maven` — the add-on's own log named them:
+
+      org.apache.hive#hive-metastore added as a dependency
+      org.apache.hive#hive-exec      added as a dependency
+      org.apache.hive#hive-common    added as a dependency
+      org.apache.hive#hive-serde     added as a dependency
+
+  hadoop-client joins them because the loader pulls it alongside, and the
+  metastore client cannot talk to anything without it. Everything else arrives
+  transitively; the tree is around 270 modules, which is precisely why doing
+  this at build time is worth the image size.
+
+  The version must match `spark.sql.hive.metastore.version` in run.sh, and the
+  Pipeline Metastore add-on it talks to.
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>local</groupId>
+  <artifactId>hive-metastore-client</artifactId>
+  <version>1</version>
+  <packaging>pom</packaging>
+
+  <properties>
+    <hive.version>4.1.0</hive.version>
+    <hadoop.version>3.4.1</hadoop.version>
+  </properties>
+
+  <dependencies>
+    <dependency>
+      <groupId>org.apache.hive</groupId>
+      <artifactId>hive-metastore</artifactId>
+      <version>${hive.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.hive</groupId>
+      <artifactId>hive-exec</artifactId>
+      <version>${hive.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.hive</groupId>
+      <artifactId>hive-common</artifactId>
+      <version>${hive.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.hive</groupId>
+      <artifactId>hive-serde</artifactId>
+      <version>${hive.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.hadoop</groupId>
+      <artifactId>hadoop-client</artifactId>
+      <version>${hadoop.version}</version>
+    </dependency>
+  </dependencies>
+</project>

@@ -53,8 +53,15 @@ Part of a four-add-on data pipeline: **Pipeline Postgres**, **Pipeline MinIO**,
   Hive catalog once per JVM, so it keeps using sockets the restart already
   killed, and every query then fails with `Socket is closed by peer`.
 
-  The first query afterwards downloads a matching Hive 4.1.0 client — several
-  hundred jars, some minutes — cached under `/data/spark` thereafter.
+- **metastore_jars** (default `path`): where the Hive 4.1.0 client comes from.
+
+  `path` uses jars baked into the image at build time — no network, no delay.
+  `maven` resolves them at run time instead, which is how 1.4.0 and 1.5.0
+  behaved and is kept only as an escape hatch: it re-resolves a ~270-module
+  dependency tree on **every** Connect server start, not just the first,
+  because the metadata lookup goes to Maven Central even with a warm cache. On
+  a real install that measured over four minutes before a single query reached
+  the metastore, and it meant SQL-by-name did not work at all without internet.
 
 ## Submitting jobs
 
