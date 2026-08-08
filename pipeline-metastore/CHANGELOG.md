@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.1.0
+
+- New `log_level` option. Hive's Thrift server drops a connection whose message
+  it cannot deserialize **silently** at INFO, so a client failing its handshake
+  leaves no trace at all — which made "the metastore logged nothing" look like
+  evidence that nothing arrived, when it is evidence of neither. `DEBUG` shows
+  the connection and what it choked on.
+
 ## 1.0.0
 
 - First release. Apache Hive standalone metastore 4.1.0 on Thrift port 9083,

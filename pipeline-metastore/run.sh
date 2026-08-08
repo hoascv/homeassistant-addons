@@ -18,6 +18,7 @@ MINIO_ENDPOINT="$(jq -r '.minio_endpoint // "http://172.30.32.1:9000"' "$OPTIONS
 MINIO_KEY="$(jq -r '.minio_access_key' "$OPTIONS")"
 MINIO_SECRET="$(jq -r '.minio_secret_key' "$OPTIONS")"
 HEAP_MB="$(jq -r '.heap_mb // 512' "$OPTIONS")"
+LOG_LEVEL="$(jq -r '.log_level // "INFO"' "$OPTIONS")"
 
 # Config carries the database password, so it is generated per start into the
 # add-on's own volume rather than baked into the image.
@@ -40,10 +41,15 @@ cp -a "${METASTORE_HOME}/conf/." "$METASTORE_CONF_DIR/"
 
 # That shipped config points its root logger at a rolling *file* under
 # java.io.tmpdir, which in an add-on is a log nobody will ever read — the
-# Supervisor log pane shows stdout/stderr. The appender is chosen by a system
-# property, so console is one -D away and upstream's per-logger levels
-# (DataNucleus, JPOX and friends, all pinned to ERROR) survive intact.
-export HADOOP_CLIENT_OPTS="-Dmetastore.root.logger=console ${HADOOP_CLIENT_OPTS:-}"
+# Supervisor log pane shows stdout/stderr. Both the appender and the level come
+# from system properties, so console is one -D away and upstream's per-logger
+# levels (DataNucleus, JPOX and friends, pinned to ERROR) survive intact.
+#
+# The level is an option because Hive's TThreadPoolServer drops a connection
+# whose message it cannot deserialize *silently* at INFO: a client failing its
+# handshake leaves no trace whatsoever, which is the one failure that most needs
+# a log. DEBUG is how you see it.
+export HADOOP_CLIENT_OPTS="-Dmetastore.root.logger=console -Dmetastore.log.level=${LOG_LEVEL} ${HADOOP_CLIENT_OPTS:-}"
 
 # Option values land inside XML text nodes; a password containing & or < would
 # otherwise produce a config file the metastore cannot parse.

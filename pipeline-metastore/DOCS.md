@@ -40,6 +40,12 @@ Part of the data pipeline. Start it after Postgres and MinIO, before Spark:
   as the Spark and Airflow add-ons. The metastore needs them because it creates
   a table's directory itself at `CREATE TABLE` time.
 - **heap_mb**: JVM heap. 512 MB is comfortable for a home-sized catalog.
+- **log_level** (default `INFO`): set to `DEBUG` when a client cannot connect.
+  Hive's Thrift server drops a connection whose message it cannot deserialize
+  **silently** at INFO — a client failing its handshake leaves no trace at all,
+  so "the metastore logged nothing" is not evidence that nothing arrived.
+  DEBUG shows the connection and what it choked on. Turn it back down
+  afterwards; it is verbose.
 
 ## Pointing Spark at it
 
