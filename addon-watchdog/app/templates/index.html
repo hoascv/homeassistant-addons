@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<!-- The scan runs on its own timer; this only re-renders what it last found.
+     A plain refresh rather than JS: the whole page is one table. -->
+<meta http-equiv="refresh" content="60">
+<title>Add-on Watchdog</title>
+<style>
+  :root { color-scheme: light dark; --bg:#f6f7f9; --card:#fff; --fg:#1c1e21;
+          --muted:#6b7280; --line:#e5e7eb; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#15171a; --card:#1e2125; --fg:#e8eaed; --muted:#9aa0a6; --line:#2e3238; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:16px; background:var(--bg); color:var(--fg);
+         font:15px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
+  h1 { font-size:1.25rem; margin:0 0 12px; }
+  .summary { display:flex; flex-wrap:wrap; gap:10px; margin-bottom:16px; }
+  .stat { background:var(--card); border:1px solid var(--line); border-radius:10px;
+          padding:10px 14px; min-width:120px; }
+  .stat b { display:block; font-size:1.5rem; line-height:1.1; }
+  .stat span { color:var(--muted); font-size:.8rem; }
+  .stat.bad b { color:#dc2626; }
+  .wrap { overflow-x:auto; background:var(--card); border:1px solid var(--line);
+          border-radius:10px; }
+  table { border-collapse:collapse; width:100%; min-width:640px; }
+  th, td { text-align:left; padding:10px 12px; border-bottom:1px solid var(--line);
+           white-space:nowrap; }
+  th { font-size:.75rem; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); }
+  tr:last-child td { border-bottom:0; }
+  .pill { display:inline-block; padding:2px 9px; border-radius:999px;
+          font-size:.78rem; font-weight:600; }
+  .ok        { background:#dcfce7; color:#166534; }
+  .degraded  { background:#fee2e2; color:#991b1b; }
+  .running   { background:#dbeafe; color:#1e40af; }
+  .stopped   { background:#e5e7eb; color:#4b5563; }
+  .missing   { background:transparent; color:var(--muted); }
+  @media (prefers-color-scheme: dark) {
+    .ok{background:#14532d;color:#bbf7d0} .degraded{background:#7f1d1d;color:#fecaca}
+    .running{background:#1e3a8a;color:#bfdbfe} .stopped{background:#374151;color:#d1d5db}
+  }
+  .detail { color:var(--muted); font-size:.82rem; white-space:normal; }
+  .upd { color:#b45309; font-size:.8rem; }
+  footer { color:var(--muted); font-size:.8rem; margin-top:14px; }
+  .err { background:#fee2e2; color:#991b1b; padding:10px 12px; border-radius:8px;
+         margin-bottom:14px; }
+</style>
+</head>
+<body>
+
+<h1>Add-on Watchdog</h1>
+
+{% if snapshot.error %}
+  <div class="err"><b>Cannot read Supervisor:</b> {{ snapshot.error }}</div>
+{% endif %}
+
+<div class="summary">
+  <div class="stat {% if snapshot.unhealthy %}bad{% endif %}">
+    <b>{{ snapshot.unhealthy or 0 }}</b><span>unhealthy</span>
+  </div>
+  <div class="stat"><b>{{ snapshot.updates or 0 }}</b><span>updates available</span></div>
+  <div class="stat">
+    <b>{{ snapshot.addons | selectattr('status', 'equalto', 'ok') | list | length }}</b>
+    <span>answering</span>
+  </div>
+</div>
+
+<div class="wrap">
+<table>
+  <thead>
+    <tr>
+      <th>Add-on</th><th>Status</th><th>Version</th>
+      <th>CPU</th><th>Memory</th><th>Probe</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for a in snapshot.addons %}
+    <tr>
+      <td><b>{{ a.name }}</b></td>
+      <td>
+        <span class="pill {{ {'ok':'ok','degraded':'degraded','running':'running',
+                              'stopped':'stopped'}.get(a.status,'missing') }}">
+          {{ a.status }}
+        </span>
+      </td>
+      <td>
+        {% if a.installed %}
+          {{ a.version }}
+          {% if a.update_available %}<div class="upd">&uarr; {{ a.version_latest }}</div>{% endif %}
+        {% else %}&mdash;{% endif %}
+      </td>
+      <td>{% if a.cpu_percent is not none %}{{ '%.1f'|format(a.cpu_percent) }}%{% else %}&mdash;{% endif %}</td>
+      <td>{% if a.memory_usage %}{{ mb(a.memory_usage) }} MB{% else %}&mdash;{% endif %}</td>
+      <td class="detail">
+        {% if a.probe_detail %}{{ a.probe_detail }}
+        {% elif a.installed and a.state == 'started' and not a.probe %}no probe available
+        {% else %}&mdash;{% endif %}
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+
+<footer>
+  {% if snapshot.generated %}
+    Last scan {{ snapshot.generated | int | string }} (epoch) &middot;
+  {% else %}
+    No scan yet &middot;
+  {% endif %}
+  {% if publish.at %}{{ publish.pushed }} sensors published{% if publish.errors %},
+    {{ publish.errors | length }} failed{% endif %}{% else %}sensors not published{% endif %}
+  &middot; page refreshes every 60s
+</footer>
+
+</body>
+</html>

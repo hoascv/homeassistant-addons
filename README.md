@@ -10,6 +10,9 @@ Personal Home Assistant add-on repository.
 - **[Gym Tracker](gym-tracker/DOCS.md)** — track a weight / body-fat goal,
   home workouts, and a daily challenge, with reminders through a Home
   Assistant notify service.
+- **[Add-on Watchdog](addon-watchdog/DOCS.md)** — whether the add-ons here are
+  actually working, not merely running: a status page plus a sensor per add-on,
+  with a probe that catches a live container around a dead service.
 
 ### Data pipeline (amd64 only)
 
