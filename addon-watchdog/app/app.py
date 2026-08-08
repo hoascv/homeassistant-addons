@@ -27,7 +27,11 @@ _last_publish = {"pushed": 0, "errors": [], "at": None}
 
 
 def _log(message):
-    print(f"[Add-on Watchdog] {message}", flush=True)
+    """Local time, because the reader is comparing this against the Supervisor
+    log next to it — and Supervisor stamps local time. TZ comes from the
+    Supervisor environment, so this follows the Home Assistant setting."""
+    stamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+    print(f"{stamp} [Add-on Watchdog] {message}", flush=True)
 
 
 def load_options():
@@ -46,8 +50,30 @@ def load_options():
     return defaults
 
 
+def summarise(snapshot, seconds, pushed=None):
+    """One line per scan, so the log answers "is this thing still running" on
+    its own. A scan costs a Supervisor stats call per add-on — around a second
+    each — so the duration is worth carrying: it is the first thing to look at
+    if scans start overlapping the interval."""
+    counts = {}
+    for row in snapshot["addons"]:
+        counts[row["status"]] = counts.get(row["status"], 0) + 1
+    parts = [f"{n} {status}" for status, n in sorted(counts.items())]
+    line = f"scanned in {seconds:.1f}s: " + ", ".join(parts)
+
+    degraded = [r["slug"] for r in snapshot["addons"] if r.get("status") == "degraded"]
+    if degraded:
+        line += f" | degraded: {', '.join(degraded)}"
+    if snapshot.get("updates"):
+        line += f" | {snapshot['updates']} update(s) available"
+    if pushed is not None:
+        line += f" | {pushed} sensors"
+    return line
+
+
 def scan_once(options):
     global _snapshot, _last_publish
+    started = time.monotonic()
     snapshot = watchdog.collect(
         timeout=options["probe_timeout_seconds"],
         ignore_stopped=options["ignore_stopped"],
@@ -58,6 +84,7 @@ def scan_once(options):
         _log(f"scan failed: {snapshot['error']}")
         return snapshot
 
+    pushed = None
     if options["publish_sensors"]:
         pushed, errors = watchdog.publish(
             snapshot,
@@ -68,19 +95,26 @@ def scan_once(options):
         for err in errors[:3]:
             _log(f"sensor push failed: {err}")
 
-    degraded = [r["slug"] for r in snapshot["addons"] if r.get("status") == "degraded"]
-    if degraded:
-        _log(f"degraded: {', '.join(degraded)}")
+    _log(summarise(snapshot, time.monotonic() - started, pushed))
     return snapshot
 
 
 def scanner(options):
+    interval = options["scan_interval_seconds"]
     while True:
+        started = time.monotonic()
         try:
             scan_once(options)
         except Exception as exc:  # noqa: BLE001 - the loop outlives any one scan
             _log(f"scan raised {type(exc).__name__}: {exc}")
-        time.sleep(options["scan_interval_seconds"])
+        # Sleep the remainder rather than the whole interval: a scan takes a
+        # second per add-on for its Supervisor stats call, so sleeping the full
+        # interval on top would make a 60s setting mean 72s and drift further
+        # with every add-on added.
+        elapsed = time.monotonic() - started
+        if elapsed >= interval:
+            _log(f"scan took {elapsed:.1f}s, longer than the {interval}s interval")
+        time.sleep(max(1.0, interval - elapsed))
 
 
 @app.route("/")

@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.1.0
+
+- Every log line now carries a local timestamp, matching the Supervisor log it
+  sits next to.
+- One line per scan, so the log shows the watchdog is alive rather than going
+  silent after three startup lines: how long the scan took, a count per status,
+  any degraded add-ons by name, updates available, and sensors published.
+- The scan interval now means what it says. A scan costs a Supervisor stats
+  call per add-on — about a second each, so roughly 12s for this repository —
+  and that was previously added *on top* of the interval rather than counted
+  within it. A scan that outruns its interval says so.
+
 ## 1.0.0
 
 - First release. An ingress dashboard and one Home Assistant sensor per add-on,

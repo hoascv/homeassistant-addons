@@ -69,9 +69,11 @@ every update you install pages you.
 
 ## Configuration
 
-- **scan_interval_seconds** (default 60): how often to scan. Every scan makes a
-  few Supervisor calls and one probe per running add-on, so this is cheap, but
-  there is no point going below the rate Home Assistant records history at.
+- **scan_interval_seconds** (default 60): how often to scan, measured from the
+  start of one scan to the start of the next. A scan is not instant — Supervisor
+  takes about a second to compute each add-on's stats, so a full pass over this
+  repository runs around 12 seconds — and the log says so if a scan ever outruns
+  its interval.
 - **probe_timeout_seconds** (default 5): per probe. A hung service should read
   as degraded rather than stall the scan.
 - **publish_sensors** (default true): turn off to use the page only.
@@ -96,6 +98,17 @@ is no option that would make it try.
 - `/api/status` — the same snapshot as JSON, with a fixed schema.
 - `/api/health` — the watchdog's own health, since nothing else is watching it:
   when it last scanned and how long ago.
+
+## Reading the log
+
+Every line is stamped in local time, so it lines up with the Supervisor log.
+One line is written per scan whether or not anything is wrong — a watchdog that
+goes quiet when healthy cannot be told apart from one that has wedged:
+
+```
+2026-08-08 10:44:08 [Add-on Watchdog] scanned in 12.3s: 1 degraded, 1 not installed,
+  1 ok, 1 running, 1 stopped | degraded: pipeline-postgres | 1 update(s) available | 4 sensors
+```
 
 ## Notes
 
