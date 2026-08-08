@@ -172,6 +172,20 @@ def scanner(options):
         time.sleep(max(1.0, interval - elapsed))
 
 
+def uptime(seconds):
+    """Compact and rounded — nobody reading a status page wants 4 days, 3 hours,
+    17 minutes and 4 seconds."""
+    if seconds is None:
+        return "—"
+    if seconds < 90:
+        return f"{int(seconds)}s"
+    if seconds < 3600:
+        return f"{seconds // 60}m"
+    if seconds < 172800:
+        return f"{seconds // 3600}h"
+    return f"{seconds // 86400}d"
+
+
 @app.route("/")
 def index():
     return render_template(
@@ -179,6 +193,7 @@ def index():
         snapshot=_snapshot,
         publish=_last_publish,
         mb=watchdog._mb,
+        uptime=uptime,
     )
 
 

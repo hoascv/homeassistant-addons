@@ -132,3 +132,19 @@ def test_the_scan_line_keeps_carrying_the_failure_count():
     snap = _snapshot(["ok"])
     assert "2 retrieval error(s)" in wd_app.summarise(snap, 1.0, failures=2)
     assert "retrieval error" not in wd_app.summarise(snap, 1.0, failures=0)
+
+
+# --- uptime formatting --------------------------------------------------------
+
+
+def test_uptime_reads_in_the_largest_sensible_unit():
+    """A status page wants "3d", not 272800 seconds or "4546m"."""
+    assert wd_app.uptime(45) == "45s"
+    assert wd_app.uptime(1800) == "30m"
+    assert wd_app.uptime(3900) == "1h", "an hour should not read as 65m"
+    assert wd_app.uptime(272800) == "3d"
+
+
+def test_no_uptime_is_a_dash_not_a_zero():
+    """A stopped add-on has no uptime; showing 0s would imply it just started."""
+    assert wd_app.uptime(None) == "—"

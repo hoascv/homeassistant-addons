@@ -129,6 +129,52 @@ Attributes land on that add-on's sensor flattened, so a template can read them:
 {{ not state_attr('sensor.addon_watchdog_pipeline_postgres', 'report_ok') }}
 ```
 
+## Uptime and restarts
+
+The dashboard shows how long each add-on has been up, and how many times it has
+restarted while the watchdog was watching. Supervisor exposes neither a
+container start time nor a restart counter, so both are derived here — which
+has two consequences worth understanding.
+
+**Uptime is a lower bound until a restart is seen.** An add-on already running
+when the watchdog first looked has a real start time older than anything
+observable, so it shows as **`≥3d`**. Once a restart is observed the clock
+becomes exact and the `≥` disappears. The `uptime_known` sensor attribute says
+which it is.
+
+**Restarts are detected two ways.** A transition into `started` is the obvious
+one. The other is the container's cumulative network counter going *backwards*
+while it stayed `started` — those counters reset with the container, so a drop
+means it was replaced entirely between two scans. Without that, an add-on that
+died and came back inside one 60-second interval would be invisible.
+
+Both are remembered in `/data/watchdog-state.json`, so they survive the
+watchdog's own restart.
+
+## Why an add-on restarted
+
+Hover the restart count for the reason. It comes from Supervisor's log, which
+is the only place it exists — nothing in the Supervisor API exposes an exit code
+or a restart cause. Typical lines:
+
+```
+ERROR [supervisor.apps.app] App Pipeline Spark exited with non-zero exit code 137
+```
+
+Exit **137** is a SIGKILL, and most often means Supervisor stopped the add-on
+and it did not exit within ten seconds — normal during an update. It can also
+mean the container was killed for running out of memory, which is not normal;
+the timing tells you which.
+
+`supervisor_watchdog` on each sensor reports whether **Home Assistant's own**
+watchdog is enabled for that add-on. That is the setting that restarts an
+add-on when it stops unexpectedly, and it is the usual source of a restart
+nobody asked for.
+
+Reading Supervisor's log may be refused to this add-on's role. If it is,
+restarts are still counted and only the explanation is missing — the error is
+reported rather than passed off as "no restarts".
+
 ## Sensors
 
 With `publish_sensors` on (the default), each add-on gets

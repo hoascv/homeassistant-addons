@@ -455,3 +455,135 @@ def test_a_stopped_addon_is_not_judged_on_a_stale_report():
     """It is stopped on purpose; its last report is necessarily old."""
     stale = {"ok": False, "detail": "last reported 400 min ago", "metrics": {}, "age": 24000}
     assert derive_status("stopped", None, stale) == "stopped"
+
+
+# --- uptime and restarts ------------------------------------------------------
+
+
+def test_uptime_is_a_lower_bound_until_a_restart_is_seen():
+    """Supervisor exposes no container start time, so the first observation of
+    an already-running add-on cannot know when it really started."""
+    state, now = {}, 1000
+    first = watchdog.track_uptime(state, "gym-tracker", True, 100, now)
+    assert first["uptime_seconds"] == 0
+    assert first["uptime_known"] is False, "claimed to know a start it never saw"
+
+    later = watchdog.track_uptime(state, "gym-tracker", True, 200, now + 600)
+    assert later["uptime_seconds"] == 600
+    assert later["uptime_known"] is False, "still the same unobserved start"
+
+
+def test_a_restart_makes_the_clock_exact():
+    state, now = {}, 1000
+    watchdog.track_uptime(state, "gym-tracker", True, 100, now)
+    watchdog.track_uptime(state, "gym-tracker", False, None, now + 60)
+    back = watchdog.track_uptime(state, "gym-tracker", True, 0, now + 120)
+
+    assert back["restarts"] == 1
+    assert back["last_restart_at"] == now + 120
+    assert back["uptime_seconds"] == 0
+    assert back["uptime_known"] is True, "this start was actually observed"
+
+
+def test_first_sighting_is_not_a_restart():
+    """An add-on that was already running when the watchdog started has not
+    restarted; counting it would put a phantom restart on every install."""
+    state = {}
+    assert watchdog.track_uptime(state, "gym-tracker", True, 5, 1000)["restarts"] == 0
+
+
+def test_a_restart_between_two_scans_is_caught_by_the_counter_reset():
+    """Up at both ends, so the state transition is invisible — but the
+    container's cumulative network counter went backwards, which only happens
+    when it was replaced."""
+    state, now = {}, 1000
+    watchdog.track_uptime(state, "pipeline-spark", True, 5_000_000, now)
+    after = watchdog.track_uptime(state, "pipeline-spark", True, 12_000, now + 60)
+    assert after["restarts"] == 1
+    assert after["uptime_seconds"] == 0
+
+
+def test_a_growing_counter_is_not_a_restart():
+    state, now = {}, 1000
+    watchdog.track_uptime(state, "pipeline-spark", True, 1000, now)
+    assert watchdog.track_uptime(state, "pipeline-spark", True, 2000, now + 60)["restarts"] == 0
+
+
+def test_a_stopped_addon_has_no_uptime():
+    state = {}
+    watchdog.track_uptime(state, "pipeline-spark", True, 10, 1000)
+    stopped = watchdog.track_uptime(state, "pipeline-spark", False, None, 1100)
+    assert stopped["uptime_seconds"] is None
+
+
+def test_a_new_restart_does_not_inherit_the_previous_reason():
+    state, now = {}, 1000
+    watchdog.track_uptime(state, "gym-tracker", True, 10, now)
+    watchdog.track_uptime(state, "gym-tracker", False, None, now + 10)
+    watchdog.track_uptime(state, "gym-tracker", True, 0, now + 20)
+    state["gym-tracker"]["last_restart_reason"] = "exited with non-zero exit code 137"
+
+    watchdog.track_uptime(state, "gym-tracker", False, None, now + 30)
+    again = watchdog.track_uptime(state, "gym-tracker", True, 0, now + 40)
+    assert again["restarts"] == 2
+    assert again["last_restart_reason"] is None, "stale explanation carried forward"
+
+
+def test_state_survives_a_round_trip(tmp_path, monkeypatch):
+    """Uptime is measured from observations, so losing this file would make
+    every add-on look freshly started after the watchdog itself restarts."""
+    monkeypatch.setattr(watchdog, "STATE_FILE", str(tmp_path / "state.json"))
+    state = {}
+    watchdog.track_uptime(state, "gym-tracker", True, 10, 1000)
+    watchdog.save_state(state)
+    assert watchdog.load_state() == state
+
+
+def test_unreadable_state_is_an_empty_history_not_a_crash(tmp_path, monkeypatch):
+    monkeypatch.setattr(watchdog, "STATE_FILE", str(tmp_path / "state.json"))
+    (tmp_path / "state.json").write_text("{not json")
+    assert watchdog.load_state() == {}
+
+
+# --- restart reasons ----------------------------------------------------------
+
+
+def test_reasons_are_matched_by_display_name(monkeypatch):
+    """Supervisor names add-ons by display name in its log, not by slug. This is
+    a real line from a Supervisor log."""
+    log = (
+        "2026-08-08 10:47:24.944 ERROR (MainThread) [supervisor.apps.app] "
+        "App Add-on Watchdog exited with non-zero exit code 137\n"
+        "2026-08-08 10:47:25.008 INFO (MainThread) [supervisor.docker.manager] Cleanup images\n"
+    )
+    monkeypatch.setattr(watchdog, "_api", lambda *a, **kw: (log, None))
+    reasons, err = watchdog.supervisor_restart_reasons({"addon-watchdog": "Add-on Watchdog"})
+    assert err is None
+    assert "exit code 137" in reasons["addon-watchdog"]
+
+
+def test_the_most_recent_explanation_wins(monkeypatch):
+    log = (
+        "old line: App Gym Tracker exited with non-zero exit code 1\n"
+        "new line: App Gym Tracker exited with non-zero exit code 137\n"
+    )
+    monkeypatch.setattr(watchdog, "_api", lambda *a, **kw: (log, None))
+    reasons, _ = watchdog.supervisor_restart_reasons({"gym-tracker": "Gym Tracker"})
+    assert "137" in reasons["gym-tracker"]
+
+
+def test_a_refused_log_endpoint_costs_the_reason_not_the_restart(monkeypatch):
+    """The role may not be allowed to read Supervisor's log. Restarts are still
+    counted; only the explanation is missing, and the error says so."""
+    monkeypatch.setattr(watchdog, "_api", lambda *a, **kw: (None, "HTTP 403"))
+    reasons, err = watchdog.supervisor_restart_reasons({"gym-tracker": "Gym Tracker"})
+    assert reasons == {} and err == "HTTP 403"
+
+
+def test_unrelated_log_lines_are_ignored(monkeypatch):
+    monkeypatch.setattr(
+        watchdog, "_api",
+        lambda *a, **kw: ("INFO [supervisor.store.git] Update app repository\n", None),
+    )
+    reasons, _ = watchdog.supervisor_restart_reasons({"gym-tracker": "Gym Tracker"})
+    assert reasons == {}

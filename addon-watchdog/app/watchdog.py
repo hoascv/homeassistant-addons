@@ -99,7 +99,15 @@ ROW_KEYS = (
     "records", "record_counts", "other_counts", "db_bytes",
     "stats_error", "records_error",
     "report_ok", "report_detail", "report_metrics", "report_age", "report_error",
+    "uptime_seconds", "uptime_known", "restarts", "last_restart_at",
+    "last_restart_reason", "supervisor_watchdog",
 )
+
+# Where the restart/uptime history lives. Supervisor exposes no container start
+# time and no restart counter, so uptime here is measured from when *this*
+# add-on first saw the other one running — which means it survives a watchdog
+# restart only if it is written down.
+STATE_FILE = os.environ.get("WATCHDOG_STATE_FILE", "/data/watchdog-state.json")
 
 
 def _row(**values):
@@ -231,6 +239,123 @@ def fetch_stats(slug, host, timeout, token=None):
     }, None
 
 
+def load_state():
+    try:
+        with open(STATE_FILE) as handle:
+            state = json.load(handle)
+        return state if isinstance(state, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def save_state(state):
+    try:
+        tmp = f"{STATE_FILE}.tmp"
+        with open(tmp, "w") as handle:
+            json.dump(state, handle)
+        os.replace(tmp, STATE_FILE)
+    except OSError:
+        # Losing the history costs uptime accuracy, not correctness, and is not
+        # worth failing a scan over.
+        pass
+
+
+def track_uptime(state, slug, running, network_rx, now):
+    """Uptime and restart count for one add-on, from successive observations.
+
+    Supervisor reports neither a container start time nor a restart counter, so
+    both are derived here. Two things count as a restart:
+
+    - a transition into `started` from anything else, which is the obvious case;
+    - the container's cumulative network counter going *backwards* while it
+      stayed `started`. Those counters reset with the container, so a drop is a
+      restart that happened entirely between two scans — otherwise invisible,
+      since a minute is long enough for an add-on to die and come back.
+
+    Uptime is therefore "at least": measured from the first time this add-on saw
+    it running, which is not the same as when it actually started. `uptime_known`
+    says which it is, so the dashboard can avoid claiming more than it knows.
+    """
+    entry = state.setdefault(slug, {})
+    was_running = entry.get("running", False)
+    previous_rx = entry.get("network_rx")
+
+    first_look = not entry.get("seen_before", False)
+    restarted = False
+    if running and not was_running:
+        restarted = not first_look
+    elif running and was_running and network_rx is not None and previous_rx is not None:
+        restarted = network_rx < previous_rx
+
+    if running and first_look:
+        # Already running when this add-on first looked, so its real start is
+        # older than anything observable here. Uptime is a lower bound until a
+        # restart is seen, at which point the clock becomes exact.
+        entry["started_at"] = now
+        entry["uptime_assumed"] = True
+    elif restarted or (running and not entry.get("started_at")):
+        entry["started_at"] = now
+        entry["uptime_assumed"] = False
+    if restarted:
+        entry["restarts"] = entry.get("restarts", 0) + 1
+        entry["last_restart_at"] = now
+        # The reason is filled in separately, from the Supervisor log; clearing
+        # it here stops a new restart inheriting the previous one's explanation.
+        entry["last_restart_reason"] = None
+    if not running:
+        entry["started_at"] = None
+
+    entry["running"] = running
+    entry["seen_before"] = True
+    if network_rx is not None:
+        entry["network_rx"] = network_rx
+
+    started_at = entry.get("started_at")
+    return {
+        "uptime_seconds": None if not started_at else max(0, int(now - started_at)),
+        "uptime_known": bool(started_at) and not entry.get("uptime_assumed", False),
+        "restarts": entry.get("restarts", 0),
+        "last_restart_at": entry.get("last_restart_at"),
+        "last_restart_reason": entry.get("last_restart_reason"),
+    }
+
+
+# Lines Supervisor writes when an add-on stops unexpectedly or its own watchdog
+# steps in. The exit-code form is confirmed against a real Supervisor log; the
+# watchdog forms are matched loosely on purpose, since no watchdog-triggered
+# restart has been observed here to pin the exact wording.
+_RESTART_PATTERNS = (
+    "exited with non-zero exit code",
+    "watchdog",
+    "failed to start",
+    "system is not healthy",
+)
+
+
+def supervisor_restart_reasons(names, lines=400):
+    """Best-effort: the most recent Supervisor log line explaining each add-on.
+
+    Nothing in the Supervisor API exposes an exit code or a restart cause, so
+    the log is the only source. Failure here is expected and harmless — the
+    endpoint may be refused to this role — and costs a reason, never a restart
+    count.
+    """
+    body, err = _api(SUPERVISOR_API, f"/supervisor/logs?lines={int(lines)}", raw=True)
+    if err:
+        return {}, err
+    reasons = {}
+    for line in (body or "").splitlines():
+        lowered = line.lower()
+        if not any(pattern in lowered for pattern in _RESTART_PATTERNS):
+            continue
+        for slug, name in names.items():
+            if name and name.lower() in lowered:
+                # Later lines win: the list is chronological, so the last match
+                # is the most recent explanation.
+                reasons[slug] = line.strip()[:300]
+    return reasons, None
+
+
 def read_report(slug, now=None):
     """An add-on's own account of itself, or None.
 
@@ -299,7 +424,7 @@ def is_unhealthy(status, ignore_stopped=True):
 # --- Supervisor and Core APIs -------------------------------------------------
 
 
-def _api(base, path, method="GET", payload=None, timeout=10):
+def _api(base, path, method="GET", payload=None, timeout=10, raw=False):
     if not SUPERVISOR_TOKEN:
         return None, "SUPERVISOR_TOKEN not set (not running under Supervisor)"
     req = urllib.request.Request(f"{base}{path}", method=method)
@@ -309,6 +434,10 @@ def _api(base, path, method="GET", payload=None, timeout=10):
     try:
         with urllib.request.urlopen(req, data=data, timeout=timeout) as resp:
             body = resp.read()
+            # The log endpoints return plain text, not JSON, so json.loads would
+            # turn a perfectly good answer into an error.
+            if raw:
+                return body.decode("utf-8", "replace"), None
             return (json.loads(body) if body else None), None
     except urllib.error.HTTPError as exc:
         return None, f"HTTP {exc.code}: {exc.read().decode('utf-8', 'ignore')[:200]}"
@@ -369,6 +498,12 @@ def collect(timeout=5, ignore_stopped=True, now=None, tokens=None):
         if slug:
             seen[slug] = entry
 
+    state_history = load_state()
+    # Supervisor names add-ons by their display name in the log, not their slug.
+    reasons, reasons_err = supervisor_restart_reasons(
+        {slug: entry.get("name") for slug, entry in seen.items()}
+    )
+
     for slug in KNOWN_SLUGS:
         entry = seen.get(slug)
         if entry is None:
@@ -414,6 +549,13 @@ def collect(timeout=5, ignore_stopped=True, now=None, tokens=None):
             if probe_result is None or probe_result.ok:
                 counts, counts_err = fetch_stats(slug, host, timeout, token)
 
+        tracked = track_uptime(
+            state_history, slug, state == "started", stats.get("network_rx"), now
+        )
+        if tracked["last_restart_at"] and reasons.get(slug):
+            tracked["last_restart_reason"] = reasons[slug]
+            state_history[slug]["last_restart_reason"] = reasons[slug]
+
         results.append(
             _row(
                 slug=slug,
@@ -439,9 +581,15 @@ def collect(timeout=5, ignore_stopped=True, now=None, tokens=None):
                 report_metrics=None if report is None else report["metrics"],
                 report_age=None if report is None else report["age"],
                 report_error=report_err,
+                supervisor_watchdog=info.get("watchdog"),
+                **tracked,
                 **(counts or {}),
             )
         )
+
+    # Written once per scan rather than per add-on: uptime is measured from
+    # observations, so losing this file means every add-on looks freshly started.
+    save_state(state_history)
 
     unhealthy = sum(
         1 for r in results if r.get("installed") and is_unhealthy(r["status"], ignore_stopped)
@@ -452,6 +600,11 @@ def collect(timeout=5, ignore_stopped=True, now=None, tokens=None):
         "addons": results,
         "unhealthy": unhealthy,
         "updates": sum(1 for r in results if r.get("update_available")),
+        # Surfaced rather than swallowed: if the log endpoint is refused to this
+        # role, restarts are still counted and only the reason is missing, and
+        # the difference should be visible instead of looking like "no restarts
+        # ever happened".
+        "reasons_error": reasons_err,
     }
 
 
@@ -479,6 +632,16 @@ def publish(snapshot, prefix="addon_watchdog", ignore_stopped=True):
                 "memory_usage_mb": _mb(row.get("memory_usage")),
                 "probe": row.get("probe"),
                 "probe_detail": row.get("probe_detail"),
+                "uptime_seconds": row.get("uptime_seconds"),
+                # Says whether uptime is exact or a lower bound, so a template
+                # graphing it knows not to treat the first value as a start.
+                "uptime_known": row.get("uptime_known"),
+                "restarts": row.get("restarts"),
+                "last_restart_at": row.get("last_restart_at"),
+                "last_restart_reason": row.get("last_restart_reason"),
+                # Whether Supervisor's own watchdog will restart this add-on —
+                # which is where a restart nobody asked for usually comes from.
+                "supervisor_watchdog": row.get("supervisor_watchdog"),
                 # Flattened rather than nested: a Lovelace card or an automation
                 # template reads state_attr(...) one level deep comfortably and
                 # a dict of dicts awkwardly.

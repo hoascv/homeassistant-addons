@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.9.0
+
+- Uptime per add-on, and how many times it has restarted. Supervisor exposes
+  neither a start time nor a restart counter, so both are derived from
+  successive observations and kept in `/data/watchdog-state.json`. Uptime shows
+  as `≥3d` until a restart is actually observed, because an add-on already
+  running when the watchdog first looked started before anything it can see.
+- Restarts that happen entirely between two scans are caught by the container's
+  cumulative network counter going backwards — those reset with the container,
+  and a minute is long enough for an add-on to die and come back unseen.
+- The reason, on hover: Supervisor's log is the only place an exit code or a
+  restart cause exists, so it is read and matched by add-on display name. If
+  that endpoint is refused to this role, restarts are still counted and the
+  error is reported rather than passed off as "no restarts".
+- `supervisor_watchdog` reports whether Home Assistant's own watchdog is enabled
+  for each add-on — the usual source of a restart nobody asked for.
+
 ## 1.8.0
 
 - Reports what a probe cannot ask: whether Postgres' backups are actually

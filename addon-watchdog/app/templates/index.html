@@ -74,7 +74,7 @@
 <table>
   <thead>
     <tr>
-      <th>Add-on</th><th>Status</th><th>Version</th>
+      <th>Add-on</th><th>Status</th><th>Version</th><th>Uptime</th>
       <th>CPU</th><th>Memory</th><th>Records</th><th>Probe</th>
     </tr>
   </thead>
@@ -92,6 +92,18 @@
         {% if a.installed %}
           {{ a.version }}
           {% if a.update_available %}<div class="upd">&uarr; {{ a.version_latest }}</div>{% endif %}
+        {% else %}&mdash;{% endif %}
+      </td>
+      <td>
+        {% if a.uptime_seconds is not none %}
+          {# "≥" because Supervisor exposes no start time: an add-on already
+             running when the watchdog first looked has an unknown true start. #}
+          {{ '' if a.uptime_known else '&ge;' | safe }}{{ uptime(a.uptime_seconds) }}
+          {% if a.restarts %}
+            <div class="detail" title="{{ a.last_restart_reason or 'no reason recorded' }}">
+              {{ a.restarts }} restart{{ '' if a.restarts == 1 else 's' }}
+            </div>
+          {% endif %}
         {% else %}&mdash;{% endif %}
       </td>
       <td>{% if a.cpu_percent is not none %}{{ '%.1f'|format(a.cpu_percent) }}%{% else %}&mdash;{% endif %}</td>
