@@ -44,25 +44,58 @@ else
     echo "[Pipeline Postgres Replica] existing standby data directory, skipping clone"
 fi
 
-# Report what the standby is doing once it is up — the useful question is not
-# whether the port answers but whether it is still in recovery and how far
-# behind it is.
+# Report what the standby is doing, on a loop. The useful question is not
+# whether the port answers — the Add-on Watchdog's probe covers that — but
+# whether it is still in recovery and how far behind it is. A standby that has
+# silently stopped replaying still accepts connections and still serves stale
+# data, which is the failure worth catching.
+#
+# The status file is what the watchdog reads: it holds no database credentials
+# by design, so each add-on reports its own state. This one already has a login,
+# so nothing new is granted here.
+STATUS_DIR=/share/pipeline-status
+STATUS_FILE="$STATUS_DIR/pipeline-postgres-replica.json"
+
 (
     for _ in $(seq 1 60); do
         pg_isready -q -h 127.0.0.1 -p 5432 && break
         sleep 2
     done
-    if pg_isready -q -h 127.0.0.1 -p 5432; then
+    while true; do
         # Over TCP as the replication role, not the local socket as the OS user
         # `postgres`: this image's superuser is named after the primary's
         # postgres_user option, so a role called `postgres` need not exist. The
         # `postgres` database always does — initdb creates it regardless.
-        status=$(PGPASSWORD="$REPL_PASSWORD" psql -tA -h 127.0.0.1 -U "$REPL_USER" \
-            -d postgres -c "SELECT pg_is_in_recovery() || ' ' ||
+        row=$(PGPASSWORD="$REPL_PASSWORD" psql -tA -F'|' -h 127.0.0.1 -U "$REPL_USER" \
+            -d postgres -c "SELECT pg_is_in_recovery(),
                 COALESCE(EXTRACT(EPOCH FROM now() - pg_last_xact_replay_timestamp())::int, 0)" \
-            2>/dev/null || echo "unknown")
-        echo "[Pipeline Postgres Replica] in recovery / lag seconds: ${status}"
-    fi
+            2>/dev/null || echo "")
+        in_recovery="${row%%|*}"
+        lag="${row##*|}"
+        mkdir -p "$STATUS_DIR" 2>/dev/null || true
+
+        if [ "$in_recovery" = "t" ]; then
+            ok=true; detail="streaming, ${lag}s behind"
+        elif [ "$in_recovery" = "f" ]; then
+            # Promoted by hand, or promoted by accident. Either way it is no
+            # longer a replica of anything and should not read as healthy.
+            ok=false; detail="promoted — no longer a standby"
+        else
+            ok=false; detail="cannot query the standby"; lag=null
+        fi
+        jq -n --arg slug pipeline-postgres-replica --arg kind replica \
+            --argjson ok "$ok" --arg detail "$detail" \
+            --argjson updated_at "$(date +%s)" \
+            --argjson metrics "$(jq -n --argjson lag "${lag:-null}" \
+                --arg rec "${in_recovery:-unknown}" \
+                '{lag_seconds: $lag, in_recovery: $rec}')" \
+            '{slug: $slug, kind: $kind, ok: $ok, detail: $detail,
+              updated_at: $updated_at, metrics: $metrics}' \
+            > "$STATUS_FILE" 2>/dev/null || true
+
+        echo "[Pipeline Postgres Replica] ${detail}"
+        sleep 60
+    done
 ) &
 
 echo "[Pipeline Postgres Replica] starting read-only standby (host port 5433)"

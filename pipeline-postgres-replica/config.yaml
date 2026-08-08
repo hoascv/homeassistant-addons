@@ -1,5 +1,5 @@
 name: "Pipeline Postgres Replica"
-version: "1.0.0"
+version: "1.1.0"
 slug: "pipeline-postgres-replica"
 description: "A streaming read replica of Pipeline Postgres, for read-only queries and fast promotion"
 url: "https://github.com/hoascv/homeassistant-addons/tree/main/pipeline-postgres-replica"
@@ -8,6 +8,9 @@ arch:
 startup: services
 boot: manual
 init: false
+# The status file the Add-on Watchdog reads lives under /share.
+map:
+  - share:rw
 ports:
   5432/tcp: 5433
 ports_description:

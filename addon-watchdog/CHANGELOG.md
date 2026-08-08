@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.8.0
+
+- Reports what a probe cannot ask: whether Postgres' backups are actually
+  running, and whether the replica is still replaying. Both add-ons write a
+  small status file under `/share/pipeline-status`, which this add-on now reads
+  (mapped read-only) — rather than being given a database login, which it still
+  does not have.
+- A failing report degrades the add-on even when its port answers, since a
+  healthy service that has stopped doing its job is exactly the case worth
+  alerting on. A report older than an hour counts as failing: the writer having
+  stopped is the news.
+- The report and its metrics arrive as flattened sensor attributes
+  (`report_lag_seconds`, `report_archiving_ok`, …) so a template can alert on
+  them directly.
+
 ## 1.7.0
 
 - Reports the new Pipeline Postgres Replica add-on, probing its standby port.

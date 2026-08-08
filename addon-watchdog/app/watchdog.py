@@ -72,6 +72,21 @@ KNOWN_SLUGS = sorted(PROBES)
 
 ProbeResult = namedtuple("ProbeResult", "ok detail")
 
+# Add-ons that report their own state, because a probe cannot ask the question.
+# A standby that has silently stopped replaying still accepts connections, and a
+# backup that stopped running leaves no trace on any port at all — both are
+# invisible to a probe and both are exactly what you want to be told about.
+#
+# Each add-on writes one small JSON file here rather than the watchdog reaching
+# into a database: this add-on holds no database credentials, and that stays
+# true. Same division of labour as the trackers' /api/stats.
+STATUS_DIR = os.environ.get("PIPELINE_STATUS_DIR", "/share/pipeline-status")
+
+# A report older than this is treated as missing. The producers refresh on a
+# minute (the replica) or per backup (Postgres), so a report that has not moved
+# in an hour means the writer stopped, which is itself the news.
+REPORT_STALE_SECONDS = 3600
+
 # Every row carries every key, whether or not the add-on is installed. Jinja
 # resolves a missing key to Undefined, which passes an `is not none` test and
 # then blows up in the filter behind it — so a single add-on you happen not to
@@ -83,6 +98,7 @@ ROW_KEYS = (
     "memory_percent", "probe", "probe_ok", "probe_detail", "error",
     "records", "record_counts", "other_counts", "db_bytes",
     "stats_error", "records_error",
+    "report_ok", "report_detail", "report_metrics", "report_age", "report_error",
 )
 
 
@@ -215,14 +231,55 @@ def fetch_stats(slug, host, timeout, token=None):
     }, None
 
 
-def derive_status(state, probe_result):
-    """Supervisor state and probe outcome, reduced to one word.
+def read_report(slug, now=None):
+    """An add-on's own account of itself, or None.
 
-    `degraded` is the reason this add-on exists: the container is up and the
-    service inside it is not answering.
+    Returns (report, error). A missing file is not an error — most add-ons
+    write none — but a stale one is, because the interesting failure is the
+    writer having stopped rather than the file having gone.
+    """
+    path = os.path.join(STATUS_DIR, f"{slug}.json")
+    try:
+        with open(path) as handle:
+            body = json.load(handle)
+    except FileNotFoundError:
+        return None, None
+    except (OSError, ValueError) as exc:
+        return None, f"unreadable status report: {exc}"
+
+    updated = body.get("updated_at")
+    if not isinstance(updated, (int, float)):
+        return None, "status report has no usable updated_at"
+    age = max(0, int((now or time.time()) - updated))
+    report = {
+        "ok": bool(body.get("ok")),
+        "detail": str(body.get("detail") or ""),
+        "metrics": body.get("metrics") if isinstance(body.get("metrics"), dict) else {},
+        "age": age,
+    }
+    if age > REPORT_STALE_SECONDS:
+        report["ok"] = False
+        report["detail"] = f"last reported {age // 60} min ago: {report['detail']}"
+    return report, None
+
+
+def derive_status(state, probe_result, report=None):
+    """Supervisor state, probe outcome and self-report, reduced to one word.
+
+    `degraded` is the reason this add-on exists: the container is up and
+    something inside it is not working.
+
+    A failing self-report degrades too, and that is a deliberate widening of the
+    word. Postgres with a broken backup still answers its port perfectly — the
+    service is fine and the job it was given is not — but "backups stopped
+    running three weeks ago" is precisely the kind of quiet failure worth being
+    told about, and `degraded` is what feeds the summary sensor an automation
+    can act on. The detail line says which of the two it is.
     """
     if state != "started":
         return "stopped"
+    if report is not None and not report["ok"]:
+        return "degraded"
     if probe_result is None:
         return "running"
     return "ok" if probe_result.ok else "degraded"
@@ -329,7 +386,8 @@ def collect(timeout=5, ignore_stopped=True, now=None, tokens=None):
         token = (tokens or {}).get(slug)
         probe = PROBES.get(slug)
         probe_result = run_probe(probe, host, timeout, token) if state == "started" else None
-        status = derive_status(state, probe_result)
+        report, report_err = read_report(slug, now) if state == "started" else (None, None)
+        status = derive_status(state, probe_result, report)
 
         # A 403 from an add-on that publishes counts means restrict_to_user_ids
         # is on and no token was configured. It is still alive — that is what
@@ -376,6 +434,11 @@ def collect(timeout=5, ignore_stopped=True, now=None, tokens=None):
                 error=info_err,
                 stats_error=stats_err,
                 records_error=counts_err,
+                report_ok=None if report is None else report["ok"],
+                report_detail=None if report is None else report["detail"],
+                report_metrics=None if report is None else report["metrics"],
+                report_age=None if report is None else report["age"],
+                report_error=report_err,
                 **(counts or {}),
             )
         )
@@ -416,6 +479,19 @@ def publish(snapshot, prefix="addon_watchdog", ignore_stopped=True):
                 "memory_usage_mb": _mb(row.get("memory_usage")),
                 "probe": row.get("probe"),
                 "probe_detail": row.get("probe_detail"),
+                # Flattened rather than nested: a Lovelace card or an automation
+                # template reads state_attr(...) one level deep comfortably and
+                # a dict of dicts awkwardly.
+                **(
+                    {
+                        "report_ok": row["report_ok"],
+                        "report": row.get("report_detail"),
+                        "report_age_seconds": row.get("report_age"),
+                        **{f"report_{k}": v for k, v in (row.get("report_metrics") or {}).items()},
+                    }
+                    if row.get("report_ok") is not None
+                    else {}
+                ),
                 # Absent rather than null for add-ons that hold no data, so a
                 # template testing the attribute gets a clean answer.
                 **(

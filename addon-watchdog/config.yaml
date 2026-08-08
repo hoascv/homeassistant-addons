@@ -1,5 +1,5 @@
 name: "Add-on Watchdog"
-version: "1.7.0"
+version: "1.8.0"
 slug: "addon-watchdog"
 description: "Health, resource use and update status for the add-ons in this repository"
 url: "https://github.com/hoascv/homeassistant-addons/tree/main/addon-watchdog"
@@ -17,6 +17,10 @@ panel_admin: true
 # Listing other add-ons and reading their stats needs the manager role; there
 # is no narrower one that can see past this add-on itself. Nothing here calls a
 # write endpoint — see DOCS.md.
+# Read-only: the add-ons that cannot be probed for what matters (backup
+# freshness, replication lag) leave a small status file under /share.
+map:
+  - share:ro
 hassio_api: true
 hassio_role: manager
 # Only to publish the sensors. Off by default in options, and never read from.

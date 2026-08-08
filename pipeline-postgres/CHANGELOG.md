@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.3.0
+
+- Writes `/share/pipeline-status/pipeline-postgres.json` after each backup and
+  after the start-up archive check, so Add-on Watchdog 1.8.0 can report whether
+  backups are actually running. A failed check is reported immediately rather
+  than waiting for a backup cycle — that is the state where WAL accumulates.
+
 ## 1.2.0
 
 - **Point-in-time recovery**, off by default. Setting `backup_enabled` turns on

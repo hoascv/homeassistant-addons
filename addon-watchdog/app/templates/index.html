@@ -42,6 +42,9 @@
     .running{background:#1e3a8a;color:#bfdbfe} .stopped{background:#374151;color:#d1d5db}
   }
   .detail { color:var(--muted); font-size:.82rem; white-space:normal; }
+  .rep { color:#166534; font-size:.8rem; }
+  .rep-bad { color:#dc2626; font-size:.8rem; font-weight:600; }
+  @media (prefers-color-scheme: dark) { .rep{color:#86efac} .rep-bad{color:#fca5a5} }
   .upd { color:#b45309; font-size:.8rem; }
   footer { color:var(--muted); font-size:.8rem; margin-top:14px; }
   .err { background:#fee2e2; color:#991b1b; padding:10px 12px; border-radius:8px;
@@ -107,6 +110,14 @@
         {% if a.probe_detail %}{{ a.probe_detail }}
         {% elif a.installed and a.state == 'started' and not a.probe %}no probe available
         {% else %}&mdash;{% endif %}
+        {# What the add-on says about itself, when a probe cannot ask: backup
+           freshness, replication lag. Marked when it is the thing that is
+           wrong, since the port above may be answering perfectly. #}
+        {% if a.report_detail %}
+          <div class="{% if not a.report_ok %}rep-bad{% else %}rep{% endif %}">
+            {% if a.report_ok %}&check;{% else %}&#9888;{% endif %} {{ a.report_detail }}
+          </div>
+        {% endif %}
       </td>
     </tr>
   {% endfor %}

@@ -91,6 +91,44 @@ api_tokens:
 the probe and the stats call. Leave the list empty if no add-on restricts
 access; nothing else needs it.
 
+## What a probe cannot ask
+
+Some failures leave every port answering. A standby that has silently stopped
+replaying still accepts connections and still serves stale data. Backups that
+stopped running three weeks ago leave no trace on any port at all. A probe is
+blind to both.
+
+So the add-ons that have something to say report it themselves, into
+`/share/pipeline-status/<slug>.json`, which this add-on reads (mapped read-only).
+The alternative — giving the watchdog a database login so it could ask — is the
+thing this add-on deliberately does not do, and the same split as the trackers'
+`/api/stats`: each add-on knows its own state best.
+
+| Add-on | Reports |
+|---|---|
+| Pipeline Postgres 1.3.0+ | whether archiving works, and the last backup's type and time |
+| Pipeline Postgres Replica 1.1.0+ | whether it is still in recovery, and how many seconds behind |
+
+A **failing report degrades the add-on**, even when its port answers. Postgres
+with a broken backup is a healthy service that is not doing its job, and that is
+worth an alert; the detail line on the dashboard and the `report` sensor
+attribute say which of the two is wrong.
+
+A report that has not been updated in an hour counts as failing. The producers
+refresh every minute (the replica) or after every backup (Postgres), so a report
+that stopped moving means the writer stopped — which is the news, not a gap in
+it.
+
+Attributes land on that add-on's sensor flattened, so a template can read them:
+
+```yaml
+# alert if the replica falls more than five minutes behind
+{{ state_attr('sensor.addon_watchdog_pipeline_postgres_replica', 'report_lag_seconds') | int > 300 }}
+
+# or if backups stopped
+{{ not state_attr('sensor.addon_watchdog_pipeline_postgres', 'report_ok') }}
+```
+
 ## Sensors
 
 With `publish_sensors` on (the default), each add-on gets

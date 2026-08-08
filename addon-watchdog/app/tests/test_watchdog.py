@@ -9,6 +9,7 @@ against.
 import json
 import pathlib
 import socket
+import time
 
 import yaml
 
@@ -381,3 +382,76 @@ def test_records_falls_back_for_a_tracker_without_the_split(monkeypatch):
     data, _ = watchdog.fetch_stats("coop-tracker", "coop", 1)
     assert data["records"] == 75
     assert data["other_counts"] == {}
+
+
+# --- self-reports (backup freshness, replication lag) -------------------------
+
+
+def _write_report(tmp_path, slug, **body):
+    body.setdefault("updated_at", time.time())
+    (tmp_path / f"{slug}.json").write_text(json.dumps(body))
+    return tmp_path
+
+
+def test_a_healthy_report_is_read(tmp_path, monkeypatch):
+    monkeypatch.setattr(watchdog, "STATUS_DIR", str(tmp_path))
+    _write_report(tmp_path, "pipeline-postgres", ok=True, detail="full backup complete",
+                  metrics={"archiving_ok": True})
+    report, err = watchdog.read_report("pipeline-postgres")
+    assert err is None and report["ok"] is True
+    assert report["detail"] == "full backup complete"
+    assert report["metrics"] == {"archiving_ok": True}
+
+
+def test_no_report_is_not_an_error(tmp_path, monkeypatch):
+    """Most add-ons write none; absence must not look like a fault."""
+    monkeypatch.setattr(watchdog, "STATUS_DIR", str(tmp_path))
+    assert watchdog.read_report("pipeline-minio") == (None, None)
+
+
+def test_a_stale_report_is_not_ok(tmp_path, monkeypatch):
+    """The interesting failure is the writer having stopped — backups that quietly
+    stopped running a month ago still leave a file saying they succeeded."""
+    monkeypatch.setattr(watchdog, "STATUS_DIR", str(tmp_path))
+    _write_report(tmp_path, "pipeline-postgres", ok=True, detail="full backup complete",
+                  updated_at=time.time() - 90000)
+    report, _ = watchdog.read_report("pipeline-postgres")
+    assert report["ok"] is False
+    assert "min ago" in report["detail"]
+
+
+def test_a_corrupt_report_is_an_error_not_a_crash(tmp_path, monkeypatch):
+    monkeypatch.setattr(watchdog, "STATUS_DIR", str(tmp_path))
+    (tmp_path / "pipeline-postgres.json").write_text("{not json")
+    report, err = watchdog.read_report("pipeline-postgres")
+    assert report is None and "unreadable" in err
+
+
+def test_a_report_without_a_timestamp_is_rejected(tmp_path, monkeypatch):
+    """Without updated_at there is no way to tell fresh from ancient, and
+    trusting it would be worse than ignoring it."""
+    monkeypatch.setattr(watchdog, "STATUS_DIR", str(tmp_path))
+    (tmp_path / "pipeline-postgres.json").write_text(json.dumps({"ok": True}))
+    report, err = watchdog.read_report("pipeline-postgres")
+    assert report is None and "updated_at" in err
+
+
+def test_a_failing_report_degrades_an_addon_whose_port_answers():
+    """Postgres with a broken backup answers its port perfectly. The service is
+    fine and the job it was given is not, and that should still be alertable."""
+    ok_probe = ProbeResult(True, "port 5432 open")
+    bad = {"ok": False, "detail": "backup failed", "metrics": {}, "age": 10}
+    assert derive_status("started", ok_probe, bad) == "degraded"
+    assert is_unhealthy("degraded") is True
+
+
+def test_a_healthy_report_does_not_override_a_failing_probe():
+    bad_probe = ProbeResult(False, "refused")
+    good = {"ok": True, "detail": "streaming, 0s behind", "metrics": {}, "age": 5}
+    assert derive_status("started", bad_probe, good) == "degraded"
+
+
+def test_a_stopped_addon_is_not_judged_on_a_stale_report():
+    """It is stopped on purpose; its last report is necessarily old."""
+    stale = {"ok": False, "detail": "last reported 400 min ago", "metrics": {}, "age": 24000}
+    assert derive_status("stopped", None, stale) == "stopped"

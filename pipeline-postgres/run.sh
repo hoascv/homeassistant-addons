@@ -34,6 +34,25 @@ psql_super() {
         -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" "$@"
 }
 
+# A small status file the Add-on Watchdog reads. The watchdog deliberately holds
+# no database credentials, so it cannot ask Postgres anything itself; this add-on
+# reports its own state instead, the same way the trackers publish /api/stats.
+# jq builds the JSON so a detail string containing a quote cannot break the file.
+STATUS_DIR=/share/pipeline-status
+STATUS_FILE="$STATUS_DIR/pipeline-postgres.json"
+
+write_status() {
+    local ok="$1" detail="$2"
+    shift 2
+    mkdir -p "$STATUS_DIR" 2>/dev/null || return 0
+    jq -n --arg slug pipeline-postgres --arg kind backup \
+        --argjson ok "$ok" --arg detail "$detail" \
+        --argjson updated_at "$(date +%s)" --argjson metrics "${1:-null}" \
+        '{slug: $slug, kind: $kind, ok: $ok, detail: $detail,
+          updated_at: $updated_at, metrics: $metrics}' \
+        > "$STATUS_FILE" 2>/dev/null || true
+}
+
 # --- backups ------------------------------------------------------------------
 #
 # A posix repository rather than S3, for two reasons. pgBackRest speaks only TLS
@@ -143,9 +162,15 @@ SQL
 
     if gosu postgres pgbackrest --stanza="$STANZA" check; then
         echo "[Pipeline Postgres] pgBackRest check passed (archiving works)"
+        write_status true "archiving works, no backup yet this start" \
+            '{"archiving_ok": true}'
     else
         echo "[Pipeline Postgres] WARNING: pgBackRest check failed — WAL will pile" \
              "up in pg_wal until this is fixed. See DOCS.md."
+        # Reported as not-ok immediately: this is the state where WAL grows
+        # unbounded, and it should not wait for a backup cycle to surface.
+        write_status false "pgBackRest check failed; WAL is accumulating" \
+            '{"archiving_ok": false}'
     fi
 
     # Backup loop. A full backup is what retention expires against, so one has
@@ -163,8 +188,13 @@ SQL
         if gosu postgres pgbackrest --stanza="$STANZA" --type="$type" backup; then
             echo "[Pipeline Postgres] $type backup complete"
             [ "$type" = "full" ] && last_full=$now
+            write_status true "$type backup complete" \
+                "$(jq -n --arg t "$type" --argjson at "$(date +%s)" \
+                    '{last_backup_type: $t, last_backup_at: $at, archiving_ok: true}')"
         else
             echo "[Pipeline Postgres] WARNING: $type backup failed"
+            write_status false "$type backup failed" \
+                "$(jq -n --arg t "$type" '{last_backup_type: $t, backup_failed: true}')"
         fi
         # The inventory, in the add-on log. Without this the only way to see
         # what can be restored is a shell inside the container, which on Home
