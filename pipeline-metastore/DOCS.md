@@ -87,9 +87,12 @@ the schema in its own transaction log, so a tracker gaining a column does not
 need the table re-registered. Re-running `register()` is free.
 
 `lakehouse.table()` and `tables()` keep working exactly as before, with or
-without a catalog — the metastore adds a way in, it does not replace one. Both
-bundled notebooks have a section that uses it when present and skips itself,
-with an explanation, when it isn't.
+without a catalog — the metastore adds a way in, it does not replace one.
+
+**`explore_catalog.ipynb`** (Pipeline Airflow 2.7.0+) is the guided version of
+all this: register the tables, walk the catalog, and run the SQL equivalents of
+the path-based analyses. It is also the quickest way to check this add-on is
+doing its job.
 
 ## Notes
 

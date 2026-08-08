@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.7.0
+
+- New notebook, `explore_catalog.ipynb`: the lakehouse by name rather than by
+  path — `spark.sql("SELECT * FROM gym_tracker.workout_logs_typed")`. It
+  registers the tables, walks the catalog, and carries the SQL equivalents of
+  the analyses in `explore_lakehouse.ipynb`, including the two traps that
+  survive the move to SQL (a null `sets`, and `_actor` being null for
+  everything the bootstrap loaded).
+- Every cell is guarded on `catalog_available()`, so without the optional
+  Pipeline Metastore add-on the notebook explains what is missing instead of
+  failing.
+
 ## 2.6.0
 
 - `lakehouse.register(spark)` gives the Delta tables names in the optional

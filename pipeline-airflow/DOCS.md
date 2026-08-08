@@ -161,8 +161,17 @@ Anything worth testing lives in `jobs/`, which is plain Python.
 
 The add-on publishes `jobs/` to `/share/pipeline-airflow/lib/` on every start, so
 a JupyterLab add-on on the same machine can import exactly what the scheduler
-runs — they cannot drift, because the copy is refreshed each boot. A starter
-notebook is seeded once into `/share/pipeline-airflow/notebooks/`.
+runs — they cannot drift, because the copy is refreshed each boot. Starter
+notebooks are seeded once into `/share/pipeline-airflow/notebooks/`:
+
+| Notebook | |
+|---|---|
+| `pipeline_scratchpad.ipynb` | the same code the scheduler runs, importable — read a tracker, query the lakehouse, try a merge |
+| `explore_lakehouse.ipynb` | the Delta tables through `lakehouse.py`, by path: volume, adherence, weight, eggs |
+| `explore_catalog.ipynb` | the same data by **name** — `spark.sql("SELECT * FROM gym_tracker.workout_logs_typed")`, needing the optional Pipeline Metastore add-on |
+
+Seeding is `cp -n`, so a notebook you have edited is never overwritten and a
+newly added one still arrives.
 
 **The JupyterLab file browser will not show `/share`.** That add-on pins its root:
 
