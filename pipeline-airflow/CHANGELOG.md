@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.9.1
+
+- `register()` prints one line per table. A table the DAGs have not written yet
+  announced "reading …" and then "not in the lakehouse yet, skipping", which
+  reads like a failure rather than an absence.
+
 ## 2.9.0
 
 - `register()` prints what it is doing, table by table. Registering seventeen

@@ -1,5 +1,5 @@
 name: "Pipeline Spark"
-version: "1.6.0"
+version: "1.6.1"
 slug: "pipeline-spark"
 description: "Apache Spark 4.1 single-node cluster (master + worker) for the data-pipeline stack"
 url: "https://github.com/hoascv/homeassistant-addons/tree/main/pipeline-spark"

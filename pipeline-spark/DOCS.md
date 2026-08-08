@@ -38,16 +38,23 @@ Part of a four-add-on data pipeline: **Pipeline Postgres**, **Pipeline MinIO**,
   catalog where tables are addressed by path. Set it to the Pipeline Metastore
   add-on to get a Hive catalog and real table names — see that add-on's docs.
 
-  Two forms work, and the second is worth trying if the first fails:
+  **Use the add-on hostname, not the gateway:**
 
   ```
-  thrift://172.30.32.1:9083                    # host gateway + published port
-  thrift://<prefix>-pipeline-metastore:9083    # add-on hostname, Supervisor network
+  thrift://<prefix>-pipeline-metastore:9083
   ```
 
-  The hostname form is how the Airflow DAGs reach the trackers and needs no
-  published port at all; `<prefix>` is your repository's hash, the same one in
-  this add-on's own hostname.
+  `<prefix>` is your repository's hash — the same one in this add-on's own
+  hostname. This is how the Airflow DAGs reach the trackers, and it needs no
+  published port at all.
+
+  The gateway form (`thrift://172.30.32.1:9083`) looks equivalent and is not.
+  On at least one host, something else answers that port: it accepts the
+  connection and holds it open, so a plain socket test says "healthy" while
+  every Thrift request vanishes — Spark reports `Socket is closed by peer` and
+  the metastore logs nothing, because nothing arrived. If you see that, the
+  proof is to set the metastore's `log_level: DEBUG` and compare: a connection
+  that truly arrives shows up there within a second.
 
   **Restart Spark after the metastore restarts.** The Connect server builds its
   Hive catalog once per JVM, so it keeps using sockets the restart already

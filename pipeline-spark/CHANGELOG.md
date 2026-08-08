@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.6.1
+
+- Document the add-on hostname as the metastore address rather than the host
+  gateway. `thrift://172.30.32.1:9083` looked equivalent and was not: on a real
+  host something else answers that port, accepting connections and holding them
+  open, so Spark failed with `Socket is closed by peer` while the metastore
+  logged nothing — because nothing reached it. Correlating connections against
+  the metastore's DEBUG log is what told the two routes apart.
+
 ## 1.6.0
 
 - The Hive metastore client is baked into the image and used via

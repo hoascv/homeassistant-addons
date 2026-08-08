@@ -296,15 +296,18 @@ def register(spark, source=None, root=None, typed_views=True, refresh=False,
                 registered.append(f"{src}.{name}")
                 continue
 
-            _say(verbose, f"  {src}.{name} — reading …")
             try:
                 # Cheapest honest existence check: Delta refuses a path with no
                 # transaction log, which is exactly the "not loaded yet" case.
+                # Announced only after it succeeds: a table the DAGs have not
+                # written yet would otherwise print "reading" and then "skipping",
+                # which reads like a failure rather than an absence.
                 spark.read.format("delta").load(location).schema
             except Exception:  # noqa: BLE001 - not written yet, or unreadable
                 _say(verbose, f"  {src}.{name} — not in the lakehouse yet, skipping")
                 skipped.append(f"{src}.{name}")
                 continue
+            _say(verbose, f"  {src}.{name} — registering …")
             spark.sql(
                 f"CREATE TABLE IF NOT EXISTS {src}.{name} "
                 f"USING DELTA LOCATION '{location}'"
