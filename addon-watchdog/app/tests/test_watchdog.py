@@ -164,7 +164,8 @@ def test_collect_counts_a_degraded_addon(monkeypatch):
     )
     monkeypatch.setattr(watchdog, "supervisor_addon_stats", lambda slug: ({}, None))
     monkeypatch.setattr(
-        watchdog, "run_probe", lambda probe, host, timeout: ProbeResult(False, "refused")
+        watchdog, "run_probe",
+        lambda probe, host, timeout, token=None: ProbeResult(False, "refused")
     )
 
     snapshot = watchdog.collect()
@@ -210,12 +211,13 @@ def test_counts_reach_the_row(monkeypatch):
     )
     monkeypatch.setattr(watchdog, "supervisor_addon_stats", lambda slug: ({}, None))
     monkeypatch.setattr(
-        watchdog, "run_probe", lambda p, h, t: watchdog.ProbeResult(True, "HTTP 200")
+        watchdog, "run_probe",
+        lambda p, h, t, token=None: watchdog.ProbeResult(True, "HTTP 200")
     )
     monkeypatch.setattr(
         watchdog, "fetch_stats",
-        lambda slug, host, timeout: {"records": 42, "record_counts": {"weight_logs": 42},
-                                     "db_bytes": 4096},
+        lambda slug, host, timeout, token=None: {
+            "records": 42, "record_counts": {"weight_logs": 42}, "db_bytes": 4096},
     )
 
     row = next(r for r in watchdog.collect()["addons"] if r["slug"] == "gym-tracker")
@@ -236,13 +238,96 @@ def test_a_degraded_addon_is_not_asked_for_counts(monkeypatch):
     )
     monkeypatch.setattr(watchdog, "supervisor_addon_stats", lambda slug: ({}, None))
     monkeypatch.setattr(
-        watchdog, "run_probe", lambda p, h, t: watchdog.ProbeResult(False, "refused")
+        watchdog, "run_probe",
+        lambda p, h, t, token=None: watchdog.ProbeResult(False, "refused")
     )
     monkeypatch.setattr(
-        watchdog, "fetch_stats", lambda *a: asked.append(a) or None
+        watchdog, "fetch_stats", lambda *a, **kw: asked.append(a) or None
     )
 
     row = next(r for r in watchdog.collect()["addons"] if r["slug"] == "gym-tracker")
     assert row["status"] == "degraded"
     assert row["records"] is None
     assert asked == []
+
+
+# --- API tokens ---------------------------------------------------------------
+
+
+def test_token_is_sent_as_a_bearer_header():
+    req = watchdog._request("http://gym:8099/api/stats", token="secret")
+    assert req.get_header("Authorization") == "Bearer secret"
+
+
+def test_no_token_means_no_header():
+    assert watchdog._request("http://gym:8099/api/stats").get_header("Authorization") is None
+
+
+def test_a_403_without_a_token_says_what_to_do(monkeypatch):
+    """restrict_to_user_ids refuses any caller without a matching ingress-user
+    header. The add-on is alive — the probe asked exactly that — but the empty
+    Records column would otherwise be a mystery."""
+    monkeypatch.setattr(
+        watchdog, "supervisor_addons",
+        lambda: ([{"slug": "x_gym_tracker", "name": "Gym Tracker", "state": "started"}], None),
+    )
+    monkeypatch.setattr(
+        watchdog, "supervisor_addon_info",
+        lambda slug: ({"state": "started", "hostname": "x-gym-tracker"}, None),
+    )
+    monkeypatch.setattr(watchdog, "supervisor_addon_stats", lambda slug: ({}, None))
+    monkeypatch.setattr(watchdog, "run_probe", lambda *a: ProbeResult(True, "HTTP 403"))
+    monkeypatch.setattr(watchdog, "fetch_stats", lambda *a: None)
+
+    row = next(r for r in watchdog.collect()["addons"] if r["slug"] == "gym-tracker")
+    assert row["status"] == "ok", "a 403 still means something is answering"
+    assert "api_token" in row["probe_detail"]
+
+
+def test_the_hint_is_dropped_once_a_token_is_configured(monkeypatch):
+    monkeypatch.setattr(
+        watchdog, "supervisor_addons",
+        lambda: ([{"slug": "x_gym_tracker", "name": "Gym Tracker", "state": "started"}], None),
+    )
+    monkeypatch.setattr(
+        watchdog, "supervisor_addon_info",
+        lambda slug: ({"state": "started", "hostname": "x-gym-tracker"}, None),
+    )
+    monkeypatch.setattr(watchdog, "supervisor_addon_stats", lambda slug: ({}, None))
+    monkeypatch.setattr(watchdog, "run_probe", lambda *a: ProbeResult(True, "HTTP 200"))
+    monkeypatch.setattr(
+        watchdog, "fetch_stats",
+        lambda *a: {"records": 7, "record_counts": {"weight_logs": 7}, "db_bytes": 1024},
+    )
+
+    row = next(
+        r for r in watchdog.collect(tokens={"gym-tracker": "s"})["addons"]
+        if r["slug"] == "gym-tracker"
+    )
+    assert row["probe_detail"] == "HTTP 200"
+    assert row["records"] == 7
+
+
+def test_tokens_reach_the_probe_and_the_stats_call(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(
+        watchdog, "supervisor_addons",
+        lambda: ([{"slug": "x_gym_tracker", "name": "Gym Tracker", "state": "started"}], None),
+    )
+    monkeypatch.setattr(
+        watchdog, "supervisor_addon_info",
+        lambda slug: ({"state": "started", "hostname": "x-gym-tracker"}, None),
+    )
+    monkeypatch.setattr(watchdog, "supervisor_addon_stats", lambda slug: ({}, None))
+    monkeypatch.setattr(
+        watchdog, "run_probe",
+        lambda p, h, t, tok=None: (seen.__setitem__("probe", tok), ProbeResult(True, "HTTP 200"))[1],
+    )
+    monkeypatch.setattr(
+        watchdog, "fetch_stats",
+        lambda slug, host, timeout, tok=None: (seen.__setitem__("stats", tok), None)[1],
+    )
+
+    watchdog.collect(tokens={"gym-tracker": "tok123"})
+    assert seen["probe"] == "tok123"
+    assert seen["stats"] == "tok123"

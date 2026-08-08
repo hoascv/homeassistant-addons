@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.3.0
+
+- New `api_tokens` option. An add-on with `restrict_to_user_ids` set refuses
+  any caller without a matching ingress-user header, so both trackers answered
+  403 and their record counts stayed blank — 1.2.0 shipped a Records column
+  that could not fill in. The token is sent as `Authorization: Bearer …` on
+  both the probe and the stats call.
+- Until a token is configured, the probe detail says so rather than leaving an
+  unexplained empty column. A 403 still reads `ok`: it proves something is
+  alive and enforcing, which is what the probe asked.
+
 ## 1.2.0
 
 - The dashboard has a Records column: how many rows each tracker holds and how

@@ -115,7 +115,14 @@ def probe_tcp(host, port, timeout):
         return ProbeResult(False, f"port {port}: {exc}")
 
 
-def probe_http(host, port, path, timeout):
+def _request(url, token=None):
+    req = urllib.request.Request(url)
+    if token:
+        req.add_header("Authorization", f"Bearer {token}")
+    return req
+
+
+def probe_http(host, port, path, timeout, token=None):
     """Any answer below 500 counts as alive.
 
     A 401 or 302 means something is listening and speaking HTTP, which is the
@@ -125,7 +132,7 @@ def probe_http(host, port, path, timeout):
     """
     url = f"http://{host}:{port}{path}"
     try:
-        with urllib.request.urlopen(url, timeout=timeout) as resp:
+        with urllib.request.urlopen(_request(url, token), timeout=timeout) as resp:
             return ProbeResult(True, _http_detail(resp.status, resp))
     except urllib.error.HTTPError as exc:
         if exc.code < 500:
@@ -152,27 +159,29 @@ def _http_detail(status, resp):
     return ", ".join(parts) if parts else f"HTTP {status}"
 
 
-def run_probe(probe, host, timeout):
+def run_probe(probe, host, timeout, token=None):
     if probe is None or not host:
         return None
     if probe.kind == "tcp":
         return probe_tcp(host, probe.port, timeout)
-    return probe_http(host, probe.port, probe.path, timeout)
+    return probe_http(host, probe.port, probe.path, timeout, token)
 
 
-def fetch_stats(slug, host, timeout):
+def fetch_stats(slug, host, timeout, token=None):
     """Row counts from an add-on that publishes them, or None.
 
     Deliberately forgiving: a tracker older than the release that added
-    /api/stats returns 404, and that is a missing number rather than a fault —
-    the add-on's health is judged by its probe, never by this.
+    /api/stats returns 404, and one with restrict_to_user_ids set answers 403
+    without a token. Both are a missing number rather than a fault — the
+    add-on's health is judged by its probe, never by this.
     """
     spec = STATS_PATHS.get(slug)
     if spec is None or not host:
         return None
     _, port, path = spec
     try:
-        with urllib.request.urlopen(f"http://{host}:{port}{path}", timeout=timeout) as resp:
+        url = f"http://{host}:{port}{path}"
+        with urllib.request.urlopen(_request(url, token), timeout=timeout) as resp:
             body = json.loads(resp.read(1 << 20) or b"{}")
     except Exception:  # noqa: BLE001 - counts are a nicety; health is not
         return None
@@ -264,7 +273,7 @@ def push_sensor(entity_id, state, attributes):
 # --- one pass over everything -------------------------------------------------
 
 
-def collect(timeout=5, ignore_stopped=True, now=None):
+def collect(timeout=5, ignore_stopped=True, now=None, tokens=None):
     """One full scan: Supervisor state, resource use, update status, probe.
 
     Returns a snapshot dict — never raises, because this runs on a timer and a
@@ -297,9 +306,25 @@ def collect(timeout=5, ignore_stopped=True, now=None):
         state = info.get("state") or entry.get("state") or "unknown"
         host = info.get("hostname")
 
+        token = (tokens or {}).get(slug)
         probe = PROBES.get(slug)
-        probe_result = run_probe(probe, host, timeout) if state == "started" else None
+        probe_result = run_probe(probe, host, timeout, token) if state == "started" else None
         status = derive_status(state, probe_result)
+
+        # A 403 from an add-on that publishes counts means restrict_to_user_ids
+        # is on and no token was configured. It is still alive — that is what
+        # the probe asked — but the empty Records column would otherwise be a
+        # mystery, so the detail says what to do about it.
+        if (
+            probe_result is not None
+            and probe_result.ok
+            and not token
+            and slug in STATS_PATHS
+            and "403" in (probe_result.detail or "")
+        ):
+            probe_result = ProbeResult(
+                True, f"{probe_result.detail} — set this add-on's api_token to read records"
+            )
 
         stats = {}
         counts = None
@@ -309,7 +334,7 @@ def collect(timeout=5, ignore_stopped=True, now=None):
             # service that is not responding will not answer this either, and
             # waiting for it to time out twice slows every scan.
             if probe_result is None or probe_result.ok:
-                counts = fetch_stats(slug, host, timeout)
+                counts = fetch_stats(slug, host, timeout, token)
 
         results.append(
             _row(

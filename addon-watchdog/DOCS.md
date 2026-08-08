@@ -68,6 +68,29 @@ Counts require Gym Tracker 1.29.0 / Coop Tracker 1.41.0 or later. An older one
 returns 404 and simply shows no number; health is judged by the probe, never by
 this.
 
+### If an add-on sets `restrict_to_user_ids`
+
+That setting refuses any caller without a matching ingress-user header, and the
+watchdog is not a browser session — so it gets **HTTP 403** and the Records
+column stays blank. The add-on still reads `ok`, because a 403 does prove
+something is alive and enforcing, and the probe detail says what to do.
+
+The documented way past it is that add-on's own `api_token`. Copy it into
+`api_tokens`:
+
+```yaml
+api_tokens:
+  - slug: gym-tracker
+    token: "<the api_token from the Gym Tracker add-on>"
+  - slug: coop-tracker
+    token: "<the api_token from the Coop Tracker add-on>"
+```
+
+`slug` is the short slug as it appears in this repository — `gym-tracker`, not
+`6753e04e_gym_tracker`. The token is sent as `Authorization: Bearer …` on both
+the probe and the stats call. Leave the list empty if no add-on restricts
+access; nothing else needs it.
+
 ## Sensors
 
 With `publish_sensors` on (the default), each add-on gets

@@ -41,12 +41,21 @@ def load_options():
         "publish_sensors": True,
         "sensor_prefix": "addon_watchdog",
         "ignore_stopped": True,
+        "api_tokens": [],
     }
     try:
         with open(OPTIONS_PATH) as handle:
             defaults.update(json.load(handle))
     except (OSError, ValueError) as exc:
         _log(f"could not read {OPTIONS_PATH} ({exc}); using defaults")
+    # Flattened once here rather than per scan. Entries without both fields are
+    # dropped quietly: a half-filled row in the add-on config UI is a common
+    # in-progress state, not something to log about every minute.
+    defaults["tokens"] = {
+        entry["slug"]: entry["token"]
+        for entry in defaults.get("api_tokens") or []
+        if isinstance(entry, dict) and entry.get("slug") and entry.get("token")
+    }
     return defaults
 
 
@@ -77,6 +86,7 @@ def scan_once(options):
     snapshot = watchdog.collect(
         timeout=options["probe_timeout_seconds"],
         ignore_stopped=options["ignore_stopped"],
+        tokens=options["tokens"],
     )
     _snapshot = snapshot
 
