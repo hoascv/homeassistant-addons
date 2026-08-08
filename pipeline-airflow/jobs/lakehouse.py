@@ -233,7 +233,26 @@ def catalog_diagnostics(spark):
     return {key: _conf(spark, key) for key in keys}
 
 
-def register(spark, source=None, root=None, typed_views=True):
+def _say(verbose, message):
+    if verbose:
+        print(message, flush=True)
+
+
+def _exists(spark, name):
+    """Whether the catalog already knows this table or view.
+
+    One cheap metastore lookup, against a Delta log read plus two DDL
+    statements — which is what makes a second run quick instead of repeating
+    the slowest path seventeen times.
+    """
+    try:
+        return spark.catalog.tableExists(name)
+    except Exception:  # noqa: BLE001 - treat "cannot tell" as "not there"
+        return False
+
+
+def register(spark, source=None, root=None, typed_views=True, refresh=False,
+             verbose=True):
     """Give the Delta tables names, so SQL can find them without a path.
 
         register(spark)                      # every source
@@ -261,14 +280,29 @@ def register(spark, source=None, root=None, typed_views=True):
     sources = [source] if source else sorted(SCHEMAS)
     registered, skipped = [], []
     for src in sources:
+        _say(verbose, f"{src}:")
         spark.sql(f"CREATE DATABASE IF NOT EXISTS {src}")
         for name, schema in SCHEMAS.get(src, {}).items():
             location = f"{_root(root)}/{src}/{name}"
+
+            # Already done? A catalog lookup is one cheap metastore call, where
+            # the work below is a Delta log read plus two DDL statements against
+            # S3 — so checking first is what makes a re-run quick instead of
+            # repeating seventeen tables' worth of the slowest path.
+            if not refresh and _exists(spark, f"{src}.{name}") and (
+                not typed_views or _exists(spark, f"{src}.{name}_typed")
+            ):
+                _say(verbose, f"  {src}.{name} — already registered")
+                registered.append(f"{src}.{name}")
+                continue
+
+            _say(verbose, f"  {src}.{name} — reading …")
             try:
                 # Cheapest honest existence check: Delta refuses a path with no
                 # transaction log, which is exactly the "not loaded yet" case.
                 spark.read.format("delta").load(location).schema
             except Exception:  # noqa: BLE001 - not written yet, or unreadable
+                _say(verbose, f"  {src}.{name} — not in the lakehouse yet, skipping")
                 skipped.append(f"{src}.{name}")
                 continue
             spark.sql(

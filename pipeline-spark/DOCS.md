@@ -36,9 +36,25 @@ Part of a four-add-on data pipeline: **Pipeline Postgres**, **Pipeline MinIO**,
   `root_user` / `root_password`.
 - **metastore_uris**: empty by default, which leaves Spark on a session-local
   catalog where tables are addressed by path. Set it to the Pipeline Metastore
-  add-on (`thrift://172.30.32.1:9083`) to get a Hive catalog and real table
-  names — see that add-on's docs. The first query afterwards downloads a
-  matching Hive 4.1.0 client, once.
+  add-on to get a Hive catalog and real table names — see that add-on's docs.
+
+  Two forms work, and the second is worth trying if the first fails:
+
+  ```
+  thrift://172.30.32.1:9083                    # host gateway + published port
+  thrift://<prefix>-pipeline-metastore:9083    # add-on hostname, Supervisor network
+  ```
+
+  The hostname form is how the Airflow DAGs reach the trackers and needs no
+  published port at all; `<prefix>` is your repository's hash, the same one in
+  this add-on's own hostname.
+
+  **Restart Spark after the metastore restarts.** The Connect server builds its
+  Hive catalog once per JVM, so it keeps using sockets the restart already
+  killed, and every query then fails with `Socket is closed by peer`.
+
+  The first query afterwards downloads a matching Hive 4.1.0 client — several
+  hundred jars, some minutes — cached under `/data/spark` thereafter.
 
 ## Submitting jobs
 

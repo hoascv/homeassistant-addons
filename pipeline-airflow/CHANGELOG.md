@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.9.0
+
+- `register()` prints what it is doing, table by table. Registering seventeen
+  tables is a Delta log read and two DDL statements each, minutes of work
+  against S3 and the metastore, and it previously ran silently — indistinguishable
+  from a hang.
+- It also skips what the catalog already has, so a second run costs one
+  statement instead of repeating all of it. `refresh=True` forces the work,
+  `verbose=False` silences the output.
+
 ## 2.8.0
 
 - `lakehouse.catalog_diagnostics(spark)` reports every conf that decides

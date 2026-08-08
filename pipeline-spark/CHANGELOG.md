@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.5.0
+
+- The **Spark Connect application UI** is published on host port 4040 — running
+  queries, jobs and stages. It was not exposed at all, which is the one view
+  that answers "what is this slow query actually doing". Its port is pinned, so
+  it cannot drift to 4041 and leave the published port dead.
+- An **Open Web UI** button on the add-on page, landing on the master UI, which
+  links onward to the worker and to each running application.
+- `metastore_uris` documents the add-on-hostname form alongside the gateway one,
+  and that Spark must be restarted after the metastore restarts — its Hive
+  catalog is built once per JVM and otherwise keeps using dead sockets.
+
 ## 1.4.0
 
 - New `metastore_uris` option. Set it to the Pipeline Metastore add-on

@@ -84,7 +84,10 @@ echo "[Pipeline Spark] starting Connect server (gRPC :15002)"
     --name "Spark Connect server" \
     --master "spark://localhost:7077" \
     --conf spark.connect.grpc.binding.address=0.0.0.0 \
-    --conf spark.connect.grpc.binding.port=15002 &
+    --conf spark.connect.grpc.binding.port=15002 \
+    --conf spark.ui.port=4040 \
+    --conf spark.ui.enabled=true \
+    &
 CONNECT_PID=$!
 
 # If any of them exits, stop the container so Supervisor restarts it.
