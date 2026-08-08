@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.30.0
+
+- Dropped `armhf`, `armv7` and `i386` from `arch`. Supervisor now reports all
+  three as deprecated; `aarch64` and `amd64` remain. If you run this on a
+  32-bit ARM or x86 box, stay on 1.29.0.
+
 ## 1.29.0
 
 - New `/api/stats`: row counts per tracked table, the database size and the

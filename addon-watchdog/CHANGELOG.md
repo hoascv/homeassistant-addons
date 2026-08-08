@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.4.0
+
+- Dropped `armhf`, `armv7` and `i386` from `arch`, which Supervisor reports as
+  deprecated. `aarch64` and `amd64` remain.
+
 ## 1.3.0
 
 - New `api_tokens` option. An add-on with `restrict_to_user_ids` set refuses
