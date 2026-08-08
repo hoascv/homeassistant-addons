@@ -151,6 +151,27 @@ is no option that would make it try.
 - `/api/health` — the watchdog's own health, since nothing else is watching it:
   when it last scanned and how long ago.
 
+## When something can't be retrieved
+
+Anything the watchdog fails to fetch is logged with its reason — Supervisor
+info, Supervisor stats, record counts, and sensor pushes each reported
+separately, named by add-on:
+
+```
+could not retrieve gym-tracker record counts: HTTP 403 (needs this add-on's api_token in api_tokens)
+could not retrieve pipeline-spark supervisor stats: HTTP 502: bad gateway
+recovered: gym-tracker record counts
+```
+
+Reported **on change only**. A scan a minute means an unchanging failure logged
+every time would bury everything else within a day, so it appears when it
+starts, again if the reason changes, and once more when it clears. The per-scan
+summary keeps carrying the count (`3 retrieval error(s)`), so a persistent
+problem stays visible without repeating itself.
+
+None of this affects health. A failed retrieval is a missing number, not a sick
+add-on — that judgement belongs to the probe.
+
 ## Reading the log
 
 Every line is stamped in local time, so it lines up with the Supervisor log.

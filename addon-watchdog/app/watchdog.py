@@ -79,6 +79,7 @@ ROW_KEYS = (
     "version_latest", "update_available", "cpu_percent", "memory_usage",
     "memory_percent", "probe", "probe_ok", "probe_detail", "error",
     "records", "record_counts", "db_bytes",
+    "stats_error", "records_error",
 )
 
 
@@ -168,31 +169,41 @@ def run_probe(probe, host, timeout, token=None):
 
 
 def fetch_stats(slug, host, timeout, token=None):
-    """Row counts from an add-on that publishes them, or None.
+    """Row counts from an add-on that publishes them, as (data, error).
 
-    Deliberately forgiving: a tracker older than the release that added
-    /api/stats returns 404, and one with restrict_to_user_ids set answers 403
-    without a token. Both are a missing number rather than a fault — the
-    add-on's health is judged by its probe, never by this.
+    Deliberately forgiving about the outcome — a tracker older than the release
+    that added /api/stats returns 404, and one with restrict_to_user_ids set
+    answers 403 without a token, and neither makes the add-on unhealthy — but
+    the reason is returned rather than swallowed. An empty Records column with
+    no explanation anywhere is the thing to avoid.
     """
     spec = STATS_PATHS.get(slug)
     if spec is None or not host:
-        return None
+        return None, None
     _, port, path = spec
+    url = f"http://{host}:{port}{path}"
     try:
-        url = f"http://{host}:{port}{path}"
         with urllib.request.urlopen(_request(url, token), timeout=timeout) as resp:
             body = json.loads(resp.read(1 << 20) or b"{}")
-    except Exception:  # noqa: BLE001 - counts are a nicety; health is not
-        return None
+    except urllib.error.HTTPError as exc:
+        hint = {
+            403: " (needs this add-on's api_token in api_tokens)",
+            404: " (add-on predates /api/stats)",
+        }.get(exc.code, "")
+        return None, f"HTTP {exc.code}{hint}"
+    except (urllib.error.URLError, OSError) as exc:
+        return None, f"unreachable: {getattr(exc, 'reason', exc)}"
+    except ValueError as exc:
+        return None, f"bad JSON: {exc}"
+
     counts = body.get("counts")
     if not isinstance(counts, dict):
-        return None
+        return None, "response had no 'counts' object"
     return {
         "records": body.get("total"),
         "record_counts": counts,
         "db_bytes": body.get("db_bytes"),
-    }
+    }, None
 
 
 def derive_status(state, probe_result):
@@ -326,15 +337,15 @@ def collect(timeout=5, ignore_stopped=True, now=None, tokens=None):
                 True, f"{probe_result.detail} — set this add-on's api_token to read records"
             )
 
-        stats = {}
-        counts = None
+        stats, stats_err = {}, None
+        counts, counts_err = None, None
         if state == "started":
-            stats, _ = supervisor_addon_stats(installed_slug)
+            stats, stats_err = supervisor_addon_stats(installed_slug)
             # Only worth asking an add-on that just answered its probe; a
             # service that is not responding will not answer this either, and
             # waiting for it to time out twice slows every scan.
             if probe_result is None or probe_result.ok:
-                counts = fetch_stats(slug, host, timeout, token)
+                counts, counts_err = fetch_stats(slug, host, timeout, token)
 
         results.append(
             _row(
@@ -354,6 +365,8 @@ def collect(timeout=5, ignore_stopped=True, now=None, tokens=None):
                 probe_ok=None if probe_result is None else probe_result.ok,
                 probe_detail=None if probe_result is None else probe_result.detail,
                 error=info_err,
+                stats_error=stats_err,
+                records_error=counts_err,
                 **(counts or {}),
             )
         )

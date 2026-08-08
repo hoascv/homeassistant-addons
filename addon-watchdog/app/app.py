@@ -59,11 +59,55 @@ def load_options():
     return defaults
 
 
-def summarise(snapshot, seconds, pushed=None):
+# Last error logged per source, so a failure that persists is reported once
+# rather than every scan. At a scan a minute, logging a stuck 403 unconditionally
+# would bury everything else within a day — but staying silent about it is how
+# the empty Records column went unexplained in 1.2.0. Logging transitions is the
+# middle: it appears when it starts, and again when it clears.
+_reported_errors = {}
+
+
+def log_errors(snapshot, publish_errors=()):
+    """Report what could not be retrieved, on change only."""
+    current = {}
+    for row in snapshot.get("addons", []):
+        for field, what in (
+            ("error", "supervisor info"),
+            ("stats_error", "supervisor stats"),
+            ("records_error", "record counts"),
+        ):
+            if row.get(field):
+                current[f"{row['slug']} {what}"] = row[field]
+    for err in publish_errors:
+        # publish() formats these as "<entity>: <reason>". Splitting them keeps
+        # the entity in the key — stable, so a flapping reason is what triggers
+        # a re-log — and stops the line repeating the entity id twice.
+        entity, _, reason = err.partition(": ")
+        current[f"sensor push {entity}"] = reason or err
+    if snapshot.get("error"):
+        current["supervisor"] = snapshot["error"]
+
+    for key, err in sorted(current.items()):
+        if _reported_errors.get(key) != err:
+            _log(f"could not retrieve {key}: {err}")
+    for key in sorted(_reported_errors):
+        if key not in current:
+            _log(f"recovered: {key}")
+
+    _reported_errors.clear()
+    _reported_errors.update(current)
+    return len(current)
+
+
+def summarise(snapshot, seconds, pushed=None, failures=0):
     """One line per scan, so the log answers "is this thing still running" on
     its own. A scan costs a Supervisor stats call per add-on — around a second
     each — so the duration is worth carrying: it is the first thing to look at
-    if scans start overlapping the interval."""
+    if scans start overlapping the interval.
+
+    The failure count is carried every scan even though the detail is only
+    logged on change: without it, a persistent problem would vanish from the
+    log entirely after its first appearance."""
     counts = {}
     for row in snapshot["addons"]:
         counts[row["status"]] = counts.get(row["status"], 0) + 1
@@ -77,6 +121,8 @@ def summarise(snapshot, seconds, pushed=None):
         line += f" | {snapshot['updates']} update(s) available"
     if pushed is not None:
         line += f" | {pushed} sensors"
+    if failures:
+        line += f" | {failures} retrieval error(s)"
     return line
 
 
@@ -91,10 +137,10 @@ def scan_once(options):
     _snapshot = snapshot
 
     if snapshot.get("error"):
-        _log(f"scan failed: {snapshot['error']}")
+        log_errors(snapshot)
         return snapshot
 
-    pushed = None
+    pushed, errors = None, []
     if options["publish_sensors"]:
         pushed, errors = watchdog.publish(
             snapshot,
@@ -102,10 +148,9 @@ def scan_once(options):
             ignore_stopped=options["ignore_stopped"],
         )
         _last_publish = {"pushed": pushed, "errors": errors, "at": time.time()}
-        for err in errors[:3]:
-            _log(f"sensor push failed: {err}")
 
-    _log(summarise(snapshot, time.monotonic() - started, pushed))
+    failures = log_errors(snapshot, errors)
+    _log(summarise(snapshot, time.monotonic() - started, pushed, failures))
     return snapshot
 
 

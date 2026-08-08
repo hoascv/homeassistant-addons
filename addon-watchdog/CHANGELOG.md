@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.5.0
+
+- Anything that cannot be retrieved is now logged with its reason. Supervisor
+  info, Supervisor stats, record counts and sensor pushes are reported
+  separately and named by add-on; several of these were previously swallowed,
+  including the 403 that left the Records column blank with no explanation
+  anywhere.
+- Reported on change only — a scan a minute would otherwise bury the log in one
+  unchanging error — with recoveries logged too, and a running count carried on
+  the per-scan summary line so a persistent problem stays visible.
+- `/api/status` gained `stats_error` and `records_error` per add-on. None of it
+  affects health: a failed retrieval is a missing number, not a sick add-on.
+
 ## 1.4.0
 
 - Dropped `armhf`, `armv7` and `i386` from `arch`, which Supervisor reports as

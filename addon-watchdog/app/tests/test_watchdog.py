@@ -181,12 +181,12 @@ def test_collect_counts_a_degraded_addon(monkeypatch):
 def test_stats_are_only_fetched_from_addons_that_publish_them():
     """Postgres holds plenty of rows and is deliberately not asked: counting
     them would mean the watchdog carrying database credentials."""
-    assert watchdog.fetch_stats("pipeline-postgres", "host", 1) is None
+    assert watchdog.fetch_stats("pipeline-postgres", "host", 1) == (None, None)
     assert set(watchdog.STATS_PATHS) == {"gym-tracker", "coop-tracker"}
 
 
 def test_stats_without_a_hostname_is_not_an_error():
-    assert watchdog.fetch_stats("gym-tracker", None, 1) is None
+    assert watchdog.fetch_stats("gym-tracker", None, 1) == (None, None)
 
 
 def test_unreachable_stats_endpoint_yields_no_counts(monkeypatch):
@@ -196,7 +196,8 @@ def test_unreachable_stats_endpoint_yields_no_counts(monkeypatch):
         raise OSError("404")
 
     monkeypatch.setattr(watchdog.urllib.request, "urlopen", boom)
-    assert watchdog.fetch_stats("gym-tracker", "gym", 1) is None
+    data, err = watchdog.fetch_stats("gym-tracker", "gym", 1)
+    assert data is None and "unreachable" in err
 
 
 def test_counts_reach_the_row(monkeypatch):
@@ -216,8 +217,8 @@ def test_counts_reach_the_row(monkeypatch):
     )
     monkeypatch.setattr(
         watchdog, "fetch_stats",
-        lambda slug, host, timeout, token=None: {
-            "records": 42, "record_counts": {"weight_logs": 42}, "db_bytes": 4096},
+        lambda slug, host, timeout, token=None: (
+            {"records": 42, "record_counts": {"weight_logs": 42}, "db_bytes": 4096}, None),
     )
 
     row = next(r for r in watchdog.collect()["addons"] if r["slug"] == "gym-tracker")
@@ -242,7 +243,7 @@ def test_a_degraded_addon_is_not_asked_for_counts(monkeypatch):
         lambda p, h, t, token=None: watchdog.ProbeResult(False, "refused")
     )
     monkeypatch.setattr(
-        watchdog, "fetch_stats", lambda *a, **kw: asked.append(a) or None
+        watchdog, "fetch_stats", lambda *a, **kw: (asked.append(a), (None, None))[1]
     )
 
     row = next(r for r in watchdog.collect()["addons"] if r["slug"] == "gym-tracker")
@@ -277,7 +278,7 @@ def test_a_403_without_a_token_says_what_to_do(monkeypatch):
     )
     monkeypatch.setattr(watchdog, "supervisor_addon_stats", lambda slug: ({}, None))
     monkeypatch.setattr(watchdog, "run_probe", lambda *a: ProbeResult(True, "HTTP 403"))
-    monkeypatch.setattr(watchdog, "fetch_stats", lambda *a: None)
+    monkeypatch.setattr(watchdog, "fetch_stats", lambda *a: (None, "HTTP 403"))
 
     row = next(r for r in watchdog.collect()["addons"] if r["slug"] == "gym-tracker")
     assert row["status"] == "ok", "a 403 still means something is answering"
@@ -297,7 +298,7 @@ def test_the_hint_is_dropped_once_a_token_is_configured(monkeypatch):
     monkeypatch.setattr(watchdog, "run_probe", lambda *a: ProbeResult(True, "HTTP 200"))
     monkeypatch.setattr(
         watchdog, "fetch_stats",
-        lambda *a: {"records": 7, "record_counts": {"weight_logs": 7}, "db_bytes": 1024},
+        lambda *a: ({"records": 7, "record_counts": {"weight_logs": 7}, "db_bytes": 1024}, None),
     )
 
     row = next(
@@ -325,7 +326,7 @@ def test_tokens_reach_the_probe_and_the_stats_call(monkeypatch):
     )
     monkeypatch.setattr(
         watchdog, "fetch_stats",
-        lambda slug, host, timeout, tok=None: (seen.__setitem__("stats", tok), None)[1],
+        lambda slug, host, timeout, tok=None: (seen.__setitem__("stats", tok), (None, None))[1],
     )
 
     watchdog.collect(tokens={"gym-tracker": "tok123"})
