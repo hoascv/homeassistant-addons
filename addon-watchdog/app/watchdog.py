@@ -36,6 +36,18 @@ CORE_API = "http://supervisor/core/api"
 # how the Airflow DAGs talk to the trackers.
 Probe = namedtuple("Probe", "kind port path what")
 
+# Add-ons that can report how much data they hold. Both trackers expose
+# /api/stats — row counts per tracked table, deliberately separate from
+# /api/export, which answers the same question only by serialising every row.
+#
+# Nothing here reads the pipeline's Postgres: that would mean carrying database
+# credentials for the sake of a number, and a watchdog is the last thing that
+# should be holding them.
+STATS_PATHS = {
+    "gym-tracker": ("http", 8099, "/api/stats"),
+    "coop-tracker": ("http", 8099, "/api/stats"),
+}
+
 PROBES = {
     "gym-tracker": Probe("http", 8099, "/", "web UI answers"),
     "coop-tracker": Probe("http", 8099, "/", "web UI answers"),
@@ -66,6 +78,7 @@ ROW_KEYS = (
     "slug", "installed_slug", "name", "installed", "state", "status", "version",
     "version_latest", "update_available", "cpu_percent", "memory_usage",
     "memory_percent", "probe", "probe_ok", "probe_detail", "error",
+    "records", "record_counts", "db_bytes",
 )
 
 
@@ -145,6 +158,32 @@ def run_probe(probe, host, timeout):
     if probe.kind == "tcp":
         return probe_tcp(host, probe.port, timeout)
     return probe_http(host, probe.port, probe.path, timeout)
+
+
+def fetch_stats(slug, host, timeout):
+    """Row counts from an add-on that publishes them, or None.
+
+    Deliberately forgiving: a tracker older than the release that added
+    /api/stats returns 404, and that is a missing number rather than a fault —
+    the add-on's health is judged by its probe, never by this.
+    """
+    spec = STATS_PATHS.get(slug)
+    if spec is None or not host:
+        return None
+    _, port, path = spec
+    try:
+        with urllib.request.urlopen(f"http://{host}:{port}{path}", timeout=timeout) as resp:
+            body = json.loads(resp.read(1 << 20) or b"{}")
+    except Exception:  # noqa: BLE001 - counts are a nicety; health is not
+        return None
+    counts = body.get("counts")
+    if not isinstance(counts, dict):
+        return None
+    return {
+        "records": body.get("total"),
+        "record_counts": counts,
+        "db_bytes": body.get("db_bytes"),
+    }
 
 
 def derive_status(state, probe_result):
@@ -263,8 +302,14 @@ def collect(timeout=5, ignore_stopped=True, now=None):
         status = derive_status(state, probe_result)
 
         stats = {}
+        counts = None
         if state == "started":
             stats, _ = supervisor_addon_stats(installed_slug)
+            # Only worth asking an add-on that just answered its probe; a
+            # service that is not responding will not answer this either, and
+            # waiting for it to time out twice slows every scan.
+            if probe_result is None or probe_result.ok:
+                counts = fetch_stats(slug, host, timeout)
 
         results.append(
             _row(
@@ -284,6 +329,7 @@ def collect(timeout=5, ignore_stopped=True, now=None):
                 probe_ok=None if probe_result is None else probe_result.ok,
                 probe_detail=None if probe_result is None else probe_result.detail,
                 error=info_err,
+                **(counts or {}),
             )
         )
 
@@ -323,6 +369,17 @@ def publish(snapshot, prefix="addon_watchdog", ignore_stopped=True):
                 "memory_usage_mb": _mb(row.get("memory_usage")),
                 "probe": row.get("probe"),
                 "probe_detail": row.get("probe_detail"),
+                # Absent rather than null for add-ons that hold no data, so a
+                # template testing the attribute gets a clean answer.
+                **(
+                    {
+                        "records": row["records"],
+                        "record_counts": row.get("record_counts"),
+                        "db_size_mb": _mb(row.get("db_bytes")),
+                    }
+                    if row.get("records") is not None
+                    else {}
+                ),
             },
         )
         if err:

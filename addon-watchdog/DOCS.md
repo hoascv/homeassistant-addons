@@ -39,6 +39,35 @@ An HTTP probe treats any reply below 500 as alive. A 302 to a login page or a
 401 both mean something is listening and speaking HTTP, which is the question
 being asked; failing them would report healthy services as broken.
 
+## Record counts
+
+The two trackers publish `/api/stats` — row counts per tracked table, plus the
+database size — and the dashboard shows the total in a **Records** column, with
+the per-table breakdown on hover. The same numbers arrive as `records`,
+`record_counts` and `db_size_mb` attributes on that add-on's sensor, so you can
+graph how the data grows:
+
+```yaml
+sensor:
+  - platform: template
+    sensors:
+      workouts_logged:
+        value_template: >
+          {{ state_attr('sensor.addon_watchdog_gym_tracker', 'record_counts')['workout_logs'] }}
+```
+
+Two deliberate limits:
+
+- **The pipeline's Postgres is not counted.** Counting rows there means the
+  watchdog holding database credentials, which is a poor trade for a number —
+  and it is the last add-on that should be holding them.
+- **A degraded add-on is not asked.** It will not answer, and waiting for a
+  second timeout would slow every scan.
+
+Counts require Gym Tracker 1.29.0 / Coop Tracker 1.41.0 or later. An older one
+returns 404 and simply shows no number; health is judged by the probe, never by
+this.
+
 ## Sensors
 
 With `publish_sensors` on (the default), each add-on gets

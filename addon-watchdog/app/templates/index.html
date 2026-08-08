@@ -72,7 +72,7 @@
   <thead>
     <tr>
       <th>Add-on</th><th>Status</th><th>Version</th>
-      <th>CPU</th><th>Memory</th><th>Probe</th>
+      <th>CPU</th><th>Memory</th><th>Records</th><th>Probe</th>
     </tr>
   </thead>
   <tbody>
@@ -93,6 +93,15 @@
       </td>
       <td>{% if a.cpu_percent is not none %}{{ '%.1f'|format(a.cpu_percent) }}%{% else %}&mdash;{% endif %}</td>
       <td>{% if a.memory_usage %}{{ mb(a.memory_usage) }} MB{% else %}&mdash;{% endif %}</td>
+      <td>
+        {% if a.records is not none %}
+          {# Per-table breakdown on hover: useful when a number looks wrong,
+             and not worth a column of its own for a dozen tables. #}
+          <b title="{% for t, n in (a.record_counts or {}) | dictsort %}{{ t }}: {{ n }}
+{% endfor %}">{{ '{:,}'.format(a.records) }}</b>
+          {% if a.db_bytes %}<div class="detail">{{ mb(a.db_bytes) }} MB</div>{% endif %}
+        {% else %}&mdash;{% endif %}
+      </td>
       <td class="detail">
         {% if a.probe_detail %}{{ a.probe_detail }}
         {% elif a.installed and a.state == 'started' and not a.probe %}no probe available

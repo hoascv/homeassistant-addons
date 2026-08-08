@@ -78,6 +78,10 @@ publish its port in the add-on's Network section.
 - **`GET /api/export`** — every tracked table (collections, chickens, breeds,
   food types, health events, nesting boxes), plus the `max_seq` the snapshot
   corresponds to. Start here.
+- **`GET /api/stats`** — row counts per tracked table, the database size and the
+  same `max_seq`, without serialising a single row. For anything polling on a
+  timer (the Add-on Watchdog does), this is the one to call: `/api/export`
+  answers the same question in megabytes.
 - **`GET /api/changes?since=<seq>&limit=<n>`** — everything after `seq`, oldest
   first. Each entry names its **actor** — `user`, `automation` or `migration` —
   so you can tell a value you entered from one the add-on wrote for you. Each

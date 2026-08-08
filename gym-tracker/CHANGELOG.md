@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.29.0
+
+- New `/api/stats`: row counts per tracked table, the database size and the
+  current `max_seq`. `/api/export` already answered this, but only by
+  serialising every row — megabytes to learn a dozen integers, which is no way
+  to poll on a timer. The Add-on Watchdog reads it every scan.
+- Counts cover the same tables as the change feed, so a number here and a
+  number in the lakehouse are counting the same thing.
+
 ## 1.28.0
 
 - **Finishing is celebrated.** Two moments, weighted differently so the frequent

@@ -172,3 +172,77 @@ def test_collect_counts_a_degraded_addon(monkeypatch):
     assert row["status"] == "degraded"
     assert row["probe_detail"] == "refused"
     assert snapshot["unhealthy"] == 1
+
+
+# --- record counts ------------------------------------------------------------
+
+
+def test_stats_are_only_fetched_from_addons_that_publish_them():
+    """Postgres holds plenty of rows and is deliberately not asked: counting
+    them would mean the watchdog carrying database credentials."""
+    assert watchdog.fetch_stats("pipeline-postgres", "host", 1) is None
+    assert set(watchdog.STATS_PATHS) == {"gym-tracker", "coop-tracker"}
+
+
+def test_stats_without_a_hostname_is_not_an_error():
+    assert watchdog.fetch_stats("gym-tracker", None, 1) is None
+
+
+def test_unreachable_stats_endpoint_yields_no_counts(monkeypatch):
+    """A tracker older than the release that added /api/stats returns 404, and
+    that is a missing number rather than a fault."""
+    def boom(*args, **kwargs):
+        raise OSError("404")
+
+    monkeypatch.setattr(watchdog.urllib.request, "urlopen", boom)
+    assert watchdog.fetch_stats("gym-tracker", "gym", 1) is None
+
+
+def test_counts_reach_the_row(monkeypatch):
+    monkeypatch.setattr(
+        watchdog, "supervisor_addons",
+        lambda: ([{"slug": "x_gym_tracker", "name": "Gym Tracker", "state": "started",
+                   "version": "1.29.0", "version_latest": "1.29.0"}], None),
+    )
+    monkeypatch.setattr(
+        watchdog, "supervisor_addon_info",
+        lambda slug: ({"state": "started", "hostname": "x-gym-tracker"}, None),
+    )
+    monkeypatch.setattr(watchdog, "supervisor_addon_stats", lambda slug: ({}, None))
+    monkeypatch.setattr(
+        watchdog, "run_probe", lambda p, h, t: watchdog.ProbeResult(True, "HTTP 200")
+    )
+    monkeypatch.setattr(
+        watchdog, "fetch_stats",
+        lambda slug, host, timeout: {"records": 42, "record_counts": {"weight_logs": 42},
+                                     "db_bytes": 4096},
+    )
+
+    row = next(r for r in watchdog.collect()["addons"] if r["slug"] == "gym-tracker")
+    assert row["records"] == 42
+    assert row["record_counts"] == {"weight_logs": 42}
+
+
+def test_a_degraded_addon_is_not_asked_for_counts(monkeypatch):
+    """It will not answer, and waiting for a second timeout slows every scan."""
+    asked = []
+    monkeypatch.setattr(
+        watchdog, "supervisor_addons",
+        lambda: ([{"slug": "x_gym_tracker", "name": "Gym Tracker", "state": "started"}], None),
+    )
+    monkeypatch.setattr(
+        watchdog, "supervisor_addon_info",
+        lambda slug: ({"state": "started", "hostname": "x-gym-tracker"}, None),
+    )
+    monkeypatch.setattr(watchdog, "supervisor_addon_stats", lambda slug: ({}, None))
+    monkeypatch.setattr(
+        watchdog, "run_probe", lambda p, h, t: watchdog.ProbeResult(False, "refused")
+    )
+    monkeypatch.setattr(
+        watchdog, "fetch_stats", lambda *a: asked.append(a) or None
+    )
+
+    row = next(r for r in watchdog.collect()["addons"] if r["slug"] == "gym-tracker")
+    assert row["status"] == "degraded"
+    assert row["records"] is None
+    assert asked == []

@@ -19,7 +19,7 @@ from flask import Flask, Response, g, jsonify, render_template, request, send_fi
 
 import garmin_client
 
-APP_VERSION = "1.28.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.29.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("GYM_DB_PATH", "/data/gym.db")
 OPTIONS_PATH = os.environ.get("GYM_OPTIONS_PATH", "/data/options.json")
@@ -3709,6 +3709,44 @@ def api_export():
             # (day) repeats across rows.
             "keys": dict(TRACKED_TABLES),
             "tables": {table: _table_rows(db, table) for table in TRACKED_TABLES},
+        }
+    )
+
+
+@app.route("/api/stats")
+def api_stats():
+    """Row counts per table, and how big the database is.
+
+    /api/export answers this too, but only by serialising every row — several
+    megabytes to learn a dozen integers, which is no way to poll on a timer.
+    The Add-on Watchdog reads this every scan.
+
+    Counts are over the same TRACKED_TABLES the change feed covers, so a number
+    here and a number in the lakehouse are counting the same thing.
+    """
+    db = get_db()
+    counts = {}
+    for table in TRACKED_TABLES:
+        try:
+            counts[table] = db.execute(f"SELECT COUNT(*) AS n FROM {table}").fetchone()["n"]
+        except sqlite3.Error:
+            # A table added in a later migration than the running schema is
+            # absent rather than broken; reporting null beats failing the call.
+            counts[table] = None
+    try:
+        size = os.path.getsize(DB_PATH)
+    except OSError:
+        size = None
+    return jsonify(
+        {
+            "app_version": APP_VERSION,
+            "taken_at": _now_ts(),
+            "db_bytes": size,
+            "max_seq": db.execute(
+                "SELECT COALESCE(MAX(seq), 0) AS n FROM change_log"
+            ).fetchone()["n"],
+            "counts": counts,
+            "total": sum(n for n in counts.values() if n is not None),
         }
     )
 

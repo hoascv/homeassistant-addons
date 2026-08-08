@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.2.0
+
+- The dashboard has a Records column: how many rows each tracker holds and how
+  big its database is, with the per-table breakdown on hover. The same numbers
+  ride along as `records`, `record_counts` and `db_size_mb` attributes on that
+  add-on's sensor.
+- Counts come from the trackers' own `/api/stats` (Gym Tracker 1.29.0, Coop
+  Tracker 1.41.0). An older tracker returns 404 and simply shows no number —
+  health is judged by the probe, never by this.
+- The pipeline's Postgres is deliberately not counted. It would mean the
+  watchdog holding database credentials, which is a poor trade for a number.
+- A degraded add-on is not asked for counts: it will not answer, and waiting
+  for a second timeout would slow every scan.
+
 ## 1.1.0
 
 - Every log line now carries a local timestamp, matching the Supervisor log it

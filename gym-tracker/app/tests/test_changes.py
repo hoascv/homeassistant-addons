@@ -323,3 +323,36 @@ def test_the_feed_carries_the_actor(client, conn):
 
     entry = _changes(client, since=start)["changes"][0]
     assert entry["actor"] == "user"
+
+
+# --- /api/stats -------------------------------------------------------------
+
+
+def test_stats_counts_match_the_database(client, conn):
+    client.post("/api/weight", json={"weight_kg": 100.0})
+    payload = client.get("/api/stats").get_json()
+
+    assert set(payload["counts"]) == set(gymapp.TRACKED_TABLES)
+    for table, reported in payload["counts"].items():
+        actual = conn.execute(f"SELECT COUNT(*) n FROM {table}").fetchone()["n"]
+        assert reported == actual, table
+
+
+def test_stats_agrees_with_export_without_serialising_it(client):
+    """The whole point of the endpoint: the same numbers as /api/export, for a
+    fraction of the bytes."""
+    stats = client.get("/api/stats").get_json()
+    export = client.get("/api/export").get_json()
+
+    assert stats["max_seq"] == export["max_seq"]
+    for table, rows in export["tables"].items():
+        assert stats["counts"][table] == len(rows), table
+
+
+def test_stats_total_ignores_unavailable_tables(client):
+    payload = client.get("/api/stats").get_json()
+    assert payload["total"] == sum(n for n in payload["counts"].values() if n is not None)
+
+
+def test_stats_reports_the_database_size(client):
+    assert client.get("/api/stats").get_json()["db_bytes"] > 0
