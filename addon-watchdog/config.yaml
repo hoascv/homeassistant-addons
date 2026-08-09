@@ -1,5 +1,5 @@
 name: "Add-on Watchdog"
-version: "1.9.0"
+version: "1.10.0"
 slug: "addon-watchdog"
 description: "Health, resource use and update status for the add-ons in this repository"
 url: "https://github.com/hoascv/homeassistant-addons/tree/main/addon-watchdog"
@@ -31,6 +31,10 @@ options:
   publish_sensors: true
   sensor_prefix: "addon_watchdog"
   ignore_stopped: true
+  io_sample_seconds: 10
+  benchmark_size_mb: 1024
+  benchmark_seconds: 30
+  benchmark_min_free_gb: 2
   # Only needed for an add-on that sets restrict_to_user_ids: that refuses any
   # caller without a matching ingress-user header, and a bearer token is the
   # documented way past it. Without one the trackers answer 403 and their
@@ -42,6 +46,10 @@ schema:
   publish_sensors: "bool"
   sensor_prefix: "str"
   ignore_stopped: "bool"
+  io_sample_seconds: "int(2,300)"
+  benchmark_size_mb: "int(64,8192)"
+  benchmark_seconds: "int(5,300)"
+  benchmark_min_free_gb: "int(1,64)"
   api_tokens:
     - slug: "str"
       token: "password"

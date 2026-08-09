@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.10.0
+
+- **Device I/O, continuously**: utilisation, read/write latency, IOPS and MB/s
+  sampled every 10 seconds from `/proc/diskstats`, published as sensors with
+  `state_class: measurement` so Home Assistant's recorder keeps the history.
+  A slow window is then captured whether or not anyone was watching, which is
+  the point — the symptom happens during working hours and is gone by the time
+  anyone looks.
+- Both mean and **peak** per minute: a 60-second mean averages away the
+  10-second stall that is the whole event.
+- **Per-add-on disk rates** from Supervisor's `blk_read`/`blk_write`, as sensor
+  attributes. Device saturated while these stay flat is the difference between
+  "the storage was the limit" and "the pipeline asked for more".
+- **Measure ceiling** button runs `fio` once — 8 KiB random, `direct=1`, the
+  size Postgres reads and writes in. Never scheduled, refuses below 2 GB free,
+  and cleans up its test file even on failure. The result is labelled a floor on
+  the true maximum, since it is measured under live load.
+- The scan line now carries peak busy and write wait, so the log alone shows a
+  slow window.
+- Corrected two comments claiming this host is i386; it is amd64.
+
 ## 1.9.0
 
 - Uptime per add-on, and how many times it has restarted. Supervisor exposes

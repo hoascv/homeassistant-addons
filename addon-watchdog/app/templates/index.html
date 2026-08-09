@@ -70,6 +70,71 @@
   </div>
 </div>
 
+
+{# The evidence panel: utilisation and latency are what show the device was the
+   constraint, so they lead. The ceiling is context, not the argument. #}
+{% if io.summary or io.error %}
+<div class="wrap" style="margin-bottom:16px; padding:12px 14px;">
+  <div style="display:flex; flex-wrap:wrap; gap:22px; align-items:flex-start;">
+    {% if io.error %}
+      <div class="err" style="margin:0;">Disk sampling unavailable: {{ io.error }}</div>
+    {% else %}
+      {% set s = io.summary %}
+      <div>
+        <div class="detail">Device busy (peak / mean)</div>
+        <b style="font-size:1.4rem;
+           {% if (s.util_percent_peak or 0) >= 90 %}color:#dc2626{% endif %}">
+          {{ s.util_percent_peak }}%</b>
+        <span class="detail">/ {{ s.util_percent }}%</span>
+      </div>
+      <div>
+        <div class="detail">Write wait (peak / mean)</div>
+        <b style="font-size:1.4rem;
+           {% if (s.write_latency_ms_peak or 0) >= 20 %}color:#dc2626{% endif %}">
+          {{ s.write_latency_ms_peak if s.write_latency_ms_peak is not none else '—' }} ms</b>
+        <span class="detail">/ {{ s.write_latency_ms if s.write_latency_ms is not none else '—' }} ms</span>
+      </div>
+      <div>
+        <div class="detail">IOPS (peak / mean)</div>
+        <b style="font-size:1.4rem;">{{ s.iops_peak }}</b>
+        <span class="detail">/ {{ s.iops }}</span>
+      </div>
+      <div>
+        <div class="detail">Throughput r/w</div>
+        <b style="font-size:1.4rem;">{{ s.read_mb_s }} / {{ s.write_mb_s }}</b>
+        <span class="detail">MB/s</span>
+      </div>
+      <div>
+        <div class="detail">Ceiling ({{ s.device or 'device' }})</div>
+        {% if io.benchmark %}
+          <b style="font-size:1.4rem;">{{ io.benchmark.randwrite.iops }}</b>
+          <span class="detail">write IOPS
+            {% if io.saturation is not none %}&middot; using {{ io.saturation }}%{% endif %}
+          </span>
+        {% else %}
+          <span class="detail">not measured</span>
+        {% endif %}
+        <form method="post" action="api/benchmark" style="margin-top:6px;">
+          <button type="submit" {% if benchmark_running %}disabled{% endif %}
+                  style="font-size:.8rem; padding:4px 10px; cursor:pointer;">
+            {% if benchmark_running %}measuring…{% else %}Measure ceiling{% endif %}
+          </button>
+        </form>
+      </div>
+    {% endif %}
+  </div>
+  {% if io.benchmark %}
+    <div class="detail" style="margin-top:8px;">
+      Ceiling measured under live load, so it is a floor on the true maximum.
+      8 KiB random, the size Postgres reads and writes in.
+    </div>
+  {% endif %}
+  {% if io.benchmark_error %}
+    <div class="rep-bad" style="margin-top:8px;">Benchmark: {{ io.benchmark_error }}</div>
+  {% endif %}
+</div>
+{% endif %}
+
 <div class="wrap">
 <table>
   <thead>

@@ -175,6 +175,70 @@ Reading Supervisor's log may be refused to this add-on's role. If it is,
 restarts are still counted and only the explanation is missing — the error is
 reported rather than passed off as "no restarts".
 
+## Disk I/O — proving the storage is the constraint
+
+When something "gets slow at certain times of day", the useful question is
+whether the storage was the limit or the workload grew. Those need different
+evidence, and a maximum alone answers neither: it says what the device could do,
+not that you were at it.
+
+The argument this add-on lets you make:
+
+> Device utilisation pinned at 100% and average write wait rose from 3 ms to
+> 48 ms, while the pipeline add-ons' own I/O rates were unchanged. The extra
+> load came from somewhere else.
+
+**Continuously**, sampled every `io_sample_seconds` (default 10) from
+`/proc/diskstats`, which is host-wide and readable without any privilege:
+
+| | |
+|---|---|
+| **Utilisation %** | share of wall-clock time with at least one request in flight. Near 100% means saturated |
+| **Read / write wait** | average milliseconds per operation. This is what rises when the device is the bottleneck |
+| **IOPS and MB/s** | how much work was actually asked for |
+
+Both the **mean and the peak** of each minute are published, because a 60-second
+mean hides a 10-second stall — and the stall is the thing being hunted.
+
+**Per add-on**, from Supervisor's own `blk_read`/`blk_write`: each add-on's
+sensor carries `disk_read_bps` and `disk_write_bps`. This is what shows the
+pipeline's demand did *not* rise while the device was saturated.
+
+### The ceiling
+
+Press **Measure ceiling** on the dashboard to run `fio` once: 8 KiB random read
+and write, `direct=1` so it measures the disk rather than the page cache. 8 KiB
+because that is Postgres' page size, which makes the number directly comparable
+to database I/O rather than a sequential MB/s figure nothing here is limited by.
+
+It is **never scheduled**. It writes real data and competes with the live
+database for the duration, so it stays a deliberate act. It refuses to start
+unless 2 GB is free, and deletes its test file even when it fails.
+
+The result is a **floor** on the true maximum, not the maximum: it was measured
+while everything else was running. That is stated on the dashboard, because a
+ceiling quoted without that caveat invites an argument about the measurement.
+
+### Alerting on it
+
+```yaml
+automation:
+  - alias: "Storage is the bottleneck"
+    trigger:
+      - platform: numeric_state
+        entity_id: sensor.addon_watchdog_disk_write_latency_ms
+        above: 20
+        for: "00:05:00"
+    condition:
+      - condition: numeric_state
+        entity_id: sensor.addon_watchdog_disk_util
+        above: 90
+    action: ...
+```
+
+Latency *and* utilisation together: high latency alone can mean a slow device,
+but high latency while pinned at 100% busy means saturation.
+
 ## Sensors
 
 With `publish_sensors` on (the default), each add-on gets

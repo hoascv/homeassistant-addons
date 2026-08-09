@@ -11,8 +11,9 @@ Supervisor state, and the two disagreeing is itself the useful signal:
     started + probe failed  -> degraded   <- the interesting one
     not started             -> stopped
 
-Everything here is stdlib. The host this targets is i386, so the dependency
-budget is Flask and waitress and nothing else.
+Everything here is stdlib: the dependency budget is Flask and waitress and
+nothing else, which is the right posture for the component that has to keep
+reporting when the things it watches are broken.
 """
 from __future__ import annotations
 
@@ -101,6 +102,7 @@ ROW_KEYS = (
     "report_ok", "report_detail", "report_metrics", "report_age", "report_error",
     "uptime_seconds", "uptime_known", "restarts", "last_restart_at",
     "last_restart_reason", "supervisor_watchdog",
+    "disk_read_bps", "disk_write_bps",
 )
 
 # Where the restart/uptime history lives. Supervisor exposes no container start
@@ -260,7 +262,7 @@ def save_state(state):
         pass
 
 
-def track_uptime(state, slug, running, network_rx, now):
+def track_uptime(state, slug, running, network_rx, now, blk_read=None, blk_write=None):
     """Uptime and restart count for one add-on, from successive observations.
 
     Supervisor reports neither a container start time nor a restart counter, so
@@ -305,13 +307,38 @@ def track_uptime(state, slug, running, network_rx, now):
     if not running:
         entry["started_at"] = None
 
+    # Per-add-on disk I/O, from the same cumulative-counter treatment: this is
+    # what shows the pipeline's own demand was unchanged while the device was
+    # saturated, which is the difference between "the storage was the limit" and
+    # "the pipeline asked for more".
+    read_bps = write_bps = None
+    previous_at = entry.get("counters_at")
+    if running and previous_at and now > previous_at and not restarted:
+        window = now - previous_at
+        for value, key, name in ((blk_read, "blk_read", "read"),
+                                 (blk_write, "blk_write", "write")):
+            before = entry.get(key)
+            if value is not None and before is not None and value >= before:
+                rate = round((value - before) / window, 1)
+                if name == "read":
+                    read_bps = rate
+                else:
+                    write_bps = rate
+
     entry["running"] = running
     entry["seen_before"] = True
+    entry["counters_at"] = now
     if network_rx is not None:
         entry["network_rx"] = network_rx
+    if blk_read is not None:
+        entry["blk_read"] = blk_read
+    if blk_write is not None:
+        entry["blk_write"] = blk_write
 
     started_at = entry.get("started_at")
     return {
+        "disk_read_bps": read_bps,
+        "disk_write_bps": write_bps,
         "uptime_seconds": None if not started_at else max(0, int(now - started_at)),
         "uptime_known": bool(started_at) and not entry.get("uptime_assumed", False),
         "restarts": entry.get("restarts", 0),
@@ -550,7 +577,8 @@ def collect(timeout=5, ignore_stopped=True, now=None, tokens=None):
                 counts, counts_err = fetch_stats(slug, host, timeout, token)
 
         tracked = track_uptime(
-            state_history, slug, state == "started", stats.get("network_rx"), now
+            state_history, slug, state == "started", stats.get("network_rx"), now,
+            blk_read=stats.get("blk_read"), blk_write=stats.get("blk_write"),
         )
         if tracked["last_restart_at"] and reasons.get(slug):
             tracked["last_restart_reason"] = reasons[slug]
@@ -642,6 +670,11 @@ def publish(snapshot, prefix="addon_watchdog", ignore_stopped=True):
                 # Whether Supervisor's own watchdog will restart this add-on —
                 # which is where a restart nobody asked for usually comes from.
                 "supervisor_watchdog": row.get("supervisor_watchdog"),
+                # Per-add-on disk rates, so a slow window can be attributed:
+                # device saturated while these stayed flat means the load is
+                # not coming from here.
+                "disk_read_bps": row.get("disk_read_bps"),
+                "disk_write_bps": row.get("disk_write_bps"),
                 # Flattened rather than nested: a Lovelace card or an automation
                 # template reads state_attr(...) one level deep comfortably and
                 # a dict of dicts awkwardly.
