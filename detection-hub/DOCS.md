@@ -148,7 +148,8 @@ Images are capped at 20 MB.
 ### Reading what it saw
 
 - **`GET /api/detections?camera=&limit=`** — recent rows, newest first.
-- **`GET /api/snapshots/<id>`** — the stored JPEG for a detection.
+- **`GET /api/snapshots/<id>`** — the stored JPEG for a detection. `404` once
+  the image has been pruned, or after a restored backup — see **Storage**.
 - **`GET /api/cameras`** — every source that has reported, and its last state.
 
 ### Feeding a pipeline
@@ -205,8 +206,10 @@ path and any load error.
 - **snapshot_retention_days**: `7` (default) / **snapshot_max_count**: `2000`.
   Images are bounded by age *and* count, because either alone fails — a quiet
   week keeps images longer than you meant, and a busy hour blows past any size
-  expectation well inside the age window. `/data` is inside Home Assistant's
-  backups, which is what makes the ceiling matter rather than just being tidy.
+  expectation well inside the age window. In practice the count binds first: with
+  a 30-second cooldown, one busy camera reaches 2000 in under a day. At ~68 KB a
+  frame that cap is about 136 MB on disk, which `/api/stats` reports as
+  `snapshot_bytes`.
 - **cameras**: one `name = url` per line. Empty means no continuous watching —
   the API and the try-it page still work. A line without an `=` is skipped
   rather than failing the whole configuration, so one typo does not stop the
@@ -228,6 +231,33 @@ path and any load error.
   the wrong places.
 
 Set these on the add-on's **Configuration** tab, then restart the add-on.
+
+## Storage
+
+Detections, cameras and the change log live in SQLite at
+`/data/detections.db`. **Snapshots do not** — they are files under
+`/data/snapshots/`, indexed by a row that holds only their size and dimensions.
+
+That split exists for one reason: Home Assistant copies `/data` into every
+backup. At ~68 KB per 768×576 frame, the 2000-image default would put ~136 MB of
+pictures into every backup — and a 1080p stream roughly four times that — for
+images that were glanced at once. `config.yaml` therefore carries:
+
+```yaml
+backup_exclude:
+  - "snapshots/**"
+```
+
+So **a restored backup brings back every detection and none of the pictures**.
+`/api/snapshots/<id>` returns 404 for those, which is a normal state rather than
+a fault. `/api/stats` reports `db_bytes` and `snapshot_bytes` separately,
+because the two are backed up differently and one combined figure would hide
+exactly the distinction that matters.
+
+The database runs in **WAL mode** with `synchronous=NORMAL`. Measured on four
+concurrent writers, that is ~2,160 commits/s against ~1,500 on the default
+rollback journal — a 44% gain. Worth having, but it is tuning rather than a
+repair: the default configuration lost nothing under contention.
 
 ## Access
 

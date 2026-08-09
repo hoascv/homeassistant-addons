@@ -12,9 +12,15 @@ compete directly with it and show up as rising write latency while utilisation
 stayed flat. So the capture pipeline batches: callers insert, and commit on an
 interval rather than per row.
 
-Snapshots live in their own table rather than as a column on `detections`, which
-is what keeps images out of the change feed by construction rather than by
-remembering to filter them.
+**Backups.** Snapshots are files under `<data>/snapshots/`, indexed by a row but
+never stored in it. Home Assistant copies `/data` into every backup, and at
+~68 KB a frame the 2000-image default would carry ~136 MB of pictures into every
+one, forever — so `config.yaml` excludes that directory. The detections stay in
+the database and are backed up; a restore brings back every row and none of the
+images, which the nullable `snapshot_id` already allows for.
+
+Keeping images out of the table also keeps them out of the change feed by
+construction rather than by remembering to filter a blob.
 """
 from __future__ import annotations
 
@@ -53,6 +59,11 @@ class AttributedConnection(sqlite3.Connection):
     """
 
     actor = None
+    # The file this connection actually opened. Snapshots are stored beside it,
+    # so the images always follow the database rather than a module-level
+    # default — a connection to another path must not write its pictures next
+    # to someone else's data.
+    db_path = None
 
     def commit(self):
         if self.actor:
@@ -62,10 +73,44 @@ class AttributedConnection(sqlite3.Connection):
         super().commit()
 
 
+def snapshot_dir(db_path=None):
+    """Where the JPEGs live: beside the database, not inside it.
+
+    Derived from the database path rather than configured separately, so the two
+    cannot be pointed at different volumes by accident — and so a test that
+    redirects the database gets its images redirected with it.
+    """
+    return os.path.join(os.path.dirname(db_path or DB_PATH), "snapshots")
+
+
 def connect(path=None, actor="user"):
-    conn = sqlite3.connect(path or DB_PATH, factory=AttributedConnection)
+    resolved = path or DB_PATH
+    conn = sqlite3.connect(resolved, factory=AttributedConnection)
     conn.actor = actor
+    conn.db_path = resolved
     conn.row_factory = sqlite3.Row
+
+    # WAL, because this add-on writes from several threads at once — a camera
+    # worker per stream, four waitress threads, and the prune loop. Measured on
+    # four concurrent writers: 1,500 commits/s on the rollback journal against
+    # 2,161 with WAL and synchronous=NORMAL, a 44% gain with no errors and no
+    # lost rows either way.
+    #
+    # It is a throughput improvement, not a repair: the default configuration
+    # loses nothing under contention. `busy_timeout` in particular is already
+    # 5000 ms, because Python's sqlite3.connect defaults to timeout=5.0 — the
+    # C library's own default of 0 is what it is not.
+    #
+    # NORMAL is durable across a crash of this process under WAL; only an OS
+    # crash or power loss can lose the last commits, and it removes an fsync per
+    # commit. That matters on this host specifically: STORAGE-IO.md measures it
+    # at 286 durable commits/s, a budget Postgres shares.
+    #
+    # Both must run before any transaction opens — SQLite refuses to change the
+    # safety level inside one, and journal_mode is persisted in the file header
+    # so the WAL line is a no-op after the first connection.
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
     return conn
 
 
@@ -105,18 +150,22 @@ def init_db(path=None):
         "CREATE INDEX IF NOT EXISTS idx_detections_camera ON detections(camera, detected_at)"
     )
 
+    # An index, not a blob store: the bytes live in files beside the database.
+    # `bytes` is the file's size, so disk use is a SUM rather than a directory
+    # walk, and a row whose file failed to write is visibly incomplete.
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS snapshots (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            image BLOB NOT NULL,
             width INTEGER,
             height INTEGER,
-            taken_at TEXT NOT NULL
+            taken_at TEXT NOT NULL,
+            bytes INTEGER
         )
         """
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_snapshots_time ON snapshots(taken_at)")
+    _migrate_snapshots_to_files(conn, target)
 
     conn.execute(
         """
@@ -155,6 +204,56 @@ def init_db(path=None):
     conn.close()
 
 
+def _migrate_snapshots_to_files(conn, db_path):
+    """Move blobs out of an older database, then drop the column.
+
+    Images lived in the `image` column until 1.3.0. Anything already stored is
+    written out to its file rather than discarded — the add-on is new enough
+    that this will usually find nothing, but "usually" is not a reason to lose
+    somebody's data.
+    """
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(snapshots)")}
+    if "image" not in columns:
+        return 0
+
+    directory = snapshot_dir(db_path)
+    os.makedirs(directory, exist_ok=True)
+    moved = 0
+    for row in conn.execute("SELECT id, image FROM snapshots WHERE image IS NOT NULL"):
+        path = snapshot_path(row[0], directory)
+        if os.path.exists(path):
+            continue
+        try:
+            with open(path, "wb") as handle:
+                handle.write(bytes(row[1]))
+            moved += 1
+        except OSError:
+            # Leave the row; the file is simply missing and the endpoint 404s,
+            # which is the same state as a snapshot pruned early.
+            pass
+
+    # SQLite cannot drop a NOT NULL column in place, so the table is rebuilt.
+    # `snapshots` is not in TRACKED_TABLES, so no trigger has to be rebuilt with
+    # it and the change feed is untouched.
+    conn.executescript(
+        """
+        CREATE TABLE snapshots_rebuilt (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            width INTEGER,
+            height INTEGER,
+            taken_at TEXT NOT NULL,
+            bytes INTEGER
+        );
+        INSERT INTO snapshots_rebuilt (id, width, height, taken_at, bytes)
+            SELECT id, width, height, taken_at, length(image) FROM snapshots;
+        DROP TABLE snapshots;
+        ALTER TABLE snapshots_rebuilt RENAME TO snapshots;
+        CREATE INDEX IF NOT EXISTS idx_snapshots_time ON snapshots(taken_at);
+        """
+    )
+    return moved
+
+
 def install_change_triggers(conn):
     """Recreate the CDC triggers, every boot.
 
@@ -183,12 +282,40 @@ def install_change_triggers(conn):
 # --- writing ------------------------------------------------------------------
 
 
-def save_snapshot(conn, jpeg, width, height):
+def snapshot_dir_for(conn):
+    """The image directory belonging to whatever database this connection opened."""
+    return snapshot_dir(getattr(conn, "db_path", None))
+
+
+def snapshot_path(snapshot_id, directory=None):
+    return os.path.join(directory or snapshot_dir(), f"{snapshot_id}.jpg")
+
+
+def save_snapshot(conn, jpeg, width, height, directory=None):
+    """Write the image beside the database and index it. Returns the id, or None.
+
+    The row is inserted first because its id names the file. If the write then
+    fails — a full disk, a read-only volume — the row is removed and None comes
+    back, so the caller still stores the detection with a null snapshot_id. A
+    picture is not worth losing the detection over.
+    """
+    directory = directory or snapshot_dir_for(conn)
     cur = conn.execute(
-        "INSERT INTO snapshots (image, width, height, taken_at) VALUES (?, ?, ?, ?)",
-        (sqlite3.Binary(jpeg), width, height, now()),
+        "INSERT INTO snapshots (width, height, taken_at, bytes) VALUES (?, ?, ?, NULL)",
+        (width, height, now()),
     )
-    return cur.lastrowid
+    snapshot_id = cur.lastrowid
+    try:
+        os.makedirs(directory, exist_ok=True)
+        with open(snapshot_path(snapshot_id, directory), "wb") as handle:
+            handle.write(jpeg)
+    except OSError:
+        conn.execute("DELETE FROM snapshots WHERE id = ?", (snapshot_id,))
+        return None
+    conn.execute(
+        "UPDATE snapshots SET bytes = ? WHERE id = ?", (len(jpeg), snapshot_id)
+    )
+    return snapshot_id
 
 
 def record_detections(conn, camera, detections, snapshot_id=None, at=None):
@@ -243,14 +370,15 @@ def bump_camera_counters(conn, camera_id, frames_seen=0, frames_detected=0):
 # --- retention ----------------------------------------------------------------
 
 
-def prune(conn, detection_days=30, snapshot_days=7, snapshot_max=2000):
-    """Age and count limits, both enforced. Returns what it removed.
+def prune(conn, detection_days=30, snapshot_days=7, snapshot_max=2000, directory=None):
+    """Age and count limits, both enforced, on rows and on files.
 
     Two limits because either alone fails: a quiet week keeps images longer than
     intended, and a busy hour blows past any size expectation well inside the
-    age window. `/data` is inside Home Assistant's backups, which is what makes
-    the ceiling matter rather than just being tidy.
+    age window. With a 30-second cooldown one busy camera reaches the count in
+    under a day, so in practice the count is what binds.
     """
+    directory = directory or snapshot_dir_for(conn)
     removed = {}
 
     cutoff = (datetime.now() - timedelta(days=detection_days)).strftime("%Y-%m-%dT%H:%M:%S")
@@ -258,16 +386,24 @@ def prune(conn, detection_days=30, snapshot_days=7, snapshot_max=2000):
         "DELETE FROM detections WHERE detected_at < ?", (cutoff,)
     ).rowcount
 
+    # Ids first, because the files are named after them and the rows are about
+    # to be gone.
     snap_cutoff = (datetime.now() - timedelta(days=snapshot_days)).strftime("%Y-%m-%dT%H:%M:%S")
-    by_age = conn.execute(
-        "DELETE FROM snapshots WHERE taken_at < ?", (snap_cutoff,)
-    ).rowcount
-    by_count = conn.execute(
-        "DELETE FROM snapshots WHERE id NOT IN ("
-        " SELECT id FROM snapshots ORDER BY id DESC LIMIT ?)",
-        (snapshot_max,),
-    ).rowcount
-    removed["snapshots"] = by_age + by_count
+    doomed = [
+        row[0]
+        for row in conn.execute(
+            "SELECT id FROM snapshots WHERE taken_at < ? OR id NOT IN ("
+            " SELECT id FROM snapshots ORDER BY id DESC LIMIT ?)",
+            (snap_cutoff, snapshot_max),
+        )
+    ]
+    if doomed:
+        conn.executemany(
+            "DELETE FROM snapshots WHERE id = ?", [(i,) for i in doomed]
+        )
+        for snapshot_id in doomed:
+            _remove_quietly(snapshot_path(snapshot_id, directory))
+    removed["snapshots"] = len(doomed)
 
     # Detections outlive their images, so the dangling reference is cleared
     # rather than left pointing at a row that is gone.
@@ -276,7 +412,65 @@ def prune(conn, detection_days=30, snapshot_days=7, snapshot_max=2000):
         " AND snapshot_id NOT IN (SELECT id FROM snapshots)"
     )
 
+    removed["orphan_files"] = sweep_orphan_files(conn, directory)
     removed["change_log"] = prune_change_log(conn)
+    return removed
+
+
+def checkpoint(conn):
+    """Fold the write-ahead log back into the database and truncate it.
+
+    Must run with no transaction open — SQLite answers "database table is
+    locked" otherwise — so this is deliberately not part of `prune`, whose
+    contract is that the caller commits. The background loop calls it after its
+    commit.
+
+    Worth doing at all because the WAL grows until something checkpoints it, and
+    because a Home Assistant backup copies the database and its WAL as separate
+    files: the smaller the WAL, the smaller the window in which those two
+    disagree.
+    """
+    try:
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        return None
+    except sqlite3.OperationalError as exc:
+        # Contended by another connection's reader. It will be checkpointed on
+        # the next pass; this is housekeeping, not correctness.
+        return str(exc)
+
+
+def _remove_quietly(path):
+    try:
+        os.remove(path)
+        return True
+    except OSError:
+        return False
+
+
+def sweep_orphan_files(conn, directory=None):
+    """Delete image files with no row.
+
+    This is what makes the two-step delete self-healing: a crash between
+    removing the row and removing the file would otherwise leak an image that
+    nothing references and no retention rule can ever find again.
+    """
+    directory = directory or snapshot_dir_for(conn)
+    try:
+        names = os.listdir(directory)
+    except OSError:
+        return 0
+
+    known = {row[0] for row in conn.execute("SELECT id FROM snapshots")}
+    removed = 0
+    for name in names:
+        if not name.endswith(".jpg"):
+            continue
+        try:
+            snapshot_id = int(name[:-4])
+        except ValueError:
+            continue
+        if snapshot_id not in known and _remove_quietly(os.path.join(directory, name)):
+            removed += 1
     return removed
 
 
@@ -396,9 +590,17 @@ def stats(conn, db_path=None):
     except OSError:
         db_bytes = None
 
+    # Reported separately from db_bytes because they are backed up differently:
+    # the database goes into every Home Assistant backup and the images
+    # deliberately do not. A single "size" would hide that distinction.
+    snapshot_bytes = conn.execute(
+        "SELECT COALESCE(SUM(bytes), 0) FROM snapshots"
+    ).fetchone()[0]
+
     return {
         "taken_at": now(),
         "db_bytes": db_bytes,
+        "snapshot_bytes": snapshot_bytes,
         "max_seq": max_seq(conn),
         "counts": counts,
         "other_counts": other,
@@ -422,11 +624,23 @@ def recent_detections(conn, limit=50, camera=None):
     return [dict(row) for row in conn.execute(sql, params).fetchall()]
 
 
-def snapshot(conn, snapshot_id):
+def snapshot(conn, snapshot_id, directory=None):
+    """Where a snapshot's file is, and what it is — or None.
+
+    Returns None both when the row is unknown and when the file is missing. The
+    second is a normal state, not a fault: images are excluded from backups, so
+    after a restore every detection is present and none of the pictures are.
+    """
     row = conn.execute(
-        "SELECT image, width, height FROM snapshots WHERE id = ?", (snapshot_id,)
+        "SELECT id, width, height, bytes, taken_at FROM snapshots WHERE id = ?",
+        (snapshot_id,),
     ).fetchone()
-    return row
+    if row is None:
+        return None
+    path = snapshot_path(row["id"], directory or snapshot_dir_for(conn))
+    if not os.path.exists(path):
+        return None
+    return {**dict(row), "path": path}
 
 
 def counts_since(conn, since_iso):

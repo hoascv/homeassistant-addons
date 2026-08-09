@@ -1,5 +1,38 @@
 # Changelog
 
+## 1.3.0
+
+- **Snapshots are files now, not blobs in the database, and they are excluded
+  from Home Assistant backups.** Measured at ~68 KB per 768×576 frame, the
+  2000-image default was putting ~136 MB of pictures into every backup — and a
+  1080p stream roughly four times that — forever, for images glanced at once.
+  They live under `/data/snapshots/` and `config.yaml` carries a
+  `backup_exclude` for that directory. A restored backup brings back every
+  detection and none of the pictures; `/api/snapshots/<id>` returns 404 for
+  those, which is a normal state rather than a fault.
+- Existing images are **migrated**, not discarded: an older database has its
+  `image` column written out to files on the next boot, then the column is
+  dropped.
+- `/api/stats` reports `snapshot_bytes` alongside `db_bytes`. The two are backed
+  up differently, and one combined size would hide the distinction that matters.
+- A failed image write now costs the picture and not the detection: the
+  half-made row is removed and the detection is stored with a null
+  `snapshot_id`, which the schema already allowed for.
+- **WAL and `synchronous=NORMAL`.** Measured on four concurrent writers plus a
+  reader: ~2,160 commits/s against ~1,500 on the default rollback journal, a 44%
+  gain with no errors either way. This is tuning, not a repair — see below.
+- The image directory now follows the connection rather than a module-level
+  default, so two databases in one process cannot write pictures into each
+  other's directory.
+
+**A correction.** This release was planned around a claimed bug: that
+`busy_timeout` defaulted to 0, so a contended write would fail immediately.
+That was wrong. Python's `sqlite3.connect` defaults to `timeout=5.0`, so it was
+already 5000 ms, and a reproduction with four concurrent writers and a reader
+found no errors and no lost rows on the old configuration. WAL is a real
+improvement and worth keeping, but nothing was broken. The backup problem was
+the real one, and it was measured.
+
 ## 1.2.0
 
 - **Watches RTSP cameras.** One per line under `cameras`, as `name = url`.

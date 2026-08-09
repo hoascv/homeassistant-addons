@@ -14,14 +14,14 @@ import threading
 import time
 from datetime import datetime
 
-from flask import Flask, Response, g, jsonify, render_template, request
+from flask import Flask, Response, g, jsonify, render_template, request, send_file
 
 import capture
 import detector
 import hass
 import store
 
-APP_VERSION = "1.2.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.3.0"  # keep in sync with the "version" field in config.yaml
 
 OPTIONS_PATH = os.environ.get("DETECTION_HUB_OPTIONS_PATH", "/data/options.json")
 
@@ -363,6 +363,9 @@ def record(conn, camera, detections, image, kind="api"):
     in because sqlite3 has thread affinity and the camera threads must not
     borrow a request's.
     """
+    # None when the image could not be encoded or could not be written — a full
+    # disk, a read-only volume. The detection is still worth storing, and the
+    # column is nullable for exactly this.
     snapshot_id = None
     jpeg = detector.encode_jpeg(image)
     if jpeg:
@@ -453,12 +456,17 @@ def api_detections():
 
 @app.route("/api/snapshots/<int:snapshot_id>")
 def api_snapshot(snapshot_id):
-    """The stored JPEG. Kept out of the change feed on purpose — a consumer that
-    wants the image asks for it by id rather than receiving every one inline."""
-    row = store.snapshot(get_db(), snapshot_id)
-    if row is None:
+    """The stored JPEG, read from disk.
+
+    Kept out of the change feed on purpose — a consumer that wants the image
+    asks for it by id rather than receiving every one inline. A 404 here also
+    covers the ordinary case of a restored backup: the detections come back and
+    the pictures, deliberately, do not.
+    """
+    found = store.snapshot(get_db(), snapshot_id)
+    if found is None:
         return jsonify({"error": "no such snapshot"}), 404
-    return Response(bytes(row["image"]), mimetype="image/jpeg")
+    return send_file(found["path"], mimetype="image/jpeg")
 
 
 @app.route("/api/cameras")
@@ -584,6 +592,8 @@ def _background_loop():
                 conn.commit()
                 if any(removed.values()):
                     _log("pruned " + ", ".join(f"{n} {t}" for t, n in removed.items() if n))
+                # After the commit, never inside it.
+                store.checkpoint(conn)
                 _publish(conn)
             finally:
                 conn.close()

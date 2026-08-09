@@ -1,5 +1,5 @@
 name: "Detection Hub"
-version: "1.2.0"
+version: "1.3.0"
 slug: "detection-hub"
 description: "Object detection for Home Assistant — an image in, what's in it out"
 url: "https://github.com/hoascv/homeassistant-addons/tree/main/detection-hub"
@@ -32,6 +32,13 @@ homeassistant_api: true
 # a dead thread watches nothing.
 map:
   - share:rw
+# Snapshots are files under /data/snapshots, and they are deliberately NOT in
+# backups. Measured at ~68 KB per 768x576 frame, the 2000-image default would
+# put ~136 MB of pictures into every Home Assistant backup, forever — and a
+# 1080p stream roughly four times that. The detections stay in the database and
+# are backed up; a restore brings back every row and none of the images.
+backup_exclude:
+  - "snapshots/**"
 options:
   api_token: ""
   restrict_to_user_ids: ""
