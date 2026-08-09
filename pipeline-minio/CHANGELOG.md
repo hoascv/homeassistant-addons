@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.2
+
+- Documentation fix: corrected the opening line. This is a seven-add-on
+  pipeline, not four — Metastore, Notebook and Postgres Replica were missing.
+
 ## 1.0.1
 
 - Set the base image directly in the Dockerfile and removed `build.yaml`

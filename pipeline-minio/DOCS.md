@@ -4,8 +4,10 @@ MinIO S3-compatible object storage for the data-pipeline stack — the landing z
 and lake for your data. Spark reads/writes it over the `s3a://` scheme and Airflow
 talks to it with the S3 API.
 
-Part of a four-add-on data pipeline: **Pipeline Postgres**, **Pipeline MinIO**,
-**Pipeline Spark**, **Pipeline Airflow**. Start order: `postgres → minio → spark → airflow`.
+Part of a seven-add-on data pipeline. Start them in this order:
+`postgres → minio → [metastore] → spark → airflow → notebook`. **Pipeline
+Metastore** and **Pipeline Postgres Replica** are optional — nothing needs them
+until you want table names instead of paths, or a standby.
 
 ## What it does
 
