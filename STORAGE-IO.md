@@ -170,6 +170,122 @@ quiet baseline against one taken during the slow window.
 
 ---
 
+## Building a dashboard
+
+The sensors carry `state_class: measurement`, so Home Assistant's recorder has
+been storing history since the add-on started — a dashboard only has to draw what
+is already there. **Settings → Dashboards → Add dashboard**, then paste this in
+the raw YAML editor (three-dot menu → *Edit in YAML*):
+
+```yaml
+views:
+  - title: Storage
+    cards:
+      - type: markdown
+        content: >
+          **Idle baseline on this host:** 1.0% busy · 1.5 ms write wait · 45.8 IOPS
+          · ceiling 48,112 write IOPS. Compare the slow window against these.
+
+      - type: horizontal-stack
+        cards:
+          - type: gauge
+            entity: sensor.addon_watchdog_disk_util
+            name: Device busy
+            unit: "%"
+            min: 0
+            max: 100
+            severity: {green: 0, yellow: 70, red: 90}
+          - type: gauge
+            entity: sensor.addon_watchdog_disk_write_latency_ms
+            name: Write wait
+            unit: ms
+            min: 0
+            max: 50
+            severity: {green: 0, yellow: 5, red: 20}
+
+      # The evidence view: both lines together. Either alone proves nothing.
+      - type: history-graph
+        title: The evidence — 24 hours
+        hours_to_show: 24
+        entities:
+          - entity: sensor.addon_watchdog_disk_util
+            name: Device busy %
+          - entity: sensor.addon_watchdog_disk_write_latency_ms
+            name: Write wait ms
+
+      # Long-term statistics, which is what shows "every weekday at 10:00".
+      - type: statistics-graph
+        title: Write latency, hourly mean and peak — 7 days
+        entities:
+          - sensor.addon_watchdog_disk_write_latency_ms
+        stat_types: [mean, max]
+        period: hour
+        days_to_show: 7
+
+      - type: history-graph
+        title: What the pipeline itself was asking for
+        hours_to_show: 24
+        entities:
+          - entity: sensor.pipeline_postgres_disk_write
+            name: Postgres write B/s
+          - entity: sensor.pipeline_spark_disk_write
+            name: Spark write B/s
+
+      - type: entities
+        title: Now
+        entities:
+          - entity: sensor.addon_watchdog_disk_iops
+            name: IOPS (peak this minute)
+          - entity: sensor.addon_watchdog_disk_read_latency_ms
+            name: Read wait
+          - type: attribute
+            entity: sensor.addon_watchdog_disk_util
+            attribute: saturation_vs_benchmark_percent
+            name: Using this much of the measured ceiling
+            suffix: "%"
+          - type: attribute
+            entity: sensor.addon_watchdog_disk_util
+            attribute: device
+            name: Device
+```
+
+The **statistics graph** is the one that earns its place over time. Because the
+sensors declare a state class, Home Assistant keeps hourly mean and max
+indefinitely, long after the detailed history is purged — so "every weekday
+around 10:00" becomes visible as a pattern rather than a single bad morning.
+
+### The per-add-on card needs two template sensors
+
+Per-add-on I/O arrives as **attributes** on each add-on's sensor, and the built-in
+history card cannot plot an attribute. Two template sensors promote the ones you
+care about into entities. In `configuration.yaml`:
+
+```yaml
+template:
+  - sensor:
+      - name: "Pipeline Postgres disk write"
+        unique_id: pipeline_postgres_disk_write
+        unit_of_measurement: "B/s"
+        state_class: measurement
+        state: >
+          {{ state_attr('sensor.addon_watchdog_pipeline_postgres', 'disk_write_bps')
+             | float(0) | round(0) }}
+      - name: "Pipeline Spark disk write"
+        unique_id: pipeline_spark_disk_write
+        unit_of_measurement: "B/s"
+        state_class: measurement
+        state: >
+          {{ state_attr('sensor.addon_watchdog_pipeline_spark', 'disk_write_bps')
+             | float(0) | round(0) }}
+```
+
+Add one per add-on you want to chart, changing the slug in the entity id
+(`sensor.addon_watchdog_<slug with underscores>`). Restart Home Assistant, or use
+**Developer Tools → YAML → Template entities**.
+
+This card is the half of the argument that matters most: a device pinned at 100%
+while these lines stay flat says the load is not coming from your pipeline.
+
 ## A runbook for the slow window
 
 1. **Before it happens**, install Add-on Watchdog and let it record a normal day.
