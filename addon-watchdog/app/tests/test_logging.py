@@ -148,3 +148,37 @@ def test_uptime_reads_in_the_largest_sensible_unit():
 def test_no_uptime_is_a_dash_not_a_zero():
     """A stopped add-on has no uptime; showing 0s would imply it just started."""
     assert wd_app.uptime(None) == "—"
+
+
+# --- the benchmark button -----------------------------------------------------
+
+
+def test_the_button_does_not_navigate_away():
+    """It was a plain form, and a form submit takes the browser to the JSON
+    response — the reader landed on {"started":true} with only the back button.
+    It POSTs in place now, with a relative URL so the ingress prefix survives."""
+    import watchdog
+    wd_app._io = {"summary": {"device": "sda8", "samples": 1, "util_percent": 1.0,
+                              "util_percent_peak": 1.0, "iops": 1.0, "iops_peak": 1.0,
+                              "read_mb_s": 0.0, "write_mb_s": 0.0,
+                              "read_latency_ms": 1.0, "read_latency_ms_peak": 1.0,
+                              "write_latency_ms": 1.0, "write_latency_ms_peak": 1.0},
+                  "benchmark": None, "saturation": None, "error": None,
+                  "benchmark_error": None}
+    wd_app._snapshot = {"generated": 1, "error": None, "unhealthy": 0,
+                        "updates": 0, "addons": []}
+    html = wd_app.app.test_client().get("/").get_data(as_text=True)
+
+    assert '<form method="post"' not in html, "a form submit navigates away"
+    assert 'fetch("api/benchmark", {method: "POST"})' in html
+    assert 'fetch("/api/benchmark"' not in html, "absolute URL would break ingress"
+
+
+def test_a_second_benchmark_is_refused_while_one_runs():
+    wd_app._benchmark_running = True
+    try:
+        response = wd_app.app.test_client().post("/api/benchmark")
+        assert response.status_code == 409
+        assert "already running" in response.get_json()["error"]
+    finally:
+        wd_app._benchmark_running = False

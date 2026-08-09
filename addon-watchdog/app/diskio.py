@@ -232,7 +232,12 @@ def run_benchmark(size_mb=1024, seconds=30, min_free_gb=2, data_dir=None):
     data_dir = data_dir or DATA_DIR
     target = os.path.join(data_dir, ".fio-benchmark.tmp")
 
-    free = _free_bytes(data_dir)
+    try:
+        free = _free_bytes(data_dir)
+    except OSError as exc:
+        # An unreadable or missing directory is a refusal with a reason, not a
+        # traceback on a background thread that nobody sees.
+        return None, f"cannot check free space in {data_dir}: {exc}"
     needed = max(size_mb * 1048576, min_free_gb * 1073741824)
     if free < needed:
         return None, (f"needs {needed // 1048576} MB free in {data_dir}, "

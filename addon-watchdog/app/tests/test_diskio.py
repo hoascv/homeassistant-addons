@@ -221,3 +221,11 @@ def test_no_ceiling_means_no_percentage():
     made-up denominator would not."""
     assert diskio.utilisation_against_ceiling({"iops_peak": 100.0}, None) is None
     assert diskio.utilisation_against_ceiling(None, {"randwrite": {"iops": 1}}) is None
+
+
+def test_an_unreadable_directory_is_a_refusal_not_a_traceback(tmp_path):
+    """It runs on a background thread, so an exception here would surface only
+    as stderr noise — the reader would see a button that did nothing."""
+    data, err = diskio.run_benchmark(data_dir=str(tmp_path / "absent"))
+    assert data is None
+    assert "cannot check free space" in err

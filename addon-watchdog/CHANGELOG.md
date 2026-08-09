@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.10.1
+
+- The **Measure ceiling** button no longer navigates away. It was a plain HTML
+  form, and a form submit takes the browser to the response — so clicking it
+  dumped the reader on a raw `{"error":null,"started":true}` page with only the
+  back button to escape. It now POSTs in place, reports a refusal (too little
+  free space, already running) where it happened, and reloads once fio has had
+  time to finish.
+- A benchmark that cannot even check free space — an unreadable or missing data
+  directory — is now a reported refusal rather than an exception on a background
+  thread, which surfaced only as stderr noise and left a button that appeared to
+  do nothing.
+
 ## 1.10.0
 
 - **Device I/O, continuously**: utilisation, read/write latency, IOPS and MB/s

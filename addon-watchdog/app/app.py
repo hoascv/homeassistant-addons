@@ -283,6 +283,9 @@ def start_benchmark(options):
                 _io["benchmark_error"] = None
                 _log(f"benchmark: randread {result['randread']['iops']} IOPS, "
                      f"randwrite {result['randwrite']['iops']} IOPS")
+        except Exception as exc:  # noqa: BLE001 - a crash here must be visible
+            _log(f"benchmark raised {type(exc).__name__}: {exc}")
+            _io["benchmark_error"] = f"{type(exc).__name__}: {exc}"
         finally:
             _benchmark_running = False
 

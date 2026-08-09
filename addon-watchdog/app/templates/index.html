@@ -114,12 +114,43 @@
         {% else %}
           <span class="detail">not measured</span>
         {% endif %}
-        <form method="post" action="api/benchmark" style="margin-top:6px;">
-          <button type="submit" {% if benchmark_running %}disabled{% endif %}
-                  style="font-size:.8rem; padding:4px 10px; cursor:pointer;">
-            {% if benchmark_running %}measuring…{% else %}Measure ceiling{% endif %}
-          </button>
-        </form>
+        {# POSTed from script rather than submitted as a form: a form submit
+           navigates the browser to the JSON response, dumping the reader on a
+           raw {"started":true} page with only the back button to escape. The
+           URL stays relative so it resolves under the ingress prefix. #}
+        <button type="button" id="bench-btn"
+                {% if benchmark_running %}disabled{% endif %}
+                style="font-size:.8rem; padding:4px 10px; cursor:pointer;"
+                onclick="startBenchmark(this)">
+          {% if benchmark_running %}measuring…{% else %}Measure ceiling{% endif %}
+        </button>
+        <div id="bench-msg" class="detail" style="margin-top:4px;"></div>
+        <script>
+          function startBenchmark(btn) {
+            btn.disabled = true;
+            btn.textContent = "measuring…";
+            var msg = document.getElementById("bench-msg");
+            msg.textContent = "running for about a minute; this competes with the disk";
+            fetch("api/benchmark", {method: "POST"})
+              .then(function (r) { return r.json(); })
+              .then(function (d) {
+                if (d.error) {
+                  msg.textContent = d.error;
+                  btn.disabled = false;
+                  btn.textContent = "Measure ceiling";
+                } else {
+                  // The page reloads on its own every 60s; this just makes the
+                  // result appear promptly once fio has had time to finish.
+                  setTimeout(function () { location.reload(); }, 70000);
+                }
+              })
+              .catch(function (e) {
+                msg.textContent = "could not start: " + e;
+                btn.disabled = false;
+                btn.textContent = "Measure ceiling";
+              });
+          }
+        </script>
       </div>
     {% endif %}
   </div>
