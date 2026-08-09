@@ -21,6 +21,27 @@ mkdir -p "$SPARK_CONF_DIR" "$SPARK_WORKER_DIR" /data/spark/.ivy2
 # Bind on all interfaces so the host-published ports reach master/worker.
 export SPARK_LOCAL_IP=0.0.0.0
 
+# ...but 0.0.0.0 is a bind address, not a reachable one, and Spark advertises
+# whatever it binds to. The master's UI builds its "Workers" link from what the
+# worker registered with, so it produced http://0.0.0.0:8081 — a dead link on
+# every install. SPARK_PUBLIC_DNS is the knob Spark provides for exactly this:
+# it changes only what the web UIs put in links, never what anything binds to
+# or how master, worker and Connect find each other.
+#
+# It cannot be derived here. The browser is on the LAN and this container is on
+# the Supervisor's bridge network, so nothing visible from inside is routable
+# from outside; the gateway address (172.30.32.1) reaches this add-on only from
+# a sibling add-on. So it is an option, and left empty the links stay as they
+# were rather than becoming confidently wrong in a new way.
+PUBLIC_HOST="$(jq -r '.public_host // ""' "$OPTIONS")"
+if [ -n "$PUBLIC_HOST" ]; then
+    export SPARK_PUBLIC_DNS="$PUBLIC_HOST"
+    echo "[Pipeline Spark] web UI links will point at ${PUBLIC_HOST}"
+else
+    echo "[Pipeline Spark] public_host is unset — the master UI's Workers link" \
+         "will read 0.0.0.0 and not resolve. Set it to this host's address."
+fi
+
 # Compose spark-defaults: baked packages/REST settings + runtime S3A (MinIO).
 CONF="$SPARK_CONF_DIR/spark-defaults.conf"
 cp /opt/pipeline/base-defaults.conf "$CONF"
@@ -75,10 +96,16 @@ MASTER_PID=$!
 
 # Give the master a moment to bind before the worker registers.
 sleep 5
-echo "[Pipeline Spark] starting worker (${WORKER_CORES} cores, ${WORKER_MEMORY}) -> UI :8081"
+# 8083 inside the container, not 8081, so it matches the host port it is
+# published on. The master builds the Workers link from the worker's own view of
+# itself, which knows nothing of Home Assistant's port remapping — so a
+# container port that differs from its host port produces a link to a port
+# nothing is listening on. Aligning them is the fix; the master stays on 8080
+# because the Add-on Watchdog probes it there.
+echo "[Pipeline Spark] starting worker (${WORKER_CORES} cores, ${WORKER_MEMORY}) -> UI :8083"
 "${SPARK_HOME}/bin/spark-class" org.apache.spark.deploy.worker.Worker \
     "spark://localhost:7077" \
-    --cores "$WORKER_CORES" --memory "$WORKER_MEMORY" --webui-port 8081 &
+    --cores "$WORKER_CORES" --memory "$WORKER_MEMORY" --webui-port 8083 &
 WORKER_PID=$!
 
 # Spark Connect: the driver for Airflow's jobs, running here rather than in the

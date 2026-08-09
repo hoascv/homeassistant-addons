@@ -1,5 +1,5 @@
 name: "Pipeline Spark"
-version: "1.6.2"
+version: "1.7.0"
 slug: "pipeline-spark"
 description: "Apache Spark 4.1 single-node cluster (master + worker) for the data-pipeline stack"
 url: "https://github.com/hoascv/homeassistant-addons/tree/main/pipeline-spark"
@@ -13,14 +13,14 @@ ports:
   6066/tcp: 6066
   15002/tcp: 15002
   8080/tcp: 8082
-  8081/tcp: 8083
+  8083/tcp: 8083
   4040/tcp: 4040
 ports_description:
   7077/tcp: "Spark master RPC (spark://…:7077)"
   6066/tcp: "Standalone REST submission API (JVM cluster-mode jobs only; the bundled DAGs don't use it)"
   15002/tcp: "Spark Connect (sc://…:15002) — how Airflow submits jobs"
   8080/tcp: "Spark master web UI"
-  8081/tcp: "Spark worker web UI"
+  8083/tcp: "Spark worker web UI — the same number inside and out, so the master's Workers link resolves"
   4040/tcp: "Spark Connect application UI — running queries, jobs and stages. The one to watch when a query is slow."
 # Adds an "Open Web UI" button on the add-on page. The master UI links onward to
 # the worker and to each running application.
@@ -33,6 +33,7 @@ options:
   minio_secret_key: "changeme"
   metastore_uris: ""
   metastore_jars: "path"
+  public_host: ""
 schema:
   worker_memory: "str"
   worker_cores: "int(1,64)"
@@ -41,3 +42,4 @@ schema:
   minio_secret_key: "password"
   metastore_uris: "str?"
   metastore_jars: "list(path|maven)"
+  public_host: "str?"

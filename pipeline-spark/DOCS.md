@@ -17,6 +17,10 @@ until you want table names instead of paths, or a standby.
 - Starts a Spark **master** (RPC `:7077`, standalone REST submission API `:6066`,
   web UI `:8082` on the host), one **worker** (web UI `:8083`), and a **Spark
   Connect server** (`sc://…:15002`) whose application UI is on host port **4040**.
+  The worker UI is 8083 *inside* the container as well as outside, unlike the
+  master's 8080→8082: Spark builds links from its own view of itself and knows
+  nothing of Home Assistant's port remapping, so a worker on a different
+  internal port produces a link to a port the host never mapped.
   4040 is the one to open when a query is slow: it shows the running queries,
   jobs and stages of the session Airflow and the notebooks are actually using —
   the master UI at 8082 only shows that the application exists. The add-on page's
@@ -36,6 +40,17 @@ until you want table names instead of paths, or a standby.
 
 ## Configuration
 
+- **public_host**: the address you reach this machine on — a LAN IP or hostname,
+  no scheme and no port (e.g. `192.168.1.50` or `homeassistant.local`). Empty by
+  default.
+
+  **Set this if you want the master UI's links to work.** Spark advertises
+  whatever it binds to, and it binds to `0.0.0.0` so the published ports reach
+  it — so the master's **Workers** link comes out as `http://0.0.0.0:8081`,
+  which no browser can resolve. `public_host` changes only what the web UIs put
+  in links; nothing rebinds, and master, worker and Connect keep finding each
+  other exactly as before. It cannot be detected from inside the container: your
+  browser is on the LAN and this add-on is on the Supervisor's bridge network.
 - **worker_memory** / **worker_cores**: resources for the single worker (e.g. `4G`, 4).
 - **minio_endpoint**: S3 endpoint for `s3a://` access (default
   `http://172.30.32.1:9000`, i.e. the Pipeline MinIO add-on).

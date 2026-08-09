@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.7.0
+
+- **The master UI's "Workers" link never worked.** It resolved to
+  `http://0.0.0.0:8081`, which fails twice over: `0.0.0.0` is a bind address no
+  browser can route to, and 8081 was the container port, published on the host
+  as 8083. Spark builds that link from what the worker registered with, and the
+  worker knows neither that it is behind a port remap nor what address you reach
+  the host on.
+- The worker web UI now listens on **8083 inside the container as well as
+  outside**, so the port in the link is one the host actually mapped. The master
+  stays on 8080 internally because the Add-on Watchdog probes it there.
+- New **public_host** option: the LAN address or hostname you reach this machine
+  on. Setting it makes the web UIs advertise that in their links, via Spark's
+  own `SPARK_PUBLIC_DNS`, which changes links only — nothing rebinds and nothing
+  about how master, worker and Connect find each other changes. It cannot be
+  detected from inside the container, so it is an option rather than a guess,
+  and left empty the links behave as before instead of becoming wrong in a new
+  way. The startup log says which of the two states you are in.
+
 ## 1.6.2
 
 - Documentation fixes. Documented **host port 4040**, the Spark Connect
