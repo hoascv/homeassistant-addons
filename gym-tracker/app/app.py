@@ -19,7 +19,7 @@ from flask import Flask, Response, g, jsonify, render_template, request, send_fi
 
 import garmin_client
 
-APP_VERSION = "1.32.1"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.32.2"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("GYM_DB_PATH", "/data/gym.db")
 OPTIONS_PATH = os.environ.get("GYM_OPTIONS_PATH", "/data/options.json")
@@ -3421,13 +3421,17 @@ def api_update_challenge_item(item_id):
     ).fetchone()
     if item is None:
         return jsonify({"error": "no such challenge item"}), 404
+    # Only touch what was sent. The inline fields in Edit items each send one
+    # key, so reading an absent one as "clear it" meant editing the reps of a
+    # 3 x 40 item silently dropped the sets and left it reading "50 reps".
+    # target_seconds already worked this way; the other two did not.
+    def _keep(key):
+        return _opt_int(data, key) if key in data else _row_value(item, key)
+
     try:
-        target_sets, target_reps = _opt_int(data, "target_sets"), _opt_int(data, "target_reps")
-        target_seconds = (
-            _opt_int(data, "target_seconds")
-            if "target_seconds" in data
-            else _row_value(item, "target_seconds")
-        )
+        target_sets = _keep("target_sets")
+        target_reps = _keep("target_reps")
+        target_seconds = _keep("target_seconds")
     except ValueError as e:
         return jsonify({"error": f"{e} must be a number"}), 400
 

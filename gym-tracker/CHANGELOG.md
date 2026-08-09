@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.32.2
+
+- **Editing a challenge item's reps no longer wipes its sets.** The inline
+  fields in **Edit items** each send one value, and the handler read anything
+  absent as "clear it" — so changing a `3 × 40` item to 50 reps saved it as
+  `50 reps`, with the sets silently gone. Duration behaved correctly already;
+  sets and reps did not. Every target now keeps whatever was not sent, and an
+  empty field still clears deliberately.
+
 ## 1.32.1
 
 - **A workout's exercise can be changed when editing it.** It could not before:
