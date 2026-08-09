@@ -3,8 +3,10 @@
 JupyterLab, already wired to the data-pipeline stack: Spark Connect, the Delta
 lakehouse on MinIO, and the tracker change feeds.
 
-Part of a five-add-on pipeline: **Pipeline Postgres**, **Pipeline MinIO**,
-**Pipeline Spark**, **Pipeline Airflow**, **Pipeline Notebook**.
+Part of a seven-add-on data pipeline. Start them in this order:
+`postgres → minio → [metastore] → spark → airflow → notebook`. **Pipeline
+Metastore** and **Pipeline Postgres Replica** are optional — nothing needs them
+until you want table names instead of paths, or a standby.
 
 > **Start Pipeline Airflow at least once first.** It creates
 > `/share/pipeline-airflow/`, which is this add-on's home directory, and

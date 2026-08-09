@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.2
+
+- Documentation fix: corrected the opening line. This is a seven-add-on
+  pipeline, not five — Metastore and Postgres Replica were missing.
+
 ## 1.0.1
 
 - Fix the 404. 1.0.0 set JupyterLab's `base_url` to the ingress path, on the
