@@ -19,7 +19,7 @@ from flask import Flask, Response, g, jsonify, render_template, request, send_fi
 
 import garmin_client
 
-APP_VERSION = "1.32.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.32.1"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("GYM_DB_PATH", "/data/gym.db")
 OPTIONS_PATH = os.environ.get("GYM_OPTIONS_PATH", "/data/options.json")
@@ -2768,10 +2768,27 @@ def api_update_workout(workout_id):
     data = request.get_json(force=True, silent=True) or {}
     db = get_db()
     existing = db.execute(
-        "SELECT ts, ts_exact FROM workout_logs WHERE id = ?", (workout_id,)
+        "SELECT ts, ts_exact, exercise_id, source, challenge_item_id"
+        " FROM workout_logs WHERE id = ?",
+        (workout_id,),
     ).fetchone()
     if existing is None:
         return jsonify({"error": "no such workout"}), 404
+
+    # The exercise is editable, like every other field. It was not until 1.32.1:
+    # the form offered the choice and sent it, and this handler quietly dropped
+    # it, so picking a different exercise appeared to save and changed nothing.
+    exercise_id = existing["exercise_id"]
+    if "exercise_id" in data:
+        try:
+            exercise_id = int(data["exercise_id"])
+        except (TypeError, ValueError):
+            return jsonify({"error": "exercise_id must be a number"}), 400
+        if db.execute(
+            "SELECT 1 FROM exercises WHERE id = ?", (exercise_id,)
+        ).fetchone() is None:
+            return jsonify({"error": "no such exercise"}), 400
+
     try:
         sets, reps, duration = _opt_int(data, "sets"), _opt_int(data, "reps"), _opt_int(data, "duration_sec")
         weight = _opt_float(data, "weight_kg")
@@ -2781,13 +2798,32 @@ def api_update_workout(workout_id):
     if err:
         return jsonify({"error": err}), 400
     notes = (data.get("notes") or "").strip() or None
+
+    # A challenge-generated row stands for "this item, ticked on this day", and
+    # un-ticking deletes it by item and date. Change either of those and it no
+    # longer stands for that, so it stops being the challenge's row and becomes
+    # an ordinary manual entry.
+    #
+    # The alternative is worse than untidy: leaving it attached means un-ticking
+    # the challenge silently deletes a workout the user deliberately edited,
+    # and leaves the log claiming a different exercise than the item it points
+    # at. Detaching keeps their edit.
+    source, challenge_item_id = existing["source"], existing["challenge_item_id"]
+    detached = False
+    if source == "challenge" and (
+        exercise_id != existing["exercise_id"] or ts[:10] != existing["ts"][:10]
+    ):
+        source, challenge_item_id, detached = "manual", None, True
+
     db.execute(
-        "UPDATE workout_logs SET ts = ?, ts_exact = ?, sets = ?, reps = ?, weight_kg = ?, "
-        "duration_sec = ?, notes = ? WHERE id = ?",
-        (ts, ts_exact, sets, reps, weight, duration, notes, workout_id),
+        "UPDATE workout_logs SET ts = ?, ts_exact = ?, exercise_id = ?, sets = ?, reps = ?,"
+        " weight_kg = ?, duration_sec = ?, notes = ?, source = ?, challenge_item_id = ?"
+        " WHERE id = ?",
+        (ts, ts_exact, exercise_id, sets, reps, weight, duration, notes,
+         source, challenge_item_id, workout_id),
     )
     db.commit()
-    return jsonify({"status": "updated"})
+    return jsonify({"status": "updated", "detached_from_challenge": detached})
 
 
 @app.route("/api/workouts/<int:workout_id>", methods=["DELETE"])

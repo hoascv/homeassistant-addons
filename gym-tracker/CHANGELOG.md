@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.32.1
+
+- **A workout's exercise can be changed when editing it.** It could not before:
+  the form offered the choice and sent it, and the server quietly ignored that
+  field — so picking a different exercise looked like it saved and changed
+  nothing. Reported against a workout a challenge had created, but it affected
+  every workout.
+- Editing a **challenge-created** workout's exercise or date now detaches it
+  from the challenge: it becomes an ordinary manual entry. It has to. Un-ticking
+  the challenge deletes its row by item and day, so a row that was edited and
+  left attached would be silently deleted later — and until then the log would
+  claim a different exercise than the item it pointed at. Changing only the sets,
+  reps or weight leaves it attached, because that is not a claim that it was a
+  different exercise. The confirmation says which happened.
+- Opening the edit form now shows the right fields for the exercise being
+  edited. Selecting an exercise in script does not fire the `change` event the
+  form listened for, so a timed exercise could open with a reps box, or a
+  counted one without it.
+
 ## 1.32.0
 
 - **`api_token` now actually protects the published port.** It never did. The

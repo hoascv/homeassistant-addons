@@ -1912,12 +1912,17 @@ document.getElementById("workout-form").addEventListener("submit", async (e) => 
   };
   try {
     if (id) {
-      await fetchJSON(`api/workouts/${id}`, {
+      const res = await fetchJSON(`api/workouts/${id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
-      toast("Workout updated.");
+      // Say so when an edit takes a row out of the challenge's hands, rather
+      // than letting the user discover it by un-ticking later and finding the
+      // workout still there.
+      toast(res && res.detached_from_challenge
+        ? "Workout updated — no longer linked to the challenge."
+        : "Workout updated.");
     } else {
       await fetchJSON("api/workouts", {
         method: "POST",
@@ -1999,6 +2004,11 @@ document.getElementById("workout-history").addEventListener("click", async (e) =
     document.getElementById("workout-form-duration").value = w.duration_sec != null ? w.duration_sec : "";
     document.getElementById("workout-form-notes").value = w.notes || "";
     document.getElementById("workout-form-date").value = w.ts.slice(0, 10);
+    // Setting .value in script does not fire `change`, so the reps/duration
+    // fields would otherwise keep whatever shape the previously selected
+    // exercise needed — a timed workout opening with a reps box, or the other
+    // way about.
+    syncWorkoutMeasureFields();
     document.getElementById("workout-title").textContent = "Edit workout";
     document.getElementById("workout-form-save").textContent = "Update";
     document.getElementById("workout-backdrop").querySelector(".sheet").scrollTop = 0;

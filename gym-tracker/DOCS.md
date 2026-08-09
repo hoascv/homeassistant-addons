@@ -144,6 +144,14 @@ Tapping an item you've already ticked asks before clearing it — the tick is th
 day's credit, and for an exercise it also removes the workout that ticking
 logged. Ticking is immediate; only undoing asks.
 
+**Editing a workout the challenge logged.** You can change any of it, including
+the exercise. Changing the **exercise** or the **date** takes that entry out of
+the challenge's hands and makes it an ordinary manual workout — it has to,
+because un-ticking the item deletes the challenge's entry for that day, and an
+entry you deliberately changed should not disappear with it. Changing the sets,
+reps or weight leaves it attached, since that is not a claim you did something
+else. The confirmation message tells you which happened.
+
 ### Statistics
 
 The **Trends** tab shows, for each challenge:
