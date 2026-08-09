@@ -4,16 +4,21 @@ Apache Airflow 3.3 (LocalExecutor) — the orchestrator for the data-pipeline st
 It stores its metadata in the Pipeline Postgres add-on and ships **pre-wired
 connections** to MinIO and Spark plus an example end-to-end DAG.
 
-Part of a four-add-on data pipeline: **Pipeline Postgres**, **Pipeline MinIO**,
-**Pipeline Spark**, **Pipeline Airflow**. Start order: `postgres → minio → spark → airflow`.
+Part of a seven-add-on data pipeline. Start them in this order:
+`postgres → minio → [metastore] → spark → airflow → notebook`. **Pipeline
+Metastore** and **Pipeline Postgres Replica** are optional — nothing needs them
+until you want table names instead of paths, or a standby.
 
 > **Start Postgres, MinIO and Spark first.** Airflow waits for its metadata
 > database on boot; Spark and MinIO must be up before you run the DAG.
 
 ## What it does
 
-- Runs `airflow standalone` (api-server + scheduler + triggerer + dag-processor)
-  with **LocalExecutor**, web UI on host port **8085**.
+- Runs the four components directly — api-server, scheduler, dag-processor and
+  triggerer — with **LocalExecutor**, web UI on host port **8085**. Deliberately
+  not `airflow standalone`: that command forces the auth manager to
+  `SimpleAuthManager` on the way up, which silently discards the `admin_password`
+  you configured (see the comment at `run.sh:189`).
 - Uses `postgresql://airflow@<postgres_host>:<postgres_port>/airflow` for metadata
   (the `airflow` DB the Pipeline Postgres add-on created).
 - Pre-creates two connections (via environment, so they always exist):
@@ -135,8 +140,9 @@ like a healthy one.
 fixes reach you on update — edit it in the repository rather than in
 `/share`. `example_pipeline.py` is yours and is never overwritten.
 
-Rows land with the payload as a JSON string plus `row_id`, `seq`, `changed_at`
-and `deleted_at`. Deletes are soft — the row keeps its last known state — since
+Rows land with the payload as a JSON string plus `row_id`, `seq`, `changed_at`,
+`actor` and `deleted_at`. `actor` is what made the change — user, automation or
+migration — and is null for a snapshot, which is a state rather than a change. Deletes are soft — the row keeps its last known state — since
 these apps do delete (un-ticking a challenge removes the tick *and* the workout
 it logged), and "logged then taken back" is worth keeping. The payload stays
 JSON rather than typed columns because both apps gain columns regularly; parse
@@ -216,7 +222,7 @@ measurement, the Add-on Watchdog samples the same counters every ten seconds.
 
 ## Developing
 
-The pipeline code is three files, and none of them need a rebuild to read:
+The pipeline code is five files, and none of them need a rebuild to read:
 
 | File | What it is |
 |---|---|

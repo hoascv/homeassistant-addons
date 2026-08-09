@@ -274,7 +274,12 @@ def register(spark, source=None, root=None, typed_views=True, refresh=False,
         raise RuntimeError(
             "this session has no Hive catalog, so there is nowhere to register "
             "tables. Install the Pipeline Metastore add-on and set the Pipeline "
-            "Spark add-on's metastore_uris (thrift://172.30.32.1:9083)."
+            "Spark add-on's metastore_uris to thrift://<prefix>-pipeline-"
+            "metastore:9083 -- the add-on hostname, where <prefix> is the same "
+            "hash as in Spark's own hostname. Not the 172.30.32.1 gateway: "
+            "something else answers that port, accepting the connection and "
+            "holding it open, so Spark reports 'Socket is closed by peer' while "
+            "the metastore logs nothing because nothing arrived."
         )
 
     sources = [source] if source else sorted(SCHEMAS)

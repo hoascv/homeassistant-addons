@@ -83,7 +83,7 @@ def test_a_connect_session_that_hides_the_static_conf_is_still_detected():
         class _Conf:
             def get(self, key):
                 if key == "spark.hadoop.hive.metastore.uris":
-                    return "thrift://172.30.32.1:9083"
+                    return "thrift://abc123-pipeline-metastore:9083"
                 raise Exception(f"no such conf: {key}")
         conf = _Conf()
 

@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.10.3
+
+- **The metastore URI in the code was the one that does not work.** The error
+  message in `lakehouse.py`, both catalog notebooks and one test all told you to
+  set `thrift://172.30.32.1:9083` — the gateway form that, on at least one host,
+  is answered by something that is not the metastore. All now say
+  `thrift://<prefix>-pipeline-metastore:9083`, and say why.
+- Documentation fixes: the docs claimed the add-on runs `airflow standalone`,
+  which `run.sh` deliberately does not — standalone forces the auth manager to
+  `SimpleAuthManager` and silently discards the configured `admin_password`.
+  "The pipeline code is three files" sat above a five-row table. The change
+  feed's `actor` column was undocumented.
+- Corrected the opening line: seven add-ons, not four.
+
 ## 2.10.2
 
 - `iobench.sh` told two different failures apart. "device: unknown —
