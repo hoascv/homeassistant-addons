@@ -17,25 +17,37 @@ from lakehouse import catalog_available, register  # noqa: E402
 
 
 class _Session:
-    """Just enough SparkSession to answer a conf lookup."""
+    """Just enough SparkSession to answer a conf lookup.
 
-    def __init__(self, impl):
-        self._impl = impl
+    Keyed, not a single value for every question. It used to answer any key with
+    the same string, which was fine while `catalog_available` consulted one
+    conf — once it began consulting the metastore URI as well, an "in-memory"
+    session cheerfully reported an "in-memory" metastore URI and read as a
+    working catalog. The stub has to distinguish the two confs because the code
+    under test does.
+    """
+
+    def __init__(self, impl, metastore_uris=None):
+        self._confs = {}
+        if impl is not None:
+            self._confs["spark.sql.catalogImplementation"] = impl
+        if metastore_uris is not None:
+            self._confs["spark.hadoop.hive.metastore.uris"] = metastore_uris
         self.statements = []
 
     class _Conf:
-        def __init__(self, impl):
-            self._impl = impl
+        def __init__(self, confs):
+            self._confs = confs
 
         def get(self, key):
-            if self._impl is None:
+            if key not in self._confs:
                 # Spark raises rather than returning a default for an unset conf.
                 raise Exception(f"no such conf: {key}")
-            return self._impl
+            return self._confs[key]
 
     @property
     def conf(self):
-        return self._Conf(self._impl)
+        return self._Conf(self._confs)
 
     def sql(self, statement):
         self.statements.append(statement)
@@ -47,6 +59,19 @@ def test_hive_catalog_is_detected():
 
 def test_in_memory_catalog_is_not_a_catalog():
     assert catalog_available(_Session("in-memory")) is False
+
+
+def test_a_metastore_uri_alone_is_enough():
+    """catalogImplementation is a static SQL conf that a Connect session does
+    not reliably surface, so the URI is the second, independent way to tell."""
+    assert catalog_available(
+        _Session("in-memory", metastore_uris="thrift://abc123-pipeline-metastore:9083")
+    ) is True
+
+
+def test_an_empty_metastore_uri_is_not_a_catalog():
+    """Spark's own default when the option is left blank."""
+    assert catalog_available(_Session("in-memory", metastore_uris="")) is False
 
 
 def test_unset_conf_is_not_fatal():

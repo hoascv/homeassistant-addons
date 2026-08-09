@@ -15,6 +15,12 @@ import pytest
 
 APP_DIR = Path(__file__).resolve().parent.parent
 
+# Every request in this suite has to look like it came through Home Assistant's
+# ingress proxy. Since 1.44.0 the app refuses anything that did not: no ingress
+# header and no api_token is a published-port request and answers 401. The
+# browser needs this on every request, and so does the readiness probe below.
+INGRESS_HEADERS = {"X-Remote-User-ID": "e2e-user"}
+
 
 def _free_port():
     with socket.socket() as s:
@@ -55,10 +61,18 @@ def app_server(_app_server_data_dir):
     base_url = f"http://127.0.0.1:{port}"
 
     deadline = time.time() + 15
+    request = urllib.request.Request(f"{base_url}/api/summary", headers=INGRESS_HEADERS)
     while time.time() < deadline:
         try:
-            with urllib.request.urlopen(f"{base_url}/api/summary", timeout=1):
+            with urllib.request.urlopen(request, timeout=1):
                 break
+        except urllib.error.HTTPError:
+            # An HTTP error *is* an answer, so the server is up and this loop
+            # is done. Worth catching separately because HTTPError subclasses
+            # URLError: swallowing it below meant a 401 looked identical to
+            # nothing listening, and the suite spent 15 seconds discovering
+            # that before reporting the wrong cause entirely.
+            break
         except (urllib.error.URLError, ConnectionError):
             if proc.poll() is not None:
                 raise RuntimeError(f"app.py exited early with code {proc.returncode}")
@@ -71,3 +85,15 @@ def app_server(_app_server_data_dir):
 
     proc.terminate()
     proc.wait(timeout=10)
+
+
+@pytest.fixture(scope="session")
+def browser_context_args(browser_context_args):
+    """Make the browser look like an ingress caller.
+
+    pytest-playwright builds every context from this, so the header goes on
+    every request the page makes — the document, the JSON calls and the images
+    alike. Without it the app answers 401 to all of them and the suite fails
+    with rendering errors that say nothing about authentication.
+    """
+    return {**browser_context_args, "extra_http_headers": INGRESS_HEADERS}
