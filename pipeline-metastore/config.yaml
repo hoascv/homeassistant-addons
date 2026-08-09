@@ -1,5 +1,5 @@
 name: "Pipeline Metastore"
-version: "1.1.0"
+version: "1.1.1"
 slug: "pipeline-metastore"
 description: "Hive standalone metastore 4.1.0 for the data-pipeline stack, so Delta tables have names instead of paths"
 url: "https://github.com/hoascv/homeassistant-addons/tree/main/pipeline-metastore"

@@ -53,16 +53,27 @@ The metastore does nothing until something uses it. In the **Pipeline Spark**
 add-on (1.4.0+), set:
 
 ```
-metastore_uris: thrift://172.30.32.1:9083
+metastore_uris: thrift://<prefix>-pipeline-metastore:9083
 ```
 
-and restart it. Leaving it empty keeps the previous behaviour — a session-local
-catalog, tables by path only.
+and restart it. `<prefix>` is your repository's hash — the same one in the Spark
+add-on's own hostname. Leaving it empty keeps the previous behaviour — a
+session-local catalog, tables by path only.
 
-> **The first query after enabling this needs internet.** Spark's built-in Hive
-> client is 2.3.10 and cannot talk to a 4.1.0 metastore, so Spark is configured
-> to fetch a matching 4.1.0 client from Maven into an isolated classloader. It is
-> cached under `/data/spark` afterwards, so this happens once.
+> **Use the add-on hostname, not the gateway.** `thrift://172.30.32.1:9083` looks
+> equivalent and is not: on at least one host something else answers that port,
+> accepting the connection and holding it open, so a socket probe reads "healthy"
+> while every Thrift request vanishes. Spark reports `Socket is closed by peer`
+> and this add-on logs nothing, because nothing arrived. The Pipeline Spark docs
+> describe how to confirm it if you hit it.
+
+Spark's built-in Hive client is 2.3.10 and cannot talk to a 4.1.0 metastore, so
+Spark loads a matching 4.1.0 client into an isolated classloader. By default
+(`metastore_jars: path`) those jars are baked into the Spark image at build time,
+so **no internet is needed** and there is no first-query delay. The `maven`
+setting is an escape hatch that resolves them over the network instead — a
+~270-module Ivy resolution on *every* Connect server start, not just the first,
+measured at over four minutes on a real install even with a warm cache.
 
 The Notebook add-on needs no change: it talks to Spark Connect, and the catalog
 lives on the Spark side of that connection.
