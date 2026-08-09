@@ -4,9 +4,10 @@ PostgreSQL 16 with **TimescaleDB** for the data-pipeline stack. It stores your
 pipeline data **and** hosts Apache Airflow's metadata database, so you only need
 one Postgres instance for the whole stack.
 
-Part of a four-add-on data pipeline: **Pipeline Postgres**, **Pipeline MinIO**,
-**Pipeline Spark**, **Pipeline Airflow**. Start them in this order:
-`postgres → minio → spark → airflow`.
+Part of a seven-add-on data pipeline. Start them in this order:
+`postgres → minio → [metastore] → spark → airflow → notebook`. **Pipeline
+Metastore** and **Pipeline Postgres Replica** are optional — nothing needs them
+until you want table names instead of paths, or a standby.
 
 > **Heavy stack.** The full pipeline (Spark + Airflow + Postgres + MinIO) is meant
 > for an amd64 host with plenty of RAM (8–16 GB). It is not suitable for a
@@ -88,6 +89,11 @@ stops. That is the one way this feature can take the database down, so:
 - Check the log after enabling. A healthy start says
   `pgBackRest check passed (archiving works)`. A failure says so explicitly and
   warns that WAL will pile up.
+- You do not have to keep reading the log. The add-on writes its backup state —
+  whether archiving works, and the outcome and age of the last backup — to
+  `/share/pipeline-status/pipeline-postgres.json`, and the **Add-on Watchdog**
+  shows it alongside everything else. That is the point of the file: the watchdog
+  holds no database credentials, so each add-on reports its own state.
 - Make sure the backup path is on something with room for the database plus its
   churn.
 
@@ -136,10 +142,15 @@ Postgres. Airflow will see task history from the restore point.
 
 ## Replication
 
-Set **replication_password** and the add-on creates a `replicator` role and
+Set **replication_password** and the add-on creates the replication role and
 permits replication connections from the Supervisor network. That is all the
 primary needs; the standby lives in the separate **Pipeline Postgres Replica**
 add-on.
+
+**replication_user** (default `replicator`) names that role. Whatever you set
+here must match the option of the same name on the replica — the two are a pair,
+and a mismatch shows up as the standby failing to authenticate rather than as
+anything obviously about the username.
 
 Changing the password later takes effect on the next start — the role's password
 is set every time, so rotating it in the UI actually rotates it.

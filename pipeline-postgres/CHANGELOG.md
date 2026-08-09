@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.3.1
+
+- Documentation fixes. Documented **`replication_user`** (default `replicator`),
+  the one option with no entry — the replica's docs point at it by name while
+  this add-on's never mentioned it, and the two must match.
+- Said that the add-on writes its backup state to
+  `/share/pipeline-status/pipeline-postgres.json` and that the Add-on Watchdog
+  shows it, so watching the log is not the only way to know archiving works.
+- Corrected the opening line: this is a seven-add-on pipeline, not four.
+
 ## 1.3.0
 
 - Writes `/share/pipeline-status/pipeline-postgres.json` after each backup and
