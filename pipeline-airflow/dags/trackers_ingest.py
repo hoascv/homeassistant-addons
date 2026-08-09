@@ -68,6 +68,7 @@ SPARK_CONNECT_URL = "sc://172.30.32.1:15002"
 SOURCES = {
     "gym_tracker": "http://172.30.32.1:8099",
     "coop_tracker": "http://172.30.32.1:8098",
+    "detection_hub": "http://172.30.32.1:8099",
 }
 
 log = logging.getLogger(__name__)

@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.11.0
+
+- Monitors the new **Detection Hub** add-on: probe, status, record counts and
+  its `/share/pipeline-status` report.
+- Probes it at `/api/health` rather than `/`. Its page answers perfectly well
+  with a broken model or a dead capture thread, and any status below 500 counts
+  as alive here — so probing the page would have reported a detector that
+  detects nothing as healthy. `/api/health` returns 503 for exactly that case.
+
 ## 1.10.3
 
 - Keeps up with Gym Tracker 1.32.0 / Coop Tracker 1.44.0, which now refuse any

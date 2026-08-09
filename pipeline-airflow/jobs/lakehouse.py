@@ -49,6 +49,22 @@ def _root(root=None):
 # long/double/string; anything absent from a row parses as null rather than
 # failing, which is what makes this survive the apps changing.
 SCHEMAS = {
+    # Not a tracker: the Detection Hub add-on, which records what its cameras
+    # saw. `data` here is a detection, not an edit someone made, so `actor` is
+    # "camera" for anything a stream produced and "user" for an image posted to
+    # its API — a distinction worth keeping when reading these back.
+    "detection_hub": {
+        "detections": (
+            "id long, camera string, label string, confidence double, "
+            "box_x long, box_y long, box_w long, box_h long, "
+            "detected_at string, snapshot_id long"
+        ),
+        "cameras": (
+            "id string, kind string, enabled long, state string, detail string, "
+            "last_frame_at string, last_detection_at string, "
+            "frames_seen long, frames_detected long"
+        ),
+    },
     "gym_tracker": {
         "workout_logs": (
             "id long, ts string, exercise_id long, sets long, reps long, "

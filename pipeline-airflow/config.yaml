@@ -1,5 +1,5 @@
 name: "Pipeline Airflow"
-version: "2.10.3"
+version: "2.11.0"
 slug: "pipeline-airflow"
 description: "Apache Airflow 3.3 orchestrator for the data-pipeline stack (LocalExecutor)"
 url: "https://github.com/hoascv/homeassistant-addons/tree/main/pipeline-airflow"
@@ -36,6 +36,8 @@ options:
   gym_tracker_api_token: ""
   coop_tracker_base_url: ""
   coop_tracker_api_token: ""
+  detection_hub_base_url: ""
+  detection_hub_api_token: ""
 schema:
   admin_user: "str"
   admin_password: "password"
@@ -55,3 +57,5 @@ schema:
   gym_tracker_api_token: "password?"
   coop_tracker_base_url: "str?"
   coop_tracker_api_token: "password?"
+  detection_hub_base_url: "str?"
+  detection_hub_api_token: "password?"

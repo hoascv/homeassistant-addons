@@ -28,6 +28,7 @@ that publishes nothing is still reachable:
 | Add-on | Probe |
 |---|---|
 | Gym Tracker / Coop Tracker | HTTP `:8099/` — the Flask app answers |
+| Detection Hub | HTTP `:8099/api/health` — **not** `/`, because its page answers perfectly well with a broken model or a dead capture thread. That endpoint returns 503 for exactly those, and the rest of its state arrives in its status file |
 | Pipeline Postgres | TCP `:5432` — accepting connections |
 | Pipeline Postgres Replica | TCP `:5432` — the standby is accepting connections. It publishes 5433 on the host but still listens on 5432 inside its container, and probes go to container ports. Replication lag comes separately, from its status file |
 | Pipeline MinIO | HTTP `:9000/minio/health/live` |
@@ -42,8 +43,8 @@ being asked; failing them would report healthy services as broken.
 
 ## Record counts
 
-The two trackers publish `/api/stats` — row counts per tracked table, plus the
-database size — and the dashboard shows the total in a **Records** column, with
+Gym Tracker, Coop Tracker and Detection Hub publish `/api/stats` — row counts
+per tracked table, plus the database size — and the dashboard shows the total in a **Records** column, with
 the per-table breakdown on hover. The same numbers arrive as `records`,
 `record_counts`, `other_counts` and `db_size_mb` attributes on that add-on's
 sensor, so you can graph how the data grows. `other_counts` holds the tables

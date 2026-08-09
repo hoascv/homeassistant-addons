@@ -199,7 +199,9 @@ def test_stats_are_only_fetched_from_addons_that_publish_them():
     """Postgres holds plenty of rows and is deliberately not asked: counting
     them would mean the watchdog carrying database credentials."""
     assert watchdog.fetch_stats("pipeline-postgres", "host", 1) == (None, None)
-    assert set(watchdog.STATS_PATHS) == {"gym-tracker", "coop-tracker"}
+    assert set(watchdog.STATS_PATHS) == {
+        "gym-tracker", "coop-tracker", "detection-hub"
+    }
 
 
 def test_stats_without_a_hostname_is_not_an_error():

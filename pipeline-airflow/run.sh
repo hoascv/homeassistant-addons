@@ -125,21 +125,25 @@ export AIRFLOW_VAR_SPARK_JOB_PATH="/opt/pipeline/jobs/example_job.py"
 # the metastore and shadow a UI Variable that was perfectly fine.
 trim() { printf '%s' "$1" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'; }
 
-for tracker in gym coop; do
-  url="$(trim "$(opt ".${tracker}_tracker_base_url // \"\"")")"
+# Iterated by full source name rather than by a prefix with "_tracker_" glued
+# on. The names have to match the DAG's SOURCES keys exactly — it looks up
+# Variable "<source>_api_token" — and a source that is not a tracker
+# (detection_hub) has no place to put that infix.
+for source in gym_tracker coop_tracker detection_hub; do
+  url="$(trim "$(opt ".${source}_base_url // \"\"")")"
   # Trimmed before export so the length reported below is the length actually
-  # presented to the tracker: the DAG strips it anyway, and a token that looks
-  # one character longer than the tracker's would send us hunting a difference
+  # presented to the source: the DAG strips it anyway, and a token that looks
+  # one character longer than the source's would send us hunting a difference
   # that isn't there.
-  tok="$(trim "$(opt ".${tracker}_tracker_api_token // \"\"")")"
-  upper="$(echo "$tracker" | tr '[:lower:]' '[:upper:]')"
-  [ -n "$url" ] && export "AIRFLOW_VAR_${upper}_TRACKER_BASE_URL=$url"
+  tok="$(trim "$(opt ".${source}_api_token // \"\"")")"
+  upper="$(echo "$source" | tr '[:lower:]' '[:upper:]')"
+  [ -n "$url" ] && export "AIRFLOW_VAR_${upper}_BASE_URL=$url"
   if [ -n "$tok" ]; then
-    export "AIRFLOW_VAR_${upper}_TRACKER_API_TOKEN=$tok"
-    # The length, so it can be compared with the tracker's own startup line
-    # without either value being written down. A 403 from the tracker means the
-    # two didn't match, and two numbers settle that in one glance.
-    echo "[Pipeline Airflow] ${tracker}_tracker token supplied from add-on options (${#tok} characters)"
+    export "AIRFLOW_VAR_${upper}_API_TOKEN=$tok"
+    # The length, so it can be compared with the source's own startup line
+    # without either value being written down. A 401 or 403 means the two
+    # didn't match, and two numbers settle that in one glance.
+    echo "[Pipeline Airflow] ${source} token supplied from add-on options (${#tok} characters)"
   fi
 done
 

@@ -12,7 +12,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        addon: [coop-tracker, gym-tracker]
+        addon: [coop-tracker, gym-tracker, detection-hub]
     defaults:
       run:
         working-directory: ${{ matrix.addon }}

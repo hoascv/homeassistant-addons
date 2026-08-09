@@ -1,5 +1,18 @@
 # Changelog
 
+## 2.11.0
+
+- Ingests the new **Detection Hub** add-on into Delta alongside the trackers,
+  as source `detection_hub`. Its detections and cameras get schemas in
+  `lakehouse.py`, so `table()` and `register()` see them like anything else.
+- The token export loop in `run.sh` now iterates **full source names** rather
+  than a prefix with `_tracker_` glued on. The names have to match the DAG's
+  `SOURCES` keys exactly — it looks up `Variable("<source>_api_token")` — and a
+  source that is not a tracker has nowhere to put that infix. Existing option
+  names are unchanged, so nothing needs reconfiguring.
+- New options `detection_hub_base_url` / `detection_hub_api_token`, the same
+  pair each tracker already has.
+
 ## 2.10.3
 
 - **The metastore URI in the code was the one that does not work.** The error

@@ -89,11 +89,15 @@ slow, it's downloading `hadoop-aws` once (cached afterwards).
 > **Security:** the web UI is published on the host network. Use a strong admin
 > password and don't expose the host to the internet.
 
-## Loading the trackers into Delta
+## Loading the add-ons into Delta
 
-Two DAGs, `gym_tracker_ingest` and `coop_tracker_ingest`, pull each add-on's
-change feed and merge it into Delta tables on MinIO at
-`s3a://lakehouse/<source>/<table>`.
+Three DAGs — `gym_tracker_ingest`, `coop_tracker_ingest` and
+`detection_hub_ingest` — pull each add-on's change feed and merge it into Delta
+tables on MinIO at `s3a://lakehouse/<source>/<table>`.
+
+The Detection Hub is not a tracker but exposes the same feed contract, so it
+rides the same machinery: its detections and cameras land beside the trackers'
+tables and are queryable the same way.
 
 Each run reads its watermark, fetches either a full snapshot (first run) or
 just the changes since, archives every raw response to `s3a://raw/<source>/`,
@@ -102,29 +106,31 @@ the merge succeeds, so a failure re-runs the batch — the merge is keyed on the
 row id and guarded by the change sequence, so that converges rather than
 double-counting.
 
-To set it up, for each tracker:
+To set it up, for each source:
 
-1. In the tracker add-on's configuration, set an **api_token**.
+1. In the source add-on's configuration, set an **api_token**.
 2. In **this** add-on's configuration, put the same value in
-   `gym_tracker_api_token` / `coop_tracker_api_token`, and restart.
+   `gym_tracker_api_token` / `coop_tracker_api_token` /
+   `detection_hub_api_token`, and restart.
 
 That's all. **No host port needs publishing.** Add-ons reach each other by
 hostname on the Supervisor network, and every add-on from one repository shares
-a prefix — this container is `<prefix>-pipeline-airflow`, so the trackers are
-`<prefix>-gym-tracker` and `<prefix>-coop-tracker`. The prefix is read from this
+a prefix — this container is `<prefix>-pipeline-airflow`, so the sources are
+`<prefix>-gym-tracker`, `<prefix>-coop-tracker` and `<prefix>-detection-hub`. The prefix is read from this
 container's own hostname, so it follows the repository being re-added (the
 prefix is its hash) or a local install (`local-…`) without being reconfigured.
 
-Keeping the trackers off any host port also keeps their API off your LAN, where
-an `api_token` would be the only thing in front of it.
+Keeping them off any host port also keeps their APIs off your LAN, where an
+`api_token` would be the only thing in front of them.
 
-Set `gym_tracker_base_url` / `coop_tracker_base_url` only to **override** that —
-a tracker on another machine, say. A published host port then has to match:
+Set `<source>_base_url` only to **override** that — a source on another machine,
+say. A published host port then has to match:
 
    | Option | Example |
    |---|---|
    | `gym_tracker_base_url` | `http://172.30.32.1:8099` |
    | `coop_tracker_base_url` | `http://172.30.32.1:8098` |
+   | `detection_hub_base_url` | `http://172.30.32.1:8097` |
 
    Airflow Variables of the same names also work, but the options are the
    reliable route: they are read *first*, and they can't suffer the failure a UI

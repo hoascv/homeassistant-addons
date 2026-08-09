@@ -47,11 +47,16 @@ Probe = namedtuple("Probe", "kind port path what")
 STATS_PATHS = {
     "gym-tracker": ("http", 8099, "/api/stats"),
     "coop-tracker": ("http", 8099, "/api/stats"),
+    "detection-hub": ("http", 8099, "/api/stats"),
 }
 
 PROBES = {
     "gym-tracker": Probe("http", 8099, "/", "web UI answers"),
     "coop-tracker": Probe("http", 8099, "/", "web UI answers"),
+    # /api/health rather than /, because this add-on's page answers perfectly
+    # well with a broken model or a dead capture thread. It returns 503 for
+    # exactly those, and the rest of its state arrives in its status file.
+    "detection-hub": Probe("http", 8099, "/api/health", "detector ready"),
     "pipeline-postgres": Probe("tcp", 5432, None, "accepting connections"),
     # The replica publishes 5433 on the host but still listens on 5432 inside
     # its container, and probes go to container ports.
