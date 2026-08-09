@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.10.2
+
+- Documentation fixes. **`ignore_stopped` was described backwards**: the default
+  `true` means a stopped add-on does *not* count as unhealthy, so the advice to
+  "turn it on if you expect everything to be running" said the opposite of what
+  it meant — it should be turned *off*.
+- The failed-scan note claimed the previous snapshot stays on screen. When
+  Supervisor is unreachable the scan returns an empty list and the table does
+  blank; only an unexpected exception preserves the last good snapshot. Both
+  paths are now described.
+- Documented what was already shipping but unwritten: Pipeline Postgres Replica
+  in the probe table, the `benchmark_size_mb` / `benchmark_seconds` /
+  `benchmark_min_free_gb` options (and that the free-space guard scales with the
+  file size, so the "2 GB" figure is only the default), `GET /api/io` and
+  `POST /api/benchmark`, the `disk_iops` and `disk_read_latency_ms` sensors,
+  that the disk sensors' state is the peak and the mean is an attribute, the
+  `other_counts` attribute, and the `GET /supervisor/logs` call in the
+  permissions list.
+- Said plainly that `not installed` is a dashboard state and never a sensor
+  state, and corrected a `config.yaml` comment that claimed sensor publishing is
+  off by default three lines above `publish_sensors: true`.
+
 ## 1.10.1
 
 - The **Measure ceiling** button no longer navigates away. It was a plain HTML

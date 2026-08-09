@@ -29,6 +29,7 @@ that publishes nothing is still reachable:
 |---|---|
 | Gym Tracker / Coop Tracker | HTTP `:8099/` — the Flask app answers |
 | Pipeline Postgres | TCP `:5432` — accepting connections |
+| Pipeline Postgres Replica | TCP `:5432` — the standby is accepting connections. It publishes 5433 on the host but still listens on 5432 inside its container, and probes go to container ports. Replication lag comes separately, from its status file |
 | Pipeline MinIO | HTTP `:9000/minio/health/live` |
 | Pipeline Spark | HTTP `:8080/` — the master UI answers |
 | Pipeline Metastore | TCP `:9083` — the Thrift port is open |
@@ -44,8 +45,10 @@ being asked; failing them would report healthy services as broken.
 The two trackers publish `/api/stats` — row counts per tracked table, plus the
 database size — and the dashboard shows the total in a **Records** column, with
 the per-table breakdown on hover. The same numbers arrive as `records`,
-`record_counts` and `db_size_mb` attributes on that add-on's sensor, so you can
-graph how the data grows:
+`record_counts`, `other_counts` and `db_size_mb` attributes on that add-on's
+sensor, so you can graph how the data grows. `other_counts` holds the tables
+that are not the tracked data — Coop Tracker's stored images, for one — kept
+apart so they don't inflate the headline number:
 
 ```yaml
 sensor:
@@ -213,7 +216,18 @@ to database I/O rather than a sequential MB/s figure nothing here is limited by.
 
 It is **never scheduled**. It writes real data and competes with the live
 database for the duration, so it stays a deliberate act. It refuses to start
-unless 2 GB is free, and deletes its test file even when it fails.
+unless there is room, and deletes its test file even when it fails.
+
+Three options shape the run:
+
+- **benchmark_size_mb** (default 1024): the test file's size.
+- **benchmark_seconds** (default 30): how long each of the two passes runs.
+- **benchmark_min_free_gb** (default 2): the free-space floor.
+
+The guard is the *larger* of the file size and the floor, so raising
+`benchmark_size_mb` to 8192 also raises the requirement to 8 GB. That is
+deliberate — this disk has hit zero before, and a benchmark that fills it would
+be worse than no benchmark.
 
 The result is a **floor** on the true maximum, not the maximum: it was measured
 while everything else was running. That is stated on the dashboard, because a
@@ -241,9 +255,17 @@ but high latency while pinned at 100% busy means saturation.
 
 ## Sensors
 
-With `publish_sensors` on (the default), each add-on gets
+With `publish_sensors` on (the default), each **installed** add-on gets
 `sensor.addon_watchdog_<slug>` whose state is the word from the table above,
 with version, update-available, CPU, memory and the probe detail as attributes.
+`not installed` is a dashboard state only — an absent add-on gets no sensor,
+since a sensor that never updates is worse than no sensor.
+
+Device I/O arrives as four more, each with `state_class: measurement` so the
+recorder keeps statistics: `sensor.addon_watchdog_disk_util`,
+`..._disk_write_latency_ms`, `..._disk_read_latency_ms` and `..._disk_iops`.
+Their **state is the peak** of the last window and the mean rides along as an
+attribute — that way a ten-second stall inside a quiet minute still shows up.
 
 There is also `sensor.addon_watchdog_unhealthy`, whose state is a **count** —
 `> 0` is the entire condition an automation needs, and it keeps working when you
@@ -278,18 +300,20 @@ every update you install pages you.
   as degraded rather than stall the scan.
 - **publish_sensors** (default true): turn off to use the page only.
 - **sensor_prefix** (default `addon_watchdog`): the entity-id prefix.
-- **ignore_stopped** (default true): whether a stopped add-on counts as
+- **ignore_stopped** (default true): a stopped add-on does **not** count as
   unhealthy. Most of the pipeline is `boot: manual` and is stopped on purpose;
   counting that would leave the summary permanently non-zero and therefore
-  ignored. Turn it on if you expect everything to be running.
+  ignored. Turn it **off** if you expect everything to be running and want a
+  stopped add-on to raise the count.
 
 ## Permissions
 
 `hassio_role: manager`, because listing other add-ons and reading their stats
 needs it — there is no narrower role that can see past this add-on itself. The
-add-on only ever reads: it calls `GET /addons`, `GET /addons/<slug>/info` and
-`GET /addons/<slug>/stats`, and the single write it makes is pushing its own
-sensors to Home Assistant. It cannot start, stop, or update anything, and there
+add-on only ever reads: it calls `GET /addons`, `GET /addons/<slug>/info`,
+`GET /addons/<slug>/stats` and `GET /supervisor/logs` (which is how the "why an
+add-on restarted" section below gets its answer), and the single write it makes
+is pushing its own sensors to Home Assistant. It cannot start, stop, or update anything, and there
 is no option that would make it try.
 
 ## Endpoints
@@ -298,6 +322,9 @@ is no option that would make it try.
 - `/api/status` — the same snapshot as JSON, with a fixed schema.
 - `/api/health` — the watchdog's own health, since nothing else is watching it:
   when it last scanned and how long ago.
+- `/api/io` — the current device sample and the stored benchmark, as JSON.
+- `POST /api/benchmark` — what the **Measure ceiling** button calls. Answers 202
+  once the run has started, or 409 if one is already in progress.
 
 ## When something can't be retrieved
 
@@ -337,5 +364,7 @@ goes quiet when healthy cannot be told apart from one that has wedged:
   opened — the sensors have to keep updating whether or not anyone is looking.
 - Only the add-ons in this repository are listed, deliberately. An add-on from
   somewhere else never appears, even when Supervisor reports it.
-- A failed scan leaves the previous snapshot on screen and shows the error,
-  rather than blanking the page.
+- If Supervisor cannot be reached, the scan returns an error and an empty list,
+  so the page shows the error with no rows beneath it. The previous snapshot is
+  **not** kept. (A scan that raises an unexpected exception is different: the
+  loop catches it and the last good snapshot stays on screen.)

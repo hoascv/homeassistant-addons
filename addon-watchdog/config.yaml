@@ -1,5 +1,5 @@
 name: "Add-on Watchdog"
-version: "1.10.1"
+version: "1.10.2"
 slug: "addon-watchdog"
 description: "Health, resource use and update status for the add-ons in this repository"
 url: "https://github.com/hoascv/homeassistant-addons/tree/main/addon-watchdog"
@@ -23,7 +23,8 @@ map:
   - share:ro
 hassio_api: true
 hassio_role: manager
-# Only to publish the sensors. Off by default in options, and never read from.
+# Only to publish the sensors — on by default in options (publish_sensors),
+# and never read from: the token is used for pushing state, never for fetching.
 homeassistant_api: true
 options:
   scan_interval_seconds: 60
