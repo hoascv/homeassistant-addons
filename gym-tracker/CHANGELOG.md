@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.32.0
+
+- **`api_token` now actually protects the published port.** It never did. The
+  docs have always said it "is the only thing protecting the API once you publish
+  the port", but the token was only ever a *bypass* of the `restrict_to_user_ids`
+  allowlist — and with that option at its default (empty), every endpoint
+  answered an unauthenticated caller. Anyone who followed the documented advice
+  and mapped a host port had `GET /api/export`, `GET /api/backup` (the entire
+  database) and `POST /api/restore` open to whoever could route to it.
+- The rule is now the one the docs described: a request that did not come through
+  Home Assistant's ingress must carry a valid bearer token, **including when no
+  `api_token` is configured** — "no credential is set" cannot mean "no check is
+  needed". Refusals are `401` with a body saying what to set.
+- **Ingress is unchanged.** The web UI, the sidebar panel and `restrict_to_user_ids`
+  all behave exactly as before; the Supervisor has already authenticated the user.
+- **If you use the Add-on Watchdog, copy this add-on's `api_token` into its
+  `api_tokens` option**, or its Records column will go blank. The add-on still
+  reports healthy — a 401 proves something is alive and enforcing — and the
+  watchdog names the fix in its own log. Add-on Watchdog 1.10.3 recognises the
+  401 for this.
+
 ## 1.31.1
 
 - Documentation fixes. A code fence closed on the same line as the sentence that

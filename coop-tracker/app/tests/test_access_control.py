@@ -11,7 +11,6 @@ HEADER = coopapp.INGRESS_USER_ID_HEADER
 def test_unrestricted_by_default(client):
     # No restrict_to_user_ids set -> anyone through ingress may access.
     assert client.get("/api/summary").status_code == 200
-    # ...even with no user header at all (dev/local use).
     assert client.get("/").status_code == 200
 
 
@@ -30,11 +29,12 @@ def test_disallowed_user_blocked(client, set_options):
     assert b"mallory-id" in res.data
 
 
-def test_missing_header_blocked_when_restricted(client, set_options):
-    # A request without the ingress header isn't coming through HA's proxy
-    # and can't be trusted once a restriction is in force.
+def test_missing_header_blocked_when_restricted(direct_client, set_options):
+    # A request without the ingress header isn't coming through HA's proxy, so
+    # it is a published-port request: refused for want of a token (401) rather
+    # than for want of an allowlisted user (403). Either way it does not pass.
     set_options(restrict_to_user_ids="alice-id")
-    assert client.get("/api/summary").status_code == 403
+    assert direct_client.get("/api/summary").status_code == 401
 
 
 def test_restriction_covers_writes_and_reads(client, set_options):
@@ -97,3 +97,49 @@ def test_debug_reports_when_no_token_is_configured(client, set_options):
     data = client.get("/api/debug").get_json()
     assert data["api_token_set"] is False
     assert data["api_token_length"] == 0
+
+
+# --- The published port ------------------------------------------------------
+# The docs have always said api_token "is the only thing protecting the API once
+# you publish the port". Until 1.4x that was false: the token was a *bypass* of
+# the user allowlist, and with the allowlist at its default (empty) every
+# endpoint answered an unauthenticated caller — including the whole-database
+# ones. These four pin the rule that makes the sentence true.
+
+
+def test_published_port_is_refused_without_a_token(direct_client, set_options):
+    """The case that was open: no allowlist, no token configured, no header."""
+    set_options()
+    res = direct_client.get("/api/summary")
+    assert res.status_code == 401
+    assert res.headers["WWW-Authenticate"] == "Bearer"
+    assert "api_token" in res.get_json()["detail"]
+
+
+def test_published_port_is_refused_when_the_token_is_wrong(direct_client, set_options):
+    set_options(api_token="s3cret-token")
+    res = direct_client.get("/api/summary", headers={"Authorization": "Bearer nope"})
+    assert res.status_code == 401
+
+
+def test_published_port_accepts_the_configured_token(direct_client, set_options):
+    set_options(api_token="s3cret-token")
+    res = direct_client.get(
+        "/api/summary", headers={"Authorization": "Bearer s3cret-token"}
+    )
+    assert res.status_code == 200
+
+
+def test_the_bulk_endpoints_are_covered_too(direct_client, set_options):
+    """These are the ones that made the gap worth closing rather than noting:
+    /api/export serialises every row and /api/backup hands over the file."""
+    set_options()
+    for url in ("/api/export", "/api/stats", "/api/backup"):
+        assert direct_client.get(url).status_code == 401, url
+
+
+def test_ingress_still_works_without_any_token(client, set_options):
+    """The flip side: closing the port must not put a credential in front of the
+    UI. An ingress user with no token configured anywhere is unaffected."""
+    set_options()
+    assert client.get("/api/summary").status_code == 200

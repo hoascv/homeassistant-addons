@@ -48,6 +48,23 @@ def set_options(options_path):
 
 @pytest.fixture
 def client(db_path, options_path):
+    """A browser arriving through Home Assistant's ingress proxy.
+
+    The ingress user header is set for every request because that is how the app
+    is actually reached — the published port is the exception, not the norm, and
+    since 1.4x a request without this header and without a bearer token is
+    refused. Tests that mean the published port use `direct_client`.
+    """
+    gymapp.app.testing = True
+    with gymapp.app.test_client() as test_client:
+        test_client.environ_base["HTTP_X_REMOTE_USER_ID"] = "test-ingress-user"
+        yield test_client
+
+
+@pytest.fixture
+def direct_client(db_path, options_path):
+    """A caller on the published port: no ingress header, no session, nothing
+    but whatever it sends itself."""
     gymapp.app.testing = True
     with gymapp.app.test_client() as test_client:
         yield test_client

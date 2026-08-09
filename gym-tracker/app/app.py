@@ -19,7 +19,7 @@ from flask import Flask, Response, g, jsonify, render_template, request, send_fi
 
 import garmin_client
 
-APP_VERSION = "1.31.1"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.32.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("GYM_DB_PATH", "/data/gym.db")
 OPTIONS_PATH = os.environ.get("GYM_OPTIONS_PATH", "/data/options.json")
@@ -137,10 +137,14 @@ def _api_access_summary():
     token = get_api_token()
     if not token:
         return (
-            "API token auth: OFF — no api_token configured, so every bearer "
-            "token is rejected. A data pipeline needs this set."
+            "API token auth: OFF — no api_token configured, so the published "
+            "port (if you mapped one) refuses every request. Ingress is "
+            "unaffected. A data pipeline needs this set."
         )
-    return f"API token auth: ON — api_token is set ({len(token)} characters)"
+    return (
+        f"API token auth: ON — api_token is set ({len(token)} characters). "
+        "The published port accepts it and nothing else."
+    )
 
 
 def _request_has_api_token():
@@ -160,14 +164,49 @@ def _request_has_api_token():
 
 
 @app.before_request
-def _enforce_user_allowlist():
+def _enforce_access():
+    """Two doors into this app, and each needs its own key.
+
+    Through **ingress**, the Supervisor's proxy has already authenticated a Home
+    Assistant user and passes their ID in a header; `restrict_to_user_ids`
+    narrows that further when it is set.
+
+    Through the **published port**, nothing has authenticated anybody. That door
+    is only open if you mapped a host port, and the only credential that exists
+    on it is `api_token` — so a request arriving without one is refused,
+    *including when no token is configured at all*. "No credential is set" was
+    previously read as "no check is needed", which left `/api/backup` (the whole
+    database) and `/api/restore` answering anyone who could route to the port.
+
+    The cost of being strict is small and legible: a caller that needs the port
+    sets a token on both ends, and the refusal says exactly that.
+    """
     if _request_has_api_token():
         return None  # authenticated as the pipeline, not as an ingress user
+
+    user_id = request.headers.get(INGRESS_USER_ID_HEADER)
+    if not user_id:
+        # No ingress header means this did not come through Home Assistant's
+        # proxy, so it arrived on the published port.
+        return Response(
+            json.dumps({
+                "error": "unauthorized",
+                "detail": (
+                    "This port requires a bearer token. Set api_token in the "
+                    "add-on's Configuration tab and send it as "
+                    "'Authorization: Bearer <token>'. Requests through Home "
+                    "Assistant's ingress do not need one."
+                ),
+            }),
+            status=401,
+            mimetype="application/json",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
     allowed = get_allowed_user_ids()
     if not allowed:
         return None  # feature off — any authenticated ingress user may access
-    user_id = request.headers.get(INGRESS_USER_ID_HEADER)
-    if user_id and user_id in allowed:
+    if user_id in allowed:
         return None
     return Response(_access_denied_html(user_id), status=403, mimetype="text/html")
 

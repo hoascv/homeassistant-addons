@@ -65,17 +65,26 @@ Set **api_token** on the Configuration tab and send it as
 `Authorization: Bearer <token>` — a pipeline has no Home Assistant session, so
 this is how it authenticates.
 
-There's no required length or format: any text works, and surrounding spaces are
-ignored. But it is the only thing protecting the API once you publish the port,
-and nothing rate-limits guesses — so make it long and random rather than
-memorable. For example:
+To reach the add-on from outside Home Assistant, publish its port in the add-on's
+Network section. **That port requires the token.** Requests arriving on it
+without a valid bearer token are refused with `401`, including when no
+`api_token` is configured at all — there is nothing else on that port that could
+identify a caller, so "no token set" cannot mean "no check needed". Requests
+through Home Assistant's ingress are unaffected: the Supervisor has already
+authenticated the user, and `restrict_to_user_ids` narrows that further if you
+set it.
+
+So the token really is the only thing standing between the network and
+`/api/export` and `/api/backup`, and nothing rate-limits guesses. There's no
+required length or format — any text works and surrounding spaces are ignored —
+but make it long and random rather than memorable. For example:
 
 ```
 python3 -c "import secrets; print(secrets.token_urlsafe(32))"
 ```
 
-To reach the add-on from outside Home Assistant, publish its port in the add-on's
-Network section.
+The add-on logs which state it is in at startup, so a caller getting `401` can be
+told apart from a caller sending the wrong token without guessing.
 
 - **`GET /api/export`** — every tracked table (collections, chickens, breeds,
   food types, health events, nesting boxes), plus the `max_seq` the snapshot
