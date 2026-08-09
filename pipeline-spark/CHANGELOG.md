@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.6.2
+
+- Documentation fixes. Documented **host port 4040**, the Spark Connect
+  application UI — the one to open when a query is slow, since it shows the
+  running queries, jobs and stages of the session Airflow and the notebooks
+  actually use, while the master UI on 8082 only shows that the application
+  exists. Also documented the **Open Web UI** button.
+- `example_job.py` was described as "used by the Airflow example DAG". It is
+  not: that DAG builds a Spark Connect session and does its work inline, with no
+  `spark-submit` anywhere. The file remains as a `spark-submit` reference.
+- Corrected the opening line: seven add-ons, not four.
+
 ## 1.6.1
 
 - Document the add-on hostname as the metastore address rather than the host

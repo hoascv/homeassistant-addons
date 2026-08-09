@@ -4,8 +4,10 @@ Apache Spark 4.1 running as a **single-node standalone cluster** (a master and o
 worker in the same add-on) for the data-pipeline stack. Airflow submits jobs to it;
 jobs read/write MinIO over `s3a://` and write results to Postgres over JDBC.
 
-Part of a four-add-on data pipeline: **Pipeline Postgres**, **Pipeline MinIO**,
-**Pipeline Spark**, **Pipeline Airflow**. Start order: `postgres → minio → spark → airflow`.
+Part of a seven-add-on data pipeline. Start them in this order:
+`postgres → minio → [metastore] → spark → airflow → notebook`. **Pipeline
+Metastore** and **Pipeline Postgres Replica** are optional — nothing needs them
+until you want table names instead of paths, or a standby.
 
 > **Heavy.** Spark wants real memory — set `worker_memory` to what your host can
 > spare (default 2G). amd64 only; needs Java 17 (bundled in the image).
@@ -14,7 +16,11 @@ Part of a four-add-on data pipeline: **Pipeline Postgres**, **Pipeline MinIO**,
 
 - Starts a Spark **master** (RPC `:7077`, standalone REST submission API `:6066`,
   web UI `:8082` on the host), one **worker** (web UI `:8083`), and a **Spark
-  Connect server** (`sc://…:15002`).
+  Connect server** (`sc://…:15002`) whose application UI is on host port **4040**.
+  4040 is the one to open when a query is slow: it shows the running queries,
+  jobs and stages of the session Airflow and the notebooks are actually using —
+  the master UI at 8082 only shows that the application exists. The add-on page's
+  **Open Web UI** button goes to the master.
 - The Connect server is how Airflow runs jobs: it *is* the driver, so Spark's
   memory and its S3A/Delta configuration stay in this add-on. Airflow holds only
   a gRPC client. Delta's Connect plugins are loaded into it, so `DeltaTable` and
@@ -24,8 +30,9 @@ Part of a four-add-on data pipeline: **Pipeline Postgres**, **Pipeline MinIO**,
   image's Hadoop version) on the first submit via `spark.jars.packages` — so the
   first job needs internet and takes a bit longer while it downloads; later jobs use
   the cached copy in `/data/spark/.ivy2`.
-- Ships an example job at `/opt/pipeline/jobs/example_job.py` (used by the Airflow
-  example DAG).
+- Ships an example job at `/opt/pipeline/jobs/example_job.py`, as a `spark-submit`
+  reference. The Airflow example DAG does not use it — that DAG builds a Spark
+  Connect session and does its work inline, with no `spark-submit` anywhere.
 
 ## Configuration
 
