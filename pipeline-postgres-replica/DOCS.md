@@ -92,5 +92,9 @@ instance is now the primary.
 - There are no init hooks here. A standby's data directory is cloned, never
   initialised, so anything in `docker-entrypoint-initdb.d` would never run.
 - The Add-on Watchdog probes port 5432 in the container and reports this add-on
-  like any other. It does not report replication lag: it deliberately holds no
-  database credentials.
+  like any other, **including replication lag**. The watchdog deliberately holds
+  no database credentials, so it does not query the standby itself: this add-on
+  already has a login, and writes its own state — `lag_seconds` and whether it is
+  still in recovery — to `/share/pipeline-status/pipeline-postgres-replica.json`
+  every 60 seconds. The watchdog reads that file. A standby that was promoted by
+  accident reports `promoted — no longer a standby` rather than reading healthy.

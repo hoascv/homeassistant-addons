@@ -1,5 +1,5 @@
 name: "Pipeline Postgres Replica"
-version: "1.1.0"
+version: "1.1.1"
 slug: "pipeline-postgres-replica"
 description: "A streaming read replica of Pipeline Postgres, for read-only queries and fast promotion"
 url: "https://github.com/hoascv/homeassistant-addons/tree/main/pipeline-postgres-replica"

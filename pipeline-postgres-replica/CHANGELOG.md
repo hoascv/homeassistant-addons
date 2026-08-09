@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.1.1
+
+- Documentation fix: the notes said the Add-on Watchdog "does not report
+  replication lag". It does. The watchdog holds no database credentials, which
+  is exactly why this add-on queries its own standby and writes `lag_seconds`
+  and its recovery state to `/share/pipeline-status/` every 60 seconds for the
+  watchdog to read.
+
 ## 1.1.0
 
 - Reports recovery state and replication lag every minute, to the add-on log and
