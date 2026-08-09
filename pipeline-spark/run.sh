@@ -28,18 +28,26 @@ export SPARK_LOCAL_IP=0.0.0.0
 # it changes only what the web UIs put in links, never what anything binds to
 # or how master, worker and Connect find each other.
 #
-# It cannot be derived here. The browser is on the LAN and this container is on
+# It cannot be derived here: the browser is on the LAN and this container is on
 # the Supervisor's bridge network, so nothing visible from inside is routable
-# from outside; the gateway address (172.30.32.1) reaches this add-on only from
-# a sibling add-on. So it is an option, and left empty the links stay as they
-# were rather than becoming confidently wrong in a new way.
+# from outside, and the gateway address (172.30.32.1) reaches this add-on only
+# from a sibling add-on.
+#
+# The default is the host's mDNS name rather than its IP, deliberately. Home
+# Assistant OS runs avahi and advertises <hostname>.local, which survives a DHCP
+# lease change — an IP written into a config file does not, and would work until
+# the router handed out a different one and then fail in a way that looks like
+# the add-on broke. A name also stays correct across a rebuild.
 PUBLIC_HOST="$(jq -r '.public_host // ""' "$OPTIONS")"
 if [ -n "$PUBLIC_HOST" ]; then
     export SPARK_PUBLIC_DNS="$PUBLIC_HOST"
-    echo "[Pipeline Spark] web UI links will point at ${PUBLIC_HOST}"
+    echo "[Pipeline Spark] web UI links point at ${PUBLIC_HOST} (master UI:" \
+         "http://${PUBLIC_HOST}:8082, worker UI: http://${PUBLIC_HOST}:8083)."
+    echo "[Pipeline Spark] if those do not open, public_host does not match how" \
+         "you reach this machine — set it to your host's name or address."
 else
-    echo "[Pipeline Spark] public_host is unset — the master UI's Workers link" \
-         "will read 0.0.0.0 and not resolve. Set it to this host's address."
+    echo "[Pipeline Spark] public_host is empty — the master UI's Workers link" \
+         "will read 0.0.0.0 and not resolve. Set it to this host's name."
 fi
 
 # Compose spark-defaults: baked packages/REST settings + runtime S3A (MinIO).

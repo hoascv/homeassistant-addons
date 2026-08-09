@@ -33,7 +33,7 @@ options:
   minio_secret_key: "changeme"
   metastore_uris: ""
   metastore_jars: "path"
-  public_host: ""
+  public_host: "homeassistant.local"
 schema:
   worker_memory: "str"
   worker_cores: "int(1,64)"

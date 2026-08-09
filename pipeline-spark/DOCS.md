@@ -40,17 +40,32 @@ until you want table names instead of paths, or a standby.
 
 ## Configuration
 
-- **public_host**: the address you reach this machine on — a LAN IP or hostname,
-  no scheme and no port (e.g. `192.168.1.50` or `homeassistant.local`). Empty by
-  default.
+- **public_host**: how you reach this machine — a name or address, no scheme and
+  no port. Default **`homeassistant.local`**.
 
-  **Set this if you want the master UI's links to work.** Spark advertises
-  whatever it binds to, and it binds to `0.0.0.0` so the published ports reach
-  it — so the master's **Workers** link comes out as `http://0.0.0.0:8081`,
-  which no browser can resolve. `public_host` changes only what the web UIs put
-  in links; nothing rebinds, and master, worker and Connect keep finding each
-  other exactly as before. It cannot be detected from inside the container: your
-  browser is on the LAN and this add-on is on the Supervisor's bridge network.
+  This is what the web UIs put in their links. Spark advertises whatever it
+  binds to, and it binds to `0.0.0.0` so the published ports reach it, so
+  without this the master's **Workers** link comes out as `http://0.0.0.0:8081`
+  and no browser can resolve it. Setting it changes links only — nothing
+  rebinds, and master, worker and Connect keep finding each other exactly as
+  before. It cannot be detected from inside the container: your browser is on
+  the LAN and this add-on is on the Supervisor's bridge network.
+
+  **Use a name, not an IP — especially on DHCP.** Home Assistant OS advertises
+  itself over mDNS as `<hostname>.local`, and that keeps working when your
+  router hands out a different lease. An IP written here works until it changes,
+  and then fails in a way that looks like the add-on broke rather than like the
+  address went stale.
+
+  - Renamed your host? Use `<your-hostname>.local` — the name is under
+    **Settings → System → Network → Hostname**.
+  - mDNS not working on the machine you browse from (some Windows and Android
+    setups, or a VLAN that does not forward multicast)? Give the host a **DHCP
+    reservation** on your router and use that fixed IP, or a name from your own
+    DNS. Any string that resolves from your browser is valid here.
+
+  The startup log prints the two URLs it is advertising, so a wrong value shows
+  up as a link you can compare against the address bar rather than a mystery.
 - **worker_memory** / **worker_cores**: resources for the single worker (e.g. `4G`, 4).
 - **minio_endpoint**: S3 endpoint for `s3a://` access (default
   `http://172.30.32.1:9000`, i.e. the Pipeline MinIO add-on).

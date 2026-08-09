@@ -11,13 +11,18 @@
 - The worker web UI now listens on **8083 inside the container as well as
   outside**, so the port in the link is one the host actually mapped. The master
   stays on 8080 internally because the Add-on Watchdog probes it there.
-- New **public_host** option: the LAN address or hostname you reach this machine
-  on. Setting it makes the web UIs advertise that in their links, via Spark's
-  own `SPARK_PUBLIC_DNS`, which changes links only — nothing rebinds and nothing
-  about how master, worker and Connect find each other changes. It cannot be
-  detected from inside the container, so it is an option rather than a guess,
-  and left empty the links behave as before instead of becoming wrong in a new
-  way. The startup log says which of the two states you are in.
+- New **public_host** option, defaulting to **`homeassistant.local`**: what the
+  web UIs advertise in their links, via Spark's own `SPARK_PUBLIC_DNS`. It
+  changes links only — nothing rebinds, and nothing about how master, worker and
+  Connect find each other changes.
+- The default is the host's mDNS name rather than its IP on purpose. Most
+  installs are on DHCP, and an IP written into a config file works until the
+  router hands out a different lease and then fails in a way that looks like the
+  add-on broke. `<hostname>.local` survives that. If mDNS does not reach the
+  machine you browse from, a DHCP reservation or any name your own DNS resolves
+  works just as well — the option takes any string.
+- The startup log prints the master and worker URLs it is advertising, so a
+  wrong value is something you can compare against the address bar.
 
 ## 1.6.2
 
