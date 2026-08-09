@@ -11,8 +11,9 @@ picking this codebase back up after a while. For user-facing behavior see
 Coop Tracker is a [Home Assistant add-on](https://developers.home-assistant.io/docs/add-ons):
 a small single-purpose web app, packaged as a Docker container, that runs
 alongside Home Assistant and is reached through its **ingress** panel (the
-sidebar) rather than a directly exposed port. One person, one instance,
-logging chicken-coop activity from their phone.
+sidebar). One person, one instance, logging chicken-coop activity from their
+phone — plus, optionally, a data pipeline reading it over a published port
+(§2, §21a).
 
 ## 2. System context
 
@@ -36,15 +37,23 @@ flowchart LR
 
     Phone -- "HTTPS via ingress" --> Supervisor
     Supervisor -- "proxied, already authenticated" --> Flask
+    Pipeline["Data pipeline<br/>(optional, off by default)"]
+    Pipeline -- "published port 8099<br/>Authorization: Bearer api_token" --> Flask
     Flask <--> DB
     Flask -- "reads on every request" --> Opts
     Flask -- "SUPERVISOR_TOKEN bearer auth:<br/>notify service calls,<br/>POST /states/&lt;entity_id&gt;" --> Core
     Core -- "notify.* service call" --> Companion
 ```
 
-Everything the add-on does is inside that one container: it never talks to
-the internet, and it never accepts connections except through the
-Supervisor's ingress proxy.
+Everything the add-on does is inside that one container, and it never makes
+an outbound connection beyond Home Assistant's own Core API.
+
+**There are two ways in, not one.** Ingress is the normal one, and for a
+default install it is the only one: `ports: 8099/tcp: null` in `config.yaml`
+means nothing is published until the owner maps a host port. Mapping one — which
+DOCS.md describes, for feeding a data pipeline — opens a second door that the
+Supervisor never sees and therefore never authenticates. That door is guarded by
+`api_token` alone; §21 covers what that means and what enforces it.
 
 ## 3. Components
 
@@ -52,10 +61,11 @@ Supervisor's ingress proxy.
 |---|---|---|
 | Frontend | Vanilla HTML/CSS/JS, no framework, no build step | `app/templates/index.html`, `app/static/app.js`, `app/static/style.css` |
 | Backend | A single Flask app, one process | `app/app.py` |
-| Data | SQLite, one table | `/data/coop.db` (HA-managed persistent volume) |
+| Data | SQLite: one activity table plus nine supporting ones (§4) | `/data/coop.db` (HA-managed persistent volume) |
 | Config | HA add-on options, schema-validated by Supervisor | `config.yaml` (schema) → `/data/options.json` (values) |
 | Background work | One daemon thread, 60s poll loop | `_background_loop()` in `app.py` |
-| Packaging | Multi-arch Docker image, Alpine + Python base | `Dockerfile`, `build.yaml`, `run.sh` |
+| Packaging | Docker image for `aarch64`/`amd64`, Debian + Python base (§14) | `Dockerfile`, `build.yaml`, `run.sh` |
+| Change feed | SQLite triggers into `change_log`, read by `/api/changes` (§22) | `_install_change_triggers()` in `app.py` |
 | Tests | pytest against a real Flask test client + temp SQLite | `app/tests/`, `pytest.ini` (see §16) |
 
 There is deliberately no service layer, no ORM, no separate frontend
@@ -96,10 +106,11 @@ want to query "all activity" or "one type across time" without joins.
 Six tables would mean six near-identical CRUD paths for a data volume
 (a handful of rows a day) where normalization buys nothing.
 
-There are three further tables, none of which belong in `logs` and none
-of which break the "one table" reasoning above — none of them are logged
-activity, they're reference/roster data the relevant UI reads from and
-writes to, categorically different from an entry type:
+`logs` is the only table the "one polymorphic table" argument is about.
+**Nine further tables** have accumulated around it, and none of them weakens
+that reasoning, because none of them is logged activity — they are reference
+data, roster data, this app's own machinery, or bookkeeping for downstream
+consumers. Categorically different from an entry type:
 
 - `food_types` (id, name), added in v1.16.0 — see §10.
 - `breeds` (id, name, annual_eggs), added in v1.18.0 — see §9.
@@ -113,6 +124,19 @@ writes to, categorically different from an entry type:
   image bytes live in the same SQLite file as everything else, so a
   chicken's photo is included in Backup & Restore (§12) for free, with no
   separate file-storage path to back up or restore in step.
+- `app_state` (key, value) — internal bookkeeping the background loop writes
+  to; deliberately not part of the change feed (§22) because it churns on
+  every tick and means nothing to a consumer.
+- `health_events` (per-chicken health records), added in v1.27.0 — see §18.
+- `nesting_boxes` (the registered boxes a photo can be matched against),
+  added in v1.31.0 — see §20.1.
+- `egg_vision_samples` and `egg_vision_models`, added in v1.31.0 — training
+  photos and the pickled classifiers fitted from them (§20.1). Also outside
+  the change feed: this is the app's own machinery, not data to analyse.
+- `change_log` (seq, table_name, row_id, op, changed_at, actor), added in
+  v1.38.0 — the ordered record of what changed, written by triggers so no
+  write path can forget it. §22 explains why it exists and why `seq` rather
+  than a timestamp.
 
 ## 5. Home Assistant integration
 
@@ -217,11 +241,12 @@ the `hidden` attribute by a small bottom tab bar — no router, no
 history/URL changes, because it's an embedded ingress iframe, not a
 standalone site people navigate to directly.
 
-**Why no framework/bundler:** the entire UI is ~200 lines of HTML, ~500
-lines of JS. A build step would add a toolchain (npm, bundler config, a
-`dist/` the Dockerfile has to know about) for no functional gain at this
-size, and would slow down "edit `app.js`, refresh the ingress panel" to
-"edit, rebuild, refresh."
+**Why no framework/bundler:** the UI is ~600 lines of HTML, ~2,700 of JS and
+~1,100 of CSS. It was a tenth of that when the decision was made, and the
+decision has been re-examined rather than inherited: a build step would add a
+toolchain (npm, bundler config, a `dist/` the Dockerfile has to know about) for
+no functional gain, and would slow down "edit `app.js`, refresh the ingress
+panel" to "edit, rebuild, refresh."
 
 **Why `static/app.js` and `static/style.css` are loaded with a
 `?v={{ app_version }}` query string (v1.16.0):** without a build step
@@ -480,9 +505,10 @@ never uses it.
 **Why the image is resized client-side (a `<canvas>` draw to ~400px,
 re-encoded as JPEG) instead of a server-side library:** the alternative
 is a Python image-processing dependency (e.g. Pillow) added to the Docker
-image just for this one feature, in a project that has otherwise stayed
-dependency-free (`requirements.txt` is just `flask`, see §7's "no
-framework" reasoning) — resizing in the browser before upload achieves
+image just for this one feature, in a project that keeps its base install to
+two packages (`requirements.txt` is `flask` and `waitress` — see §13 for why
+waitress; the heavier `requirements-advanced.txt` is installed separately and
+only where its wheels exist, §19) — resizing in the browser before upload achieves
 the same "don't let a multi-MB phone photo bloat the database" goal with
 no new dependency at all.
 
@@ -867,9 +893,15 @@ everywhere else.
 
 ## 14. Packaging & init
 
-Multi-arch build (`aarch64`, `amd64`, `armhf`, `armv7`, `i386`) against
-Debian-based Python images (`build.yaml`) — `python:3.12-slim-bookworm`
-per architecture.
+Build for **`aarch64` and `amd64`** against Debian-based Python images
+(`build.yaml`) — `python:3.12-slim-bookworm` for both.
+
+`armhf`, `armv7` and `i386` were dropped in v1.42.0: Home Assistant deprecated
+them, and neither `statsmodels` (§19) nor `opencv` (§20) publishes a wheel for
+any of them, so the two largest features were permanently unavailable there. The
+arch tables further down still describe what those platforms *would* have got,
+which is now of historical interest only — the add-on cannot be installed on
+them at all.
 
 **`build_from` values must be fully qualified as `namespace/repo:tag`**
 (here: `docker.io/library/python:3.12-slim-bookworm`), not the bare
@@ -926,6 +958,11 @@ things together, by hand:
    startup log, so a running instance is self-identifying)
 3. A new entry at the top of `CHANGELOG.md`
 
+Steps 1 and 2 drifting apart is silent — the add-on reports one version while
+Home Assistant installs another — so `test_version_matches_config` asserts
+`APP_VERSION` appears in `config.yaml`. It was added in v1.43.1, after exactly
+that drift went unnoticed; Gym Tracker had the guard already.
+
 **Why manual instead of e.g. reading `config.yaml` at runtime to derive
 `APP_VERSION`:** the container doesn't have a YAML parser dependency, and
 `config.yaml` isn't even copied into the image (only `app/` is — see
@@ -979,7 +1016,7 @@ bindings remove). A session fixture launches the real entry point
 `SUPERVISOR_TOKEN` so the background loop exits immediately) and drives it
 in headless Chromium.
 
-**Deliberately smoke-only** (~5 tests: page loads, log an egg end-to-end,
+**Deliberately smoke-only** (6 tests: page loads, log an egg end-to-end,
 history renders, Trends chart draws, My Flock opens): behavioral logic is
 already covered at the backend layer where it's cheap and fast; the e2e
 layer only proves the UI-to-API wiring works in a real browser. Because
@@ -1006,13 +1043,12 @@ stays fast.
   couple millimeters of measurement noise near a boundary can flip the
   suggested size, which is exactly why it's always reviewable/correctable
   before saving, never presented as an authoritative reading.
-- **Egg photo analysis doesn't split touching/overlapping eggs (§20).** A
-  merged blob is excluded from the auto-count rather than guessed at, and
-  only reliably excluded when the overlap is moderate — a heavy overlap
-  can round out into a blob that isn't flagged. Corrected with "+ Add
-  egg"/chip removal, not attempted algorithmically (watershed
-  segmentation would be the real fix, deferred as real complexity for
-  uncertain benefit over the existing manual correction).
+- **Egg photo analysis splits touching eggs, but not reliably at heavy
+  overlap (§20.3).** This was listed here as a deferred fix until v1.32.2,
+  which shipped it: `_split_egg_regions()` separates a merged blob rather than
+  discarding it. What remains is the tail — a heavy overlap can still round out
+  into a shape the split does not recover, and that case falls back to the same
+  manual correction ("+ Add egg" / chip removal) the whole flow is built around.
 
 ## 18. Per-chicken health records (v1.27.0)
 
@@ -1119,9 +1155,19 @@ precedent:
 |---|---|---|
 | amd64 | musllinux + manylinux | works |
 | aarch64 | manylinux only (no musllinux) | works (needs the Debian base — see §14) |
-| armv7 / armhf / i386 | none | reports unavailable via `/api/debug`, never crashes |
+| armv7 / armhf / i386 | none | moot since v1.42.0 — the add-on no longer builds for them (§14) |
 
-## 20. Egg photo analysis (coin-calibrated count & size, v1.30.0)
+## 20. Egg photo analysis (v1.30.0, coin-calibrated — superseded)
+
+> **This section documents the original v1.30.0 design, which no longer ships.**
+> The coin was replaced by nesting-box calibration in v1.31.0 (§20.1), and
+> nothing named here — `egg_vision_coin_diameter_mm`, `COIN_MAX_RADIUS_FRACTION`,
+> the coin-dragging overlay — exists in the code today. It is kept because
+> §§20.1–20.3 are written as changes *to* it, and deleting it would leave those
+> addenda explaining a decision against nothing. **For what actually runs, read
+> §20.1 onward.** The one claim below that has also been reversed outright: it
+> says the photo is never persisted, and since v1.31.0 photos *are* stored in
+> `egg_vision_samples` as training material.
 
 An opt-in (`egg_vision_enabled`, default `false`) addition to the Log Eggs
 sheet: photograph a batch of eggs alongside a coin, and `POST
@@ -1496,9 +1542,11 @@ the training code.
 
 ## 21. Access control (per-user allowlist, v1.34.0)
 
-The add-on is reached only through Home Assistant's authenticated ingress
-proxy, so there's never anonymous or internet-facing access — every
-request already belongs to a logged-in HA user. On top of that,
+There are two ways in (§2), and they are authenticated differently.
+
+**Through ingress** — the normal path, and the only one on a default install —
+Home Assistant's proxy has already authenticated the user, so every request
+already belongs to a logged-in HA account. On top of that,
 `panel_admin: true` (config.yaml — the HA default, made explicit) means
 only admin-group users get the sidebar menu entry. Neither of those,
 though, is a *hard* per-user block: `panel_admin` only hides the menu (a
@@ -1515,7 +1563,7 @@ WebSocket territory the add-on's token can't reach). So the enforceable
 primitive is identity, not role. `restrict_to_user_ids` (a
 comma/space/newline-separated option) is that: `get_allowed_user_ids()`
 parses it, and a Flask `before_request` hook
-(`_enforce_user_allowlist`) blocks any request whose `X-Remote-User-ID`
+(`_enforce_access`) blocks any request whose `X-Remote-User-ID`
 isn't in the set with a 403 page. This is actually *more* precise than an
 admin-role check — the owner names exactly who, not everyone in the admin
 group.
@@ -1535,3 +1583,105 @@ and the 403 page shows a blocked user their ID (so they can ask to be
 added). The check runs per request, consistent with the app's
 already-uncached, read-options-every-request model (§8) — the cost is one
 options-file read, the same the app already does elsewhere.
+
+### 21a. The published port (v1.44.0)
+
+Everything above concerns the ingress door. The published port (§2) is the
+other one, and for four releases it was not guarded at all.
+
+`api_token` was introduced with the change feed (§22) so a pipeline — which has
+no Home Assistant session and so cannot come through ingress — could
+authenticate. It was wired into the same `before_request` hook, but as an
+*early return*: present a valid token and the allowlist is skipped. That reads
+correctly and was wrong, because the allowlist is opt-in and its default is
+empty, and an empty allowlist also returned early:
+
+```python
+if _request_has_api_token(): return None   # the pipeline path
+allowed = get_allowed_user_ids()
+if not allowed: return None                # ...and the default path
+```
+
+Both doors fell through to the same `return None`. So an install that followed
+DOCS.md — set a token, map a host port — was serving `GET /api/export`,
+`GET /api/backup` (the entire SQLite file) and `POST /api/restore` to anything
+that could route to the port, with no credential at all. The token was never a
+gate; it was a bypass of a feature almost nobody enables.
+
+**What fixed it is the discriminator, not the credential.** The hook now asks
+*which door* a request came through before asking who it is: no
+`X-Remote-User-ID` header means the Supervisor's proxy did not put it there,
+which means the published port, which means the only credential that exists is
+the token. So it is required — **including when no `api_token` is configured**.
+That last clause is the whole fix. "No credential is set" reading as "no check
+is needed" is exactly what produced the hole, and leaving it would reopen the
+hole for precisely the installs least equipped to notice.
+
+The refusal is `401` with a JSON body naming the option to set, and
+`WWW-Authenticate: Bearer`. Ingress is untouched: the UI, the sidebar panel and
+the allowlist behave as before.
+
+**Why not source-IP checks or a separate listener.** `ingress_port` and the
+published port are the same 8099 — one waitress listener — so there is no
+socket-level distinction to key on, and a container's peer address does not
+reliably separate the Supervisor's proxy from a sibling add-on. The header is
+what the platform actually gives, and the allowlist has depended on it since
+v1.34.0, so its reliability is not a new assumption.
+
+**What it costs.** The Add-on Watchdog reads `/api/stats` over the container
+port and now gets 401 until its `api_tokens` option carries this add-on's token.
+That is the intended shape of the change — a reader of the data proves it may
+read it — and the watchdog reports the add-on healthy regardless, because a 401
+still answers the question "is something alive and enforcing".
+
+## 22. Change data capture (v1.38.0)
+
+An external pipeline (the Pipeline Airflow add-on, in practice) needs to know
+what changed since it last looked, without re-reading the database each time.
+`change_log` is that record, and the design turns on three choices.
+
+**Triggers, not application code.** `_install_change_triggers()` creates
+`AFTER INSERT / UPDATE / DELETE` triggers on every table in `TRACKED_TABLES`.
+Writing to `change_log` from each route would mean every future write path
+remembering to — and `app.py` has many, added over dozens of releases by
+someone who will not be thinking about a pipeline at the time. A trigger cannot
+be forgotten, and it also catches writes that never go through a route at all,
+including `/api/restore`.
+
+**`seq`, not a timestamp, is the watermark.** An `INTEGER PRIMARY KEY
+AUTOINCREMENT` is monotonic and has none of a clock's ambiguity — no ties, no
+DST, no rows arriving under a timestamp a consumer already passed. It also
+records deletes, which a `last_modified` column structurally cannot: the row it
+would have been on is gone.
+
+**What is deliberately outside it.** `TRACKED_TABLES` covers `logs`,
+`chickens`, `breeds`, `food_types`, `health_events` and `nesting_boxes` — the
+six a consumer would want to analyse. `app_state` is excluded because it churns
+on every background tick and means nothing downstream. `egg_vision_samples` and
+`egg_vision_models` are excluded because they are this app's own machinery:
+training photos and pickled classifiers, not observations about chickens.
+`BLOB_COLUMNS` (`chickens.photo`) is carried in the schema but omitted from the
+feed payload — a change event should stay small, and a consumer that wants the
+image can ask for it.
+
+**Retention.** `CHANGE_LOG_KEEP_DAYS = 90`, pruned on the same background loop
+as everything else. The feed is a catch-up mechanism, not an archive: a
+consumer more than 90 days behind has to bootstrap from `/api/export` anyway,
+which is the case `/api/changes` reports rather than silently serving a gap.
+
+### 22a. The data endpoints
+
+Four reads and one write, all subject to §21 and §21a:
+
+| Endpoint | What it is for |
+|---|---|
+| `GET /api/export` | Full snapshot of every tracked table, plus the `max_seq` it corresponds to — the bootstrap, and the thing to fall back to after a gap |
+| `GET /api/changes?since=<seq>` | Everything after that watermark, paged. The steady state |
+| `GET /api/stats` | Row counts and database size, and the same `max_seq`, **without serialising a single row** — so a monitor (the Add-on Watchdog) can ask "how much data is there" without the cost of asking for the data. `counts` is the tracked tables, `other_counts` the rest |
+| `GET /api/export.csv` | The activity feed as a spreadsheet, for a human rather than a pipeline |
+| `POST /api/restore` | The counterpart to `GET /api/backup` (§12) |
+
+The split between `/api/stats` and `/api/export` is the one worth noting: they
+answer the same question at two very different costs, and having only the
+expensive one would have meant the watchdog re-serialising the database every
+minute to display a number.

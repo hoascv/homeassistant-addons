@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.44.1
+
+- ARCHITECTURE.md brought back in line with the code. It had drifted far enough
+  to mislead: "SQLite, one table" against ten, a five-architecture build against
+  two, an Alpine base that became Debian in 1.29.0, "never accepts connections
+  except through ingress" against a documented published port, a deferred
+  watershed fix that shipped in 1.32.2, and UI line counts off by 5x.
+- §20 described the coin-calibrated egg analysis in the present tense. That
+  version never shipped as described — the coin was replaced in 1.31.0 — and the
+  section now says so at the top rather than 80 lines in. It also claimed photos
+  are never persisted, which 1.31.0 reversed.
+- Two things the document had never covered at all, though the pipeline depends
+  on both: the change feed (§22 — why triggers rather than write paths, why seq
+  rather than a timestamp, what is deliberately excluded and why) and the data
+  endpoints (§22a). §21a records the published-port hole closed in 1.44.0,
+  including the two-line reason it existed.
+
 ## 1.44.0
 
 - **`api_token` now actually protects the published port.** It never did. The
