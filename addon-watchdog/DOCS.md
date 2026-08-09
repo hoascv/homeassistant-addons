@@ -71,12 +71,17 @@ Counts require Gym Tracker 1.29.0 / Coop Tracker 1.41.0 or later. An older one
 returns 404 and simply shows no number; health is judged by the probe, never by
 this.
 
-### If an add-on sets `restrict_to_user_ids`
+### The trackers need their token
 
-That setting refuses any caller without a matching ingress-user header, and the
-watchdog is not a browser session — so it gets **HTTP 403** and the Records
-column stays blank. The add-on still reads `ok`, because a 403 does prove
-something is alive and enforcing, and the probe detail says what to do.
+From **Gym Tracker 1.32.0 / Coop Tracker 1.44.0**, those add-ons refuse any
+request that did not arrive through Home Assistant's ingress unless it carries
+their `api_token`. The watchdog is not a browser session, so it gets **HTTP 401**
+and the Records column stays blank until you give it the token below. Health is
+unaffected — the add-on still reads `ok`, because a 401 proves something is alive
+and enforcing, and the probe detail says what to do.
+
+`restrict_to_user_ids` behaves the same way, with **403** instead of 401: it
+refuses any caller without a matching ingress-user header.
 
 The documented way past it is that add-on's own `api_token`. Copy it into
 `api_tokens`:
@@ -91,8 +96,7 @@ api_tokens:
 
 `slug` is the short slug as it appears in this repository — `gym-tracker`, not
 `6753e04e_gym_tracker`. The token is sent as `Authorization: Bearer …` on both
-the probe and the stats call. Leave the list empty if no add-on restricts
-access; nothing else needs it.
+the probe and the stats call. Nothing else in this repository needs an entry.
 
 ## What a probe cannot ask
 
@@ -333,7 +337,7 @@ info, Supervisor stats, record counts, and sensor pushes each reported
 separately, named by add-on:
 
 ```
-could not retrieve gym-tracker record counts: HTTP 403 (needs this add-on's api_token in api_tokens)
+could not retrieve gym-tracker record counts: HTTP 401 (needs this add-on's api_token in api_tokens)
 could not retrieve pipeline-spark supervisor stats: HTTP 502: bad gateway
 recovered: gym-tracker record counts
 ```

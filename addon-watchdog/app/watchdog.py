@@ -201,10 +201,11 @@ def fetch_stats(slug, host, timeout, token=None):
     """Row counts from an add-on that publishes them, as (data, error).
 
     Deliberately forgiving about the outcome — a tracker older than the release
-    that added /api/stats returns 404, and one with restrict_to_user_ids set
-    answers 403 without a token, and neither makes the add-on unhealthy — but
-    the reason is returned rather than swallowed. An empty Records column with
-    no explanation anywhere is the thing to avoid.
+    that added /api/stats returns 404; a current one answers 401 without a token
+    (its published port requires one); one with restrict_to_user_ids set answers
+    403. None of those makes the add-on unhealthy, but the reason is returned
+    rather than swallowed. An empty Records column with no explanation anywhere
+    is the thing to avoid.
     """
     spec = STATS_PATHS.get(slug)
     if spec is None or not host:
@@ -216,6 +217,7 @@ def fetch_stats(slug, host, timeout, token=None):
             body = json.loads(resp.read(1 << 20) or b"{}")
     except urllib.error.HTTPError as exc:
         hint = {
+            401: " (needs this add-on's api_token in api_tokens)",
             403: " (needs this add-on's api_token in api_tokens)",
             404: " (add-on predates /api/stats)",
         }.get(exc.code, "")
@@ -551,16 +553,17 @@ def collect(timeout=5, ignore_stopped=True, now=None, tokens=None):
         report, report_err = read_report(slug, now) if state == "started" else (None, None)
         status = derive_status(state, probe_result, report)
 
-        # A 403 from an add-on that publishes counts means restrict_to_user_ids
-        # is on and no token was configured. It is still alive — that is what
-        # the probe asked — but the empty Records column would otherwise be a
-        # mystery, so the detail says what to do about it.
+        # A 401 or 403 from an add-on that publishes counts means it wants a
+        # credential this watchdog was not given: 401 because its published port
+        # requires api_token, 403 because restrict_to_user_ids is on. It is still
+        # alive — that is what the probe asked — but the empty Records column
+        # would otherwise be a mystery, so the detail says what to do about it.
         if (
             probe_result is not None
             and probe_result.ok
             and not token
             and slug in STATS_PATHS
-            and "403" in (probe_result.detail or "")
+            and any(code in (probe_result.detail or "") for code in ("401", "403"))
         ):
             probe_result = ProbeResult(
                 True, f"{probe_result.detail} — set this add-on's api_token to read records"

@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.10.3
+
+- Keeps up with Gym Tracker 1.32.0 / Coop Tracker 1.44.0, which now refuse any
+  request that did not arrive through ingress unless it carries their
+  `api_token`. The watchdog meets **401** where it used to meet 200, so the
+  "needs this add-on's api_token in `api_tokens`" hint — previously attached to
+  403 alone — now fires for 401 too. Without this the Records column would go
+  blank with no explanation, which is the exact failure that hint exists to
+  prevent.
+- Health is unaffected: a 401 still proves something is alive and enforcing.
+
 ## 1.10.2
 
 - Documentation fixes. **`ignore_stopped` was described backwards**: the default

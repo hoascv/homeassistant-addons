@@ -302,6 +302,28 @@ def test_a_403_without_a_token_says_what_to_do(monkeypatch):
     assert "api_token" in row["probe_detail"]
 
 
+def test_a_401_without_a_token_says_the_same_thing(monkeypatch):
+    """From Gym Tracker 1.32.0 / Coop Tracker 1.44.0 the trackers refuse any
+    request that did not come through ingress unless it carries their api_token,
+    so the watchdog now meets 401 where it used to meet 200. Same situation, same
+    fix, and the hint has to fire for it or the blank column is a mystery again."""
+    monkeypatch.setattr(
+        watchdog, "supervisor_addons",
+        lambda: ([{"slug": "x_gym_tracker", "name": "Gym Tracker", "state": "started"}], None),
+    )
+    monkeypatch.setattr(
+        watchdog, "supervisor_addon_info",
+        lambda slug: ({"state": "started", "hostname": "x-gym-tracker"}, None),
+    )
+    monkeypatch.setattr(watchdog, "supervisor_addon_stats", lambda slug: ({}, None))
+    monkeypatch.setattr(watchdog, "run_probe", lambda *a: ProbeResult(True, "HTTP 401"))
+    monkeypatch.setattr(watchdog, "fetch_stats", lambda *a: (None, "HTTP 401"))
+
+    row = next(r for r in watchdog.collect()["addons"] if r["slug"] == "gym-tracker")
+    assert row["status"] == "ok", "a 401 still means something is answering"
+    assert "api_token" in row["probe_detail"]
+
+
 def test_the_hint_is_dropped_once_a_token_is_configured(monkeypatch):
     monkeypatch.setattr(
         watchdog, "supervisor_addons",
