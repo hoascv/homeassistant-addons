@@ -52,8 +52,17 @@ def test_my_flock_opens_with_seeded_breeds(page, app_server):
     expect(page.locator("#breed-list")).to_contain_text("Isabrown")
 
 
-def test_log_egg_via_photo_smoke(page, app_server, app_server_options_path):
-    debug = json.loads(urllib.request.urlopen(f"{app_server}/api/debug").read())
+def test_log_egg_via_photo_smoke(
+    page, app_server, app_server_options_path, ingress_headers
+):
+    # These two calls bypass the browser, so they do not inherit the context's
+    # ingress header and have to carry it themselves — without it the app
+    # answers 401, exactly as it would to anything off the published port.
+    debug = json.loads(
+        urllib.request.urlopen(
+            urllib.request.Request(f"{app_server}/api/debug", headers=ingress_headers)
+        ).read()
+    )
     if not debug["opencv_available"] or not debug["sklearn_available"]:
         pytest.skip("opencv/sklearn not installed in this environment")
 
@@ -67,7 +76,7 @@ def test_log_egg_via_photo_smoke(page, app_server, app_server_options_path):
     req = urllib.request.Request(
         f"{app_server}/api/nesting-boxes",
         data=json.dumps({"name": "Smoke Test Box", "width_mm": 320}).encode(),
-        headers={"Content-Type": "application/json"},
+        headers={"Content-Type": "application/json", **ingress_headers},
     )
     urllib.request.urlopen(req)
 

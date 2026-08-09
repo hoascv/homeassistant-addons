@@ -87,6 +87,13 @@ def app_server(_app_server_data_dir):
     proc.wait(timeout=10)
 
 
+@pytest.fixture
+def ingress_headers():
+    """For calls that bypass the browser and so do not inherit the context's
+    headers — a direct urllib request still has to look like ingress."""
+    return dict(INGRESS_HEADERS)
+
+
 @pytest.fixture(scope="session")
 def browser_context_args(browser_context_args):
     """Make the browser look like an ingress caller.
