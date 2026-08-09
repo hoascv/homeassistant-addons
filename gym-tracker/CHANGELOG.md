@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.31.1
+
+- Documentation fixes. A code fence closed on the same line as the sentence that
+  followed it, so that sentence rendered inside the code block.
+- The dumbbell preset is "floor press", not "floor bench press".
+
 ## 1.31.0
 
 - `/api/stats` now counts **every** table, not only the tracked ones, split into

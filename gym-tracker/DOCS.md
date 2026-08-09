@@ -97,7 +97,7 @@ The 🏋️ button opens your **Library**, with two tabs:
 - **Exercises** — home exercises grouped by the equipment they need:
   - **Bodyweight** — push-up, squat, lunge, plank, glute bridge, and more.
   - **Pull-up bar** — pull-up, chin-up, hanging knee raise.
-  - **Dumbbells** — curl, shoulder press, floor bench press, row, goblet
+  - **Dumbbells** — curl, shoulder press, floor press, row, goblet
     squat, Romanian deadlift, lateral raise.
 - **Supplements** — things you take, each with a **dosage** (amount +
   unit, e.g. 500 mg), a **quantity per serving** (e.g. 2 capsules), an
@@ -376,8 +376,10 @@ memorable. For example:
 
 ```
 python3 -c "import secrets; print(secrets.token_urlsafe(32))"
-``` To reach the add-on from outside Home Assistant,
-publish its port in the add-on's Network section.
+```
+
+To reach the add-on from outside Home Assistant, publish its port in the add-on's
+Network section.
 
 - **`GET /api/export`** — every tracked table, plus the `max_seq` the snapshot
   corresponds to. Start here.
