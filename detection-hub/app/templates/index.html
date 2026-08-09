@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Detection Hub</title>
+  <style>
+    :root { color-scheme: dark; }
+    body { font-family: system-ui, -apple-system, sans-serif; background: #14161a;
+           color: #e8eaed; margin: 0; padding: 1.5rem; line-height: 1.5; }
+    .wrap { max-width: 52rem; margin: 0 auto; }
+    h1 { font-size: 1.4rem; margin: 0 0 .25rem; }
+    .version { color: #9aa0a6; font-size: .85rem; margin-bottom: 1.5rem; }
+    .card { background: #1e2126; border: 1px solid #2c3037; border-radius: 10px;
+            padding: 1rem 1.25rem; margin-bottom: 1rem; }
+    .card h2 { font-size: .95rem; margin: 0 0 .75rem; color: #9aa0a6;
+               text-transform: uppercase; letter-spacing: .04em; }
+    .ok { color: #6ddb8c; } .bad { color: #f2777a; }
+    dl { display: grid; grid-template-columns: auto 1fr; gap: .35rem 1rem; margin: 0; }
+    dt { color: #9aa0a6; } dd { margin: 0; font-variant-numeric: tabular-nums; }
+    code { background: #14161a; padding: .1rem .35rem; border-radius: 4px;
+           font-size: .9em; word-break: break-all; }
+    .labels { display: flex; flex-wrap: wrap; gap: .35rem; }
+    .chip { background: #2a2f37; border-radius: 999px; padding: .15rem .6rem;
+            font-size: .85rem; }
+    .drop { border: 2px dashed #3a4049; border-radius: 10px; padding: 2rem 1rem;
+            text-align: center; color: #9aa0a6; cursor: pointer; }
+    .drop:hover, .drop.over { border-color: #6ddb8c; color: #e8eaed; }
+    #preview { max-width: 100%; border-radius: 8px; margin-top: 1rem; display: none; }
+    pre { background: #14161a; padding: .75rem; border-radius: 8px; overflow-x: auto;
+          font-size: .85rem; }
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <h1>👁 Detection Hub</h1>
+  <div class="version">{{ app_version }}</div>
+
+  <div class="card">
+    <h2>Detector</h2>
+    {% if status.error %}
+      <p class="bad">Unavailable — {{ status.error }}</p>
+    {% else %}
+      <p class="ok">Ready</p>
+    {% endif %}
+    <dl>
+      <dt>Model</dt><dd><code>{{ status.model_path }}</code></dd>
+      <dt>Input</dt><dd>{{ status.input_size }}&times;{{ status.input_size }}</dd>
+      <dt>Confidence</dt><dd>{{ confidence }}</dd>
+      {% if status.last_latency_ms %}
+      <dt>Last inference</dt><dd>{{ status.last_latency_ms }} ms</dd>
+      {% endif %}
+    </dl>
+  </div>
+
+  <div class="card">
+    <h2>Reporting {{ 'these labels' if label_filter_active else 'all classes' }}</h2>
+    <div class="labels">
+      {% for label in labels %}<span class="chip">{{ label }}</span>{% endfor %}
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Try it</h2>
+    <div class="drop" id="drop">
+      Drop an image here, or click to choose one
+      <input type="file" id="file" accept="image/*" hidden>
+    </div>
+    <img id="preview" alt="annotated result">
+    <pre id="out" hidden></pre>
+  </div>
+</div>
+
+<script>
+// Relative URL: the page is served under an ingress path that changes per
+// install, so anything absolute breaks the moment it is not at the root.
+const drop = document.getElementById('drop');
+const file = document.getElementById('file');
+const out = document.getElementById('out');
+const preview = document.getElementById('preview');
+
+drop.addEventListener('click', () => file.click());
+drop.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('over'); });
+drop.addEventListener('dragleave', () => drop.classList.remove('over'));
+drop.addEventListener('drop', e => {
+  e.preventDefault(); drop.classList.remove('over');
+  if (e.dataTransfer.files.length) send(e.dataTransfer.files[0]);
+});
+file.addEventListener('change', () => { if (file.files.length) send(file.files[0]); });
+
+async function send(image) {
+  out.hidden = false;
+  out.textContent = 'detecting…';
+  const body = new FormData();
+  body.append('image', image);
+  let data;
+  try {
+    const res = await fetch('api/detect', { method: 'POST', body });
+    data = await res.json();
+  } catch (err) {
+    out.textContent = 'request failed: ' + err;
+    return;
+  }
+  if (data.error) { out.textContent = data.error; return; }
+  out.textContent = data.count + ' detected in ' + (data.latency_ms ?? '?') + ' ms\n'
+    + data.detections.map(d => `  ${d.label}  ${d.confidence}  [${d.box}]`).join('\n');
+  draw(image, data.detections);
+}
+
+function draw(imageFile, detections) {
+  const img = new Image();
+  img.onload = () => {
+    const canvas = document.createElement('canvas');
+    canvas.width = img.width; canvas.height = img.height;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(img, 0, 0);
+    ctx.lineWidth = Math.max(2, img.width / 400);
+    ctx.strokeStyle = '#6ddb8c';
+    ctx.fillStyle = '#6ddb8c';
+    ctx.font = `${Math.max(12, img.width / 45)}px system-ui, sans-serif`;
+    for (const d of detections) {
+      const [x, y, w, h] = d.box;
+      ctx.strokeRect(x, y, w, h);
+      ctx.fillText(`${d.label} ${d.confidence}`, x, Math.max(12, y - 4));
+    }
+    preview.src = canvas.toDataURL('image/jpeg', 0.85);
+    preview.style.display = 'block';
+    URL.revokeObjectURL(img.src);
+  };
+  img.src = URL.createObjectURL(imageFile);
+}
+</script>
+</body>
+</html>

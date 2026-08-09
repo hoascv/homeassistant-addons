@@ -1,0 +1,46 @@
+name: "Detection Hub"
+version: "1.0.0"
+slug: "detection-hub"
+description: "Object detection for Home Assistant — an image in, what's in it out"
+url: "https://github.com/hoascv/homeassistant-addons/tree/main/detection-hub"
+# amd64 only. The CPU budget assumes it, and while opencv does publish aarch64
+# wheels, a Pi-class board cannot carry continuous detection — offering it there
+# would be offering something that does not work.
+arch:
+  - amd64
+startup: application
+boot: auto
+init: false
+ingress: true
+ingress_port: 8099
+panel_icon: mdi:cctv
+panel_title: "Detection Hub"
+# Only Home Assistant admin-group users get the sidebar entry. This is the
+# default, set explicitly to document intent — see restrict_to_user_ids for a
+# hard per-user block.
+panel_admin: true
+# Not published unless you set a port. Only needed to let something outside Home
+# Assistant — a data pipeline, or another add-on posting images — reach the API.
+ports:
+  8099/tcp: null
+ports_description:
+  8099/tcp: "Direct API access for a pipeline or another add-on (requires api_token)"
+homeassistant_api: true
+options:
+  api_token: ""
+  restrict_to_user_ids: ""
+  # 0.6, not lower: at 0.35 a dark post in the test frame scored 0.50 as a
+  # person. A false alert at 3am costs more than a miss the next frame catches.
+  confidence: 0.6
+  # Empty means all 80 COCO classes. A camera almost always wants a handful —
+  # the rest are noise that bury the ones you automate on.
+  labels: "person, car, truck, bicycle, motorcycle, dog, cat, bird"
+  # Empty uses the bundled YOLOX-Nano. Point at another ONNX to swap models;
+  # it must be a YOLOX export at the same input size.
+  model_path: ""
+schema:
+  api_token: "str?"
+  restrict_to_user_ids: "str?"
+  confidence: "float(0.05,0.99)"
+  labels: "str?"
+  model_path: "str?"
