@@ -161,6 +161,12 @@ assuming: no `O_DIRECT` says the figures include the page cache; no
 `/proc/diskstats` leaves the device columns at zero and says `device: unknown`;
 busybox whole-second timing announces itself.
 
+**Point `--dir` at disk-backed storage.** A path on tmpfs or a container overlay
+has no row in `/proc/diskstats`, so the device columns come back empty and only
+the workload timings are real — the script says which of the two happened. On
+Home Assistant OS the data disk is under `/mnt/data`; inside an add-on, `/data`
+and `/share` are on it.
+
 Use the **same `--size` and `--commits`** on every machine, or the comparison is
 meaningless. And check the `cache:` line in each run — a host without `O_DIRECT`
 will look far faster than it is.

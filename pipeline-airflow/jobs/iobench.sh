@@ -110,7 +110,10 @@ fi
 # --- device counters ----------------------------------------------------------
 
 DEVICE=""
-if [ -r "$DISKSTATS" ]; then
+DEVICE_NOTE=""
+if [ ! -r "$DISKSTATS" ]; then
+    DEVICE_NOTE="$DISKSTATS not readable here — workload timings only"
+else
     # df gives the filesystem source (/dev/sda1); diskstats is keyed by kernel
     # device name. Try the exact name, then strip a trailing partition number
     # (sda1 -> sda, nvme0n1p2 -> nvme0n1), which is where the stats usually live.
@@ -121,6 +124,12 @@ if [ -r "$DISKSTATS" ]; then
             DEVICE="$cand"; break
         fi
     done
+    # These are two different failures and they were reported as one. A path on
+    # tmpfs or an overlay has no backing device in diskstats at all, so the fix
+    # is to point --dir at real storage — quite different from procfs being
+    # masked, where no --dir would help.
+    [ -n "$DEVICE" ] || DEVICE_NOTE="'${SRC:-unknown}' has no row in $DISKSTATS \
+(tmpfs or overlay?) — point --dir at disk-backed storage for device metrics"
 fi
 
 # Fields 4,6,7,8,10,11,13 after major/minor/name: reads, read sectors, read ms,
@@ -185,7 +194,7 @@ mixed() {
 }
 
 echo "iobench: $DIR  (${SIZE_MB}MB bulk, ${COMMITS} x ${BLOCK} commits)"
-echo "device: ${DEVICE:-unknown — /proc/diskstats unavailable, workload timings only}"
+echo "device: ${DEVICE:-none — $DEVICE_NOTE}"
 echo "cache:  $CACHE_NOTE"
 echo "timer:  $TIMER"
 echo
@@ -200,7 +209,8 @@ run_phase mixed  "$MIXED_MB"  mixed
 
 # --- report -------------------------------------------------------------------
 
-echo "$RESULTS" | awk -v size_mb="$SIZE_MB" -v commits="$COMMITS" -v json="$JSON" '
+echo "$RESULTS" | awk -v size_mb="$SIZE_MB" -v commits="$COMMITS" -v json="$JSON" \
+    -v have_dev="${DEVICE:+1}" '
 BEGIN {
     FS = "|"
     printf "%-8s %8s %9s %8s %10s %10s %11s\n", \
@@ -235,8 +245,13 @@ NF >= 17 {
     rwait = d_reads  > 0 ? d_rms / d_reads  : 0
     wwait = d_writes > 0 ? d_wms / d_writes : 0
 
-    printf "%-8s %8.1f %9.1f %8.1f %10.0f %8.1fms %9.1fms\n", \
-           name, secs, mb_s, util, iops, rwait, wwait
+    if (have_dev == "") {
+        printf "%-8s %8.1f %9.1f %8s %10s %10s %11s\n", \
+               name, secs, mb_s, "-", "-", "-", "-"
+    } else {
+        printf "%-8s %8.1f %9.1f %8.1f %10.0f %8.1fms %9.1fms\n", \
+               name, secs, mb_s, util, iops, rwait, wwait
+    }
 
     if (json != "") {
         if (!first) printf "," >> json

@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.10.2
+
+- `iobench.sh` told two different failures apart. "device: unknown —
+  /proc/diskstats unavailable" was printed both when procfs really was masked
+  *and* when the path simply had no backing device in it — a `--dir` on tmpfs or
+  an overlay. Those need opposite responses: the first cannot be fixed by any
+  `--dir`, the second is fixed by pointing at disk-backed storage, and the
+  message now names which it is.
+- Device columns print `-` rather than `0.0` when there is no device. Zero read
+  as a measurement — "the disk did nothing" — when it meant "not measured".
+
 ## 2.10.1
 
 - Fix `iobench.sh` refusing to run on any LVM system. `df` wraps onto a second
