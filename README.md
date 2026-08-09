@@ -12,7 +12,9 @@ Personal Home Assistant add-on repository.
   Assistant notify service.
 - **[Add-on Watchdog](addon-watchdog/DOCS.md)** — whether the add-ons here are
   actually working, not merely running: a status page plus a sensor per add-on,
-  with a probe that catches a live container around a dead service.
+  with a probe that catches a live container around a dead service. It also
+  records device I/O continuously, so a slow window can be evidenced after the
+  fact — see [Is the storage the limit?](STORAGE-IO.md).
 
 ### Data pipeline (amd64 only)
 
