@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.32.3
+
+- Dropped `build.yaml` and named the base image directly in the `Dockerfile`.
+  Supervisor 2026.04.0 stopped passing `BUILD_FROM` and now warns the file is
+  deprecated — and an ARG that never arrives makes `FROM $BUILD_FROM` an *empty*
+  base, so the next rebuild of this add-on would have failed. The file named the
+  same `python:3.12-slim-bookworm` for both architectures, which one multi-arch
+  tag already does.
+
 ## 1.32.2
 
 - **Editing a challenge item's reps no longer wipes its sets.** The inline

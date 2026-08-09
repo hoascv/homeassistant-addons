@@ -64,7 +64,7 @@ Supervisor never sees and therefore never authenticates. That door is guarded by
 | Data | SQLite: one activity table plus nine supporting ones (§4) | `/data/coop.db` (HA-managed persistent volume) |
 | Config | HA add-on options, schema-validated by Supervisor | `config.yaml` (schema) → `/data/options.json` (values) |
 | Background work | One daemon thread, 60s poll loop | `_background_loop()` in `app.py` |
-| Packaging | Docker image for `aarch64`/`amd64`, Debian + Python base (§14) | `Dockerfile`, `build.yaml`, `run.sh` |
+| Packaging | Docker image for `aarch64`/`amd64`, Debian + Python base (§14) | `Dockerfile`, `run.sh` |
 | Change feed | SQLite triggers into `change_log`, read by `/api/changes` (§22) | `_install_change_triggers()` in `app.py` |
 | Tests | pytest against a real Flask test client + temp SQLite | `app/tests/`, `pytest.ini` (see §16) |
 
@@ -893,8 +893,17 @@ everywhere else.
 
 ## 14. Packaging & init
 
-Build for **`aarch64` and `amd64`** against Debian-based Python images
-(`build.yaml`) — `python:3.12-slim-bookworm` for both.
+Build for **`aarch64` and `amd64`** against `python:3.12-slim-bookworm`, named
+directly in the `Dockerfile`.
+
+**`build.yaml` is gone as of v1.44.2.** Supervisor 2026.04.0 stopped passing
+`BUILD_FROM` and now warns that the file is deprecated — and an ARG that is
+never passed makes `FROM $BUILD_FROM` an *empty* base image, so this was a build
+failure waiting for the next rebuild rather than a warning to get to eventually.
+The file was naming the same image for both architectures anyway, which one
+multi-arch tag does by itself. The long story below is what that file used to
+cost, and is kept because the failure mode it describes — Supervisor silently
+substituting a default base — is the kind of thing that comes back.
 
 `armhf`, `armv7` and `i386` were dropped in v1.42.0: Home Assistant deprecated
 them, and neither `statsmodels` (§19) nor `opencv` (§20) publishes a wheel for

@@ -65,7 +65,7 @@ except ImportError as e:
     SKLEARN_AVAILABLE = False
     SKLEARN_ERROR = str(e)
 
-APP_VERSION = "1.44.1"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.44.2"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("COOP_DB_PATH", "/data/coop.db")
 OPTIONS_PATH = os.environ.get("COOP_OPTIONS_PATH", "/data/options.json")
