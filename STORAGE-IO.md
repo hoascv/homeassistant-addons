@@ -43,12 +43,16 @@ short stalls worth finding.
 
 Each minute the window closes and publishes both the **mean and the peak**:
 
-| Sensor | Meaning |
+The **state is the peak** of that window and the mean rides along as an
+attribute — that way a ten-second stall inside an otherwise quiet minute is still
+the number you see:
+
+| Sensor | State (peak over the minute) |
 |---|---|
-| `sensor.addon_watchdog_disk_util` | % of time the device had a request in flight |
-| `sensor.addon_watchdog_disk_write_latency_ms` | average ms per write |
-| `sensor.addon_watchdog_disk_read_latency_ms` | average ms per read |
-| `sensor.addon_watchdog_disk_iops` | operations per second |
+| `sensor.addon_watchdog_disk_util` | highest % of time the device had a request in flight |
+| `sensor.addon_watchdog_disk_write_latency_ms` | highest average ms per write |
+| `sensor.addon_watchdog_disk_read_latency_ms` | highest average ms per read |
+| `sensor.addon_watchdog_disk_iops` | highest operations per second |
 
 They carry `state_class: measurement`, which is what makes Home Assistant's
 recorder keep long-term statistics rather than only recent states. That is the
@@ -158,8 +162,8 @@ ssh user@other 'sh /tmp/iobench.sh --dir /var/tmp --size 256 --json /tmp/r.json'
 Verified to give identical results under **dash** (Debian/Ubuntu `/bin/sh`),
 **ksh** and **bash**. Where systems differ it detects and reports rather than
 assuming: no `O_DIRECT` says the figures include the page cache; no
-`/proc/diskstats` leaves the device columns at zero and says `device: unknown`;
-busybox whole-second timing announces itself.
+`/proc/diskstats` leaves the device columns blank and prints `device: none`
+followed by the reason; busybox whole-second timing announces itself.
 
 **Point `--dir` at disk-backed storage.** A path on tmpfs or a container overlay
 has no row in `/proc/diskstats`, so the device columns come back empty and only
@@ -171,7 +175,7 @@ Use the **same `--size` and `--commits`** on every machine, or the comparison is
 meaningless. And check the `cache:` line in each run — a host without `O_DIRECT`
 will look far faster than it is.
 
-`notebooks/simulate_io.ipynb` drives it, saves runs by label, and compares a
+`pipeline-airflow/notebooks/simulate_io.ipynb` drives it, saves runs by label, and compares a
 quiet baseline against one taken during the slow window.
 
 ---
@@ -200,8 +204,8 @@ So a pipeline that commits often is bounded by **286/s**, not 48,112. Utilisatio
 can sit near zero while that limit is fully saturated, because a device spending
 3.5 ms waiting on a flush is not busy — it is waiting.
 
-That is exactly the *"high wait, low busy"* row in the table the script prints,
-and the reason both numbers are on the dashboard.
+That is exactly the *"high wait, low busy"* case the script calls out after its
+results table, and the reason both numbers are on the dashboard.
 
 ### Contention is real here
 
@@ -242,8 +246,9 @@ views:
     cards:
       - type: markdown
         content: >
-          **Idle baseline on this host:** 1.0% busy · 1.5 ms write wait · 45.8 IOPS
-          · ceiling 48,112 write IOPS. Compare the slow window against these.
+          **Idle baseline on this host:** 1.0% busy peak / 0.7% mean · write wait
+          1.2 ms / 0.9 ms · IOPS 41.7 / 21.6 · ceiling 48,112 write IOPS.
+          Compare the slow window against these.
 
       - type: horizontal-stack
         cards:
