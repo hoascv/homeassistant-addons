@@ -1,5 +1,23 @@
 # Changelog
 
+## 2.10.0
+
+- **`jobs/iobench.sh`** — storage under a refresh-shaped write load: bulk
+  sequential writes, small fsynced commits, a read back, and both at once, with
+  device utilisation and per-operation wait for each. Answers whether the storage
+  is the limit or the workload grew, which a maximum on its own cannot.
+- POSIX `sh` and coreutils only, so it runs on a server with no Python and no way
+  to install one; published to `/share/pipeline-airflow/lib/` and meant to be
+  copied elsewhere, since identical workloads on different storage are the
+  cleanest comparison available.
+- Degrades rather than refuses: `/proc/diskstats` gives utilisation and latency
+  where it exists, and the workload timings stand where it does not. It reports
+  which timer it used and whether O_DIRECT was available, because a run that
+  includes the page cache is not comparable to one that does not.
+- **`notebooks/simulate_io.ipynb`** drives it, saves runs by label, and compares
+  a quiet baseline against one taken during the slow window.
+- The `lib/` publish step now includes shell tools, not only `*.py`.
+
 ## 2.9.1
 
 - `register()` prints one line per table. A table the DAGs have not written yet

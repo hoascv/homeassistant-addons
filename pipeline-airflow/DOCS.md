@@ -152,6 +152,7 @@ The pipeline code is three files, and none of them need a rebuild to read:
 | `jobs/trackers_feed.py` | reading a tracker: discovery, HTTP, bootstrap-vs-paging |
 | `jobs/trackers_merge.py` | the Spark job that MERGEs a batch into Delta |
 | `jobs/lakehouse.py` | reading those tables back, with a schema per table; `register()` names them in the optional metastore |
+| `jobs/iobench.sh` | storage under a refresh-shaped load — POSIX `sh` only, so it runs on a server with no Python |
 
 The DAG module is kept thin deliberately: it imports `airflow.sdk` and two
 providers and builds its DAGs on import, so nothing in it can be unit-tested.
@@ -169,6 +170,7 @@ notebooks are seeded once into `/share/pipeline-airflow/notebooks/`:
 | `pipeline_scratchpad.ipynb` | the same code the scheduler runs, importable — read a tracker, query the lakehouse, try a merge |
 | `explore_lakehouse.ipynb` | the Delta tables through `lakehouse.py`, by path: volume, adherence, weight, eggs |
 | `explore_catalog.ipynb` | the same data by **name** — `spark.sql("SELECT * FROM gym_tracker.workout_logs_typed")`, needing the optional Pipeline Metastore add-on |
+| `simulate_io.ipynb` | runs a refresh-shaped write load and reports what the storage did under it — for when writes get slower at certain times of day |
 
 Seeding is `cp -n`, so a notebook you have edited is never overwritten and a
 newly added one still arrives.

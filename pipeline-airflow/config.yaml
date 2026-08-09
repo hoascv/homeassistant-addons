@@ -1,5 +1,5 @@
 name: "Pipeline Airflow"
-version: "2.9.1"
+version: "2.10.0"
 slug: "pipeline-airflow"
 description: "Apache Airflow 3.3 orchestrator for the data-pipeline stack (LocalExecutor)"
 url: "https://github.com/hoascv/homeassistant-addons/tree/main/pipeline-airflow"

@@ -73,6 +73,10 @@ fi
 # about what `merge_batch` does.
 mkdir -p /share/pipeline-airflow/lib
 cp -f /opt/pipeline/jobs/*.py /share/pipeline-airflow/lib/ 2>/dev/null || true
+# Shell tools too — iobench.sh is meant to be copied off this machine and run on
+# a server that may have no Python at all, so it has to be somewhere reachable.
+cp -f /opt/pipeline/jobs/*.sh /share/pipeline-airflow/lib/ 2>/dev/null || true
+chmod +x /share/pipeline-airflow/lib/*.sh 2>/dev/null || true
 
 # A starting point for using them, seeded once and then yours.
 mkdir -p /share/pipeline-airflow/notebooks
