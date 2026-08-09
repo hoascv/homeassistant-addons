@@ -72,8 +72,10 @@ memorable. For example:
 
 ```
 python3 -c "import secrets; print(secrets.token_urlsafe(32))"
-``` To reach the add-on from outside Home Assistant,
-publish its port in the add-on's Network section.
+```
+
+To reach the add-on from outside Home Assistant, publish its port in the add-on's
+Network section.
 
 - **`GET /api/export`** — every tracked table (collections, chickens, breeds,
   food types, health events, nesting boxes), plus the `max_seq` the snapshot
@@ -198,8 +200,9 @@ a box is itself a deliberate opt-in.
 
 Open the ⚙️ settings sheet and tap **Train now** to fit up to three
 models, each of which only activates once it has enough of its own data:
-one that learns which detected shapes are really eggs (needs ~25
-corrections; replaces a fixed one-size-fits-all cutoff), one that learns
+one that learns which detected shapes are really eggs (needs 15
+confirmed eggs *and* 15 rejected shapes, so corrections in both directions
+count; replaces a fixed one-size-fits-all cutoff), one that learns
 your flock's actual size boundaries (needs ~25 sized examples; replaces
 the standard EU-weight-band formula), and one that recognizes which
 registered box a photo is of (activates as soon as two boxes have 3+

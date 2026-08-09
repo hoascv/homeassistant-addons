@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.43.1
+
+- Documentation fixes. A code fence closed on the same line as the sentence
+  that followed it, so that sentence rendered inside the code block.
+- The egg/not-egg model was described as needing "~25 corrections". It needs 15
+  confirmed eggs *and* 15 rejected shapes — corrections in both directions count,
+  and neither alone is enough.
+
 ## 1.43.0
 
 - `/api/stats` now counts **every** table, not only the tracked ones, split into

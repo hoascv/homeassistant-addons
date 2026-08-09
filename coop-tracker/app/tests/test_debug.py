@@ -12,6 +12,18 @@ def test_debug_reports_app_version(client):
     assert body["app_version"] == coopapp.APP_VERSION
 
 
+def test_version_matches_config(client):
+    """APP_VERSION and config.yaml drift apart silently: the add-on reports one
+    number while Home Assistant installs another, and nothing complains. Gym
+    Tracker has had this guard for a while; Coop Tracker had not, and drifted."""
+    import os
+    data = client.get("/api/debug").get_json()
+    config_path = os.path.join(os.path.dirname(__file__), "..", "..", "config.yaml")
+    with open(config_path) as f:
+        text = f.read()
+    assert f'version: "{data["app_version"]}"' in text
+
+
 def test_debug_without_supervisor_token(client):
     body = client.get("/api/debug").get_json()
     assert body["supervisor_token_set"] is False
