@@ -176,6 +176,59 @@ quiet baseline against one taken during the slow window.
 
 ---
 
+## Two ceilings, and which one governs you
+
+Both tools measure a maximum and they disagree by more than two orders of
+magnitude. Both are correct; they measure different things, and knowing which one
+binds your pipeline is the difference between watching the wrong number for weeks
+and watching the right one.
+
+Measured on this host:
+
+| Measurement | Result | What it is |
+|---|---|---|
+| Watchdog **Measure ceiling** | **48,112 write IOPS** | 8 KiB random writes, queue depth 16, no `fsync` |
+| `iobench.sh` **commit** phase | **286 commits/s (3.5 ms each)** | 8 KiB writes, each one `fsync`ed before the next |
+
+**168× apart.** The first is what the device can absorb when writes may be
+queued, reordered and acknowledged from cache. The second is what it can do when
+each write must reach stable storage *before* the next begins — no queue, no
+overlap, one round trip at a time. A database's commit path is the second kind:
+that is what durability means.
+
+So a pipeline that commits often is bounded by **286/s**, not 48,112. Utilisation
+can sit near zero while that limit is fully saturated, because a device spending
+3.5 ms waiting on a flush is not busy — it is waiting.
+
+That is exactly the *"high wait, low busy"* row in the table the script prints,
+and the reason both numbers are on the dashboard.
+
+### Contention is real here
+
+The `mixed` phase runs bulk writes and commits together, which is what a refresh
+actually does — Spark writing files while the transaction log commits. Measured
+on this host:
+
+| | Alone | While committing |
+|---|---|---|
+| Bulk write throughput | 376 MB/s | **149 MB/s** (40%) |
+| Time for the same data | 1.4 s | **3.5 s** (2.5× longer) |
+
+Worth sitting with: **some of a slow refresh can be self-inflicted.** The bulk
+writes and the commits are competing with each other, before any external load
+enters the picture. If the working-hours window adds a third competitor, it
+lands on top of a workload already interfering with itself.
+
+### What to watch, therefore
+
+Not IOPS headroom — with 48,112 available and a pipeline doing hundreds, you will
+never see that number move. Watch **`sensor.addon_watchdog_disk_write_latency_ms`**.
+
+If 3.5 ms becomes 15 ms under someone else's load, your commit rate falls roughly
+fourfold while utilisation still reads low and IOPS still looks like nothing. A
+dashboard watching only busy% would show a healthy disk throughout, which is how
+this kind of problem stays unexplained.
+
 ## Building a dashboard
 
 The sensors carry `state_class: measurement`, so Home Assistant's recorder has
@@ -300,7 +353,10 @@ while these lines stay flat says the load is not coming from your pipeline.
 2. **Measure the ceiling** once, on a quiet evening, so saturation can be quoted
    as a fraction rather than an adjective.
 3. **When it is slow**, look at the recorder history for
-   `disk_util` and `disk_write_latency_ms`. Both elevated is saturation.
+   `disk_util` and `disk_write_latency_ms`. Both elevated is saturation — but
+   **latency alone rising, with utilisation flat, is the more likely signature
+   here**, because the commit path is bounded by flush latency long before the
+   device runs out of IOPS (see *Two ceilings* above).
 4. **Check the pipeline's own demand** — `disk_write_bps` on the pipeline
    add-ons' sensors. Flat or lower while the device is saturated is the finding:
    the load is not yours.
