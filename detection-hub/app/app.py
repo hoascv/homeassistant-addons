@@ -16,10 +16,12 @@ from datetime import datetime
 
 from flask import Flask, Response, g, jsonify, render_template, request
 
+import capture
 import detector
+import hass
 import store
 
-APP_VERSION = "1.1.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.2.0"  # keep in sync with the "version" field in config.yaml
 
 OPTIONS_PATH = os.environ.get("DETECTION_HUB_OPTIONS_PATH", "/data/options.json")
 
@@ -40,6 +42,7 @@ app.config["MAX_CONTENT_LENGTH"] = MAX_IMAGE_BYTES
 
 _detector = None
 _detector_lock = threading.Lock()
+_capture = None
 
 
 def _log(msg):
@@ -110,6 +113,34 @@ def _int_option(name, default, low, high):
         return min(high, max(low, int(_read_options().get(name, default))))
     except (TypeError, ValueError):
         return default
+
+
+def get_cameras():
+    return capture.parse_cameras(_read_options().get("cameras", ""))
+
+
+def get_capture_options():
+    return {
+        "max_fps": _float_option("max_fps", 2.0, 0.0, 30.0),
+        "motion_threshold": _float_option("motion_threshold", 0.005, 0.0, 1.0),
+        "cooldown_seconds": _int_option("cooldown_seconds", 30, 0, 3600),
+    }
+
+
+def _float_option(name, default, low, high):
+    try:
+        return min(high, max(low, float(_read_options().get(name, default))))
+    except (TypeError, ValueError):
+        return default
+
+
+def get_ha_config():
+    options = _read_options()
+    return {
+        "sensors": bool(options.get("ha_sensors_enabled", True)),
+        "events": bool(options.get("ha_events_enabled", True)),
+        "prefix": (options.get("sensor_prefix") or "detection_hub").strip(),
+    }
 
 
 def get_retention():
@@ -315,18 +346,60 @@ def api_detect():
     # which is what keeps the try-it page from filling the database.
     camera = (request.args.get("camera") or "").strip()
     if camera and detections:
-        db = get_db()
-        snapshot_id = None
-        jpeg = detector.encode_jpeg(image)
-        if jpeg:
-            snapshot_id = store.save_snapshot(db, jpeg, image.shape[1], image.shape[0])
-        store.upsert_camera(db, camera, "api", state="ok", last_detection_at=None)
-        store.record_detections(db, camera, detections, snapshot_id=snapshot_id)
-        store.bump_camera_counters(db, camera, frames_seen=1, frames_detected=1)
-        db.commit()
+        snapshot_id = record(get_db(), camera, detections, image, kind="api")
         body["stored"] = {"camera": camera, "snapshot_id": snapshot_id}
 
     return jsonify(body)
+
+
+# --- recording ----------------------------------------------------------------
+
+
+def record(conn, camera, detections, image, kind="api"):
+    """Persist detections and their snapshot, and tell Home Assistant.
+
+    One function for both callers — the HTTP API and a camera thread — so the
+    two can never drift into storing different things. The connection is passed
+    in because sqlite3 has thread affinity and the camera threads must not
+    borrow a request's.
+    """
+    snapshot_id = None
+    jpeg = detector.encode_jpeg(image)
+    if jpeg:
+        snapshot_id = store.save_snapshot(conn, jpeg, image.shape[1], image.shape[0])
+
+    store.upsert_camera(conn, camera, kind, last_detection_at=store.now())
+    store.record_detections(conn, camera, detections, snapshot_id=snapshot_id)
+    store.bump_camera_counters(conn, camera, frames_seen=1, frames_detected=1)
+    conn.commit()
+
+    ha = get_ha_config()
+    if ha["events"]:
+        for det in detections:
+            error = hass.fire_event(camera, det, snapshot_id)
+            if error:
+                # Worth one line, not a crash: the detection is already stored,
+                # and a camera must keep watching whether or not HA heard.
+                _log(f"could not fire event for {camera}/{det['label']}: {error}")
+    return snapshot_id
+
+
+def _on_camera_detections(camera, detections, frame):
+    """Called from a camera thread. Owns its own connection, by necessity."""
+    conn = store.connect(actor="camera")
+    try:
+        record(conn, camera, detections, frame, kind="rtsp")
+    finally:
+        conn.close()
+
+
+def get_capture():
+    global _capture
+    if _capture is None:
+        _capture = capture.CaptureManager(
+            get_detector(), _on_camera_detections, log=_log
+        )
+    return _capture
 
 
 # --- the change feed ----------------------------------------------------------
@@ -390,7 +463,8 @@ def api_snapshot(snapshot_id):
 
 @app.route("/api/cameras")
 def api_cameras():
-    return jsonify({"cameras": store.cameras(get_db())})
+    """Stored history merged with what the capture threads currently know."""
+    return jsonify({"cameras": _camera_rows(), "metrics": get_capture().metrics()})
 
 
 def _float_arg(name, default):
@@ -444,13 +518,63 @@ def _handle_shutdown_signal(signum, frame):
     sys.exit(0)
 
 
+def _camera_rows():
+    """Live camera state, merging what the threads know with what is stored.
+
+    The threads hold the truth about liveness; the database holds the history.
+    Neither alone answers "is the driveway camera working".
+    """
+    live = {c["id"]: c for c in get_capture().status()}
+    rows = []
+    conn = store.connect(actor="automation")
+    try:
+        for stored in store.cameras(conn):
+            rows.append({**stored, **live.get(stored["id"], {"alive": False})})
+        for camera_id, status in live.items():
+            if not any(r["id"] == camera_id for r in rows):
+                rows.append(status)
+    finally:
+        conn.close()
+    return rows
+
+
+def _publish(conn):
+    """Sensors and the watchdog status file, once a minute."""
+    ha = get_ha_config()
+    cameras = _camera_rows()
+    metrics = get_capture().metrics()
+    detector_status = get_detector().status()
+
+    if ha["sensors"]:
+        midnight = datetime.now().strftime("%Y-%m-%dT00:00:00")
+        errors = hass.publish_sensors(
+            ha["prefix"], store.counts_since(conn, midnight), cameras, detector_status
+        )
+        for error in errors:
+            _log(f"could not publish sensor {error}")
+
+    # The watchdog's own view. `ok` is false when the detector is broken or when
+    # a configured camera is not running — the two failures an HTTP probe of
+    # this add-on cannot see, since the web UI answers either way.
+    configured = len(get_cameras())
+    online = metrics.get("cameras_ok", 0)
+    if detector_status["error"]:
+        ok, detail = False, f"detector unavailable: {detector_status['error']}"
+    elif configured and online < configured:
+        ok, detail = False, f"{online}/{configured} cameras streaming"
+    elif configured:
+        ok, detail = True, f"{configured} camera(s) streaming"
+    else:
+        ok, detail = True, "detector ready; no cameras configured"
+    hass.write_status(ok, detail, metrics)
+
+
 def _background_loop():
     """Housekeeping, once a minute.
 
-    Retention is the whole job for now: a camera generates far more rows than a
-    person logging eggs, and `/data` is inside Home Assistant's backups. Any one
-    iteration failing must not end the loop — a pruning error is not a reason to
-    stop detecting.
+    Retention, sensors and the status file. Any one iteration failing must not
+    end the loop — a pruning error is not a reason to stop detecting, and a
+    Home Assistant that is briefly unreachable is not a reason to stop either.
     """
     while True:
         try:
@@ -460,6 +584,7 @@ def _background_loop():
                 conn.commit()
                 if any(removed.values()):
                     _log("pruned " + ", ".join(f"{n} {t}" for t, n in removed.items() if n))
+                _publish(conn)
             finally:
                 conn.close()
         except Exception as exc:  # noqa: BLE001 - the loop outlives any one failure
@@ -485,6 +610,18 @@ if __name__ == "__main__":
     else:
         _log(f"detector ready: {os.path.basename(status['model_path'])} "
              f"at {status['input_size']}x{status['input_size']}")
+
+    cameras = get_cameras()
+    if cameras:
+        get_capture().configure(
+            cameras,
+            confidence=get_confidence(),
+            labels=get_labels(),
+            **get_capture_options(),
+        )
+        _log(f"watching {len(cameras)} camera(s): {', '.join(c['id'] for c in cameras)}")
+    else:
+        _log("no cameras configured — the API and the try-it page still work")
 
     port = int(os.environ.get("DETECTION_HUB_PORT", "8099"))
     _log(f"serving on 0.0.0.0:{port} (waitress)")

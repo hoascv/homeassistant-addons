@@ -1,5 +1,5 @@
 name: "Detection Hub"
-version: "1.1.0"
+version: "1.2.0"
 slug: "detection-hub"
 description: "Object detection for Home Assistant — an image in, what's in it out"
 url: "https://github.com/hoascv/homeassistant-addons/tree/main/detection-hub"
@@ -26,6 +26,12 @@ ports:
 ports_description:
   8099/tcp: "Direct API access for a pipeline or another add-on (requires api_token)"
 homeassistant_api: true
+# Read-write, for one small file: /share/pipeline-status/detection-hub.json,
+# which is how the Add-on Watchdog learns that a capture thread died. An HTTP
+# probe of this add-on cannot see that — the web UI answers perfectly well while
+# a dead thread watches nothing.
+map:
+  - share:rw
 options:
   api_token: ""
   restrict_to_user_ids: ""
@@ -38,6 +44,28 @@ options:
   # Empty uses the bundled YOLOX-Nano. Point at another ONNX to swap models;
   # it must be a YOLOX export at the same input size.
   model_path: ""
+  # One camera per line, `name = url`. A textarea in the Supervisor UI, not
+  # nested YAML: a typo in `name = url` is recoverable, a typo in nested YAML
+  # rejects the whole configuration.
+  #   drive = rtsp://user:pass@192.168.1.60:554/Streaming/Channels/102
+  # Point at the camera's SUBSTREAM where it has one. Motion detection does not
+  # need 4K, and decoding it is the single largest cost here.
+  cameras: ""
+  # Frames per second actually considered. Every frame is still read — a decoder
+  # that is not drained backs up and starts handing over stale frames — but only
+  # this many are examined. 0 means consider every frame.
+  max_fps: 2
+  # Fraction of the frame that must change before the detector is woken. This is
+  # what makes continuous detection affordable: an unchanging scene costs a
+  # cheap greyscale comparison instead of a forward pass. Raise it if a swaying
+  # tree keeps triggering; lower it if slow movement is missed.
+  motion_threshold: 0.005
+  # One event per camera per label per this many seconds. Without it a person
+  # standing in view produces a detection every sampled frame.
+  cooldown_seconds: 30
+  ha_sensors_enabled: true
+  ha_events_enabled: true
+  sensor_prefix: "detection_hub"
   # Retention, bounded two ways because either alone fails: a quiet week keeps
   # images longer than intended, and a busy hour blows past any size
   # expectation well inside the age window. /data is inside Home Assistant's
@@ -51,6 +79,13 @@ schema:
   confidence: "float(0.05,0.99)"
   labels: "str?"
   model_path: "str?"
+  cameras: "str?"
+  max_fps: "float(0,30)"
+  motion_threshold: "float(0,1)"
+  cooldown_seconds: "int(0,3600)"
+  ha_sensors_enabled: "bool"
+  ha_events_enabled: "bool"
+  sensor_prefix: "str"
   detection_retention_days: "int(1,3650)"
   snapshot_retention_days: "int(1,365)"
   snapshot_max_count: "int(0,100000)"

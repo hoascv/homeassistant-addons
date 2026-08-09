@@ -1,5 +1,33 @@
 # Changelog
 
+## 1.2.0
+
+- **Watches RTSP cameras.** One per line under `cameras`, as `name = url`.
+- **Motion gating, which is what makes this affordable on a CPU.** A forward
+  pass costs ~15 ms, so a 15 fps stream fed straight to the detector is a
+  quarter of a core spent re-deciding that nothing changed. Frames are sampled
+  to `max_fps` (default 2), compared against the previous one at 320 px grey,
+  and only the ones that differ reach the model. A still scene costs a
+  comparison rather than an inference.
+- **A cooldown per camera per label** (default 30s), so a person standing in
+  view is one event rather than sixty — protecting the database and Home
+  Assistant's recorder rather than the CPU.
+- **Fires `detection_hub_detection` events**, which is new ground for this
+  repository: everything here until now set states. A detection happens at an
+  instant, and as a state two in a row look like one.
+- **Sensors**: detections today with a per-label breakdown, cameras online, and
+  per-camera last-seen plus a `connectivity` binary sensor — because a camera
+  that is up but seeing nothing and one that is down are different situations.
+- **Writes `/share/pipeline-status/detection-hub.json`** for the Add-on
+  Watchdog, reporting not-ok when the detector is broken or a configured camera
+  is not streaming. Neither is visible to an HTTP probe: the web UI answers
+  perfectly well while a dead thread watches nothing, which is the exact failure
+  that file exists to surface.
+- RTSP is forced over TCP. UDP over wifi yields torn frames, which the motion
+  gate reads as movement and the detector then wakes for, all night.
+- A camera that drops reconnects with a widening backoff to a minute, so a
+  rebooting camera is not retried in a tight loop.
+
 ## 1.1.0
 
 - **Remembers what it saw.** A SQLite store at `/data/detections.db`: detections,

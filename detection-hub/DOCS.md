@@ -4,9 +4,9 @@ Object detection for Home Assistant: send it an image, get back what is in it
 and where. Runs entirely on the CPU, on this machine — no cloud service, no API
 key, nothing leaves the host.
 
-> **Being built in stages.** Today it detects on demand, remembers what it saw,
-> and hands that to the data pipeline. Live cameras and the Home Assistant
-> sensors and events are the releases that follow.
+It watches RTSP cameras continuously, answers on demand over HTTP, records what
+it finds with a snapshot, tells Home Assistant the moment something appears, and
+hands the history to the data pipeline.
 
 ## What it does
 
@@ -16,6 +16,85 @@ key, nothing leaves the host.
 - Reports a label, a confidence and a pixel box for each thing it finds.
 - Filters to the classes you care about, so a driveway camera is not told about
   the potted plant on every frame.
+
+## Watching cameras
+
+Add one per line under **cameras**, as `name = url`:
+
+```
+drive  = rtsp://user:pass@192.168.1.60:554/Streaming/Channels/102
+garden = rtsp://user:pass@192.168.1.61:554/h264
+```
+
+**Point at the substream if your camera has one.** Motion detection does not need
+4K, and decoding it is the single largest cost in this add-on. The `/102` above
+is a Hikvision-style substream; most cameras expose something equivalent.
+
+### How it stays affordable on a CPU
+
+A forward pass costs ~15 ms. A 15 fps stream fed straight to the detector is a
+quarter of a core spent almost entirely re-deciding that nothing has changed. So
+three throttles sit between a camera and the model:
+
+1. **Sampling** — every frame is *read* (a decoder that is not drained backs up
+   and starts handing over stale frames) but only **max_fps** of them are
+   examined. Default 2.
+2. **The motion gate** — a considered frame is compared against the previous one
+   at 320 px greyscale. Unchanged frames never reach the detector. On a still
+   scene this is the whole cost: a cheap comparison instead of a forward pass.
+3. **The cooldown** — one event per camera per label per **cooldown_seconds**.
+   A person standing in view is one event, not sixty. This protects the database
+   and Home Assistant's recorder rather than the CPU.
+
+The first frame after a camera connects always goes to the detector — it has no
+baseline to compare against, and a camera pointed at a parked car should report
+it rather than wait for it to move.
+
+If a camera drops, it reconnects with a widening backoff up to a minute, so a
+rebooting camera is not retried in a tight loop.
+
+## Home Assistant
+
+### Events — for automations
+
+Each detection fires **`detection_hub_detection`** as it happens:
+
+```yaml
+automation:
+  - alias: "Someone at the door"
+    trigger:
+      - platform: event
+        event_type: detection_hub_detection
+        event_data:
+          camera: drive
+          label: person
+    action:
+      - service: notify.mobile_app
+        data:
+          message: >
+            {{ trigger.event.data.label }} at {{ trigger.event.data.camera }}
+            ({{ trigger.event.data.confidence }})
+```
+
+Events rather than states, because a detection happens at an instant. As a state
+two in a row look like one, and an automation watching for a change misses the
+second entirely.
+
+### Sensors — for dashboards
+
+- `sensor.detection_hub_detections_today` — the count, with a `by_label`
+  breakdown. Carries `state_class: measurement`, so the recorder keeps long-term
+  statistics rather than only recent states.
+- `sensor.detection_hub_cameras_online` — how many are streaming, of how many
+  configured.
+- `sensor.detection_hub_<camera>_last_seen` — when that camera last detected
+  something, with its frame counters.
+- `binary_sensor.detection_hub_<camera>_online` — `connectivity`. A camera that
+  is up but seeing nothing and one that is down are different situations, and an
+  automation should not have to parse a detail string to tell them apart.
+
+Camera names become entity ids with anything non-alphanumeric replaced, so
+`back garden` is `..._back_garden_online`.
 
 ## Trying it
 
@@ -128,6 +207,21 @@ path and any load error.
   week keeps images longer than you meant, and a busy hour blows past any size
   expectation well inside the age window. `/data` is inside Home Assistant's
   backups, which is what makes the ceiling matter rather than just being tidy.
+- **cameras**: one `name = url` per line. Empty means no continuous watching —
+  the API and the try-it page still work. A line without an `=` is skipped
+  rather than failing the whole configuration, so one typo does not stop the
+  other cameras.
+- **max_fps**: `2` (default). Frames per second actually examined per camera.
+  `0` means examine every frame.
+- **motion_threshold**: `0.005` (default). The fraction of the frame that must
+  change before the detector is woken. Raise it if a swaying tree keeps
+  triggering; lower it if slow movement is missed.
+- **cooldown_seconds**: `30` (default). One event per camera per label per
+  window.
+- **ha_sensors_enabled** / **ha_events_enabled**: both on. Turn events off if
+  you only want the history and the lakehouse — that saves an HTTP call per
+  detection.
+- **sensor_prefix**: `detection_hub` (default). The entity-id prefix.
 - **model_path**: empty uses the bundled YOLOX-Nano. Point it at another ONNX
   file to swap models; it must be a YOLOX export at the same input size, and the
   add-on refuses one whose output shape disagrees rather than producing boxes in
@@ -184,7 +278,16 @@ The model is baked into the image, so the add-on needs no internet at any point.
   detection would compete with it directly and show up as rising disk write
   latency while utilisation stayed flat.
 - **CPU only, by design.** Home Assistant OS makes GPU passthrough to add-ons
-  awkward, and a 15 ms model does not need one.
+  awkward, and a 15 ms model does not need one. One or two streams is the
+  intended scale; six is not.
+- **RTSP is forced over TCP.** The default lets ffmpeg negotiate UDP, which over
+  wifi drops packets and produces torn frames — the motion gate reads those as
+  movement and wakes the detector for artefacts, all night.
+- **The Add-on Watchdog is told the truth.** This add-on writes
+  `/share/pipeline-status/detection-hub.json` every minute with its camera and
+  detector state. A probe of the web UI cannot see a dead capture thread — the
+  page answers perfectly well while nothing is being watched — which is exactly
+  the failure that convention exists for.
 - **amd64 only.** opencv publishes aarch64 wheels, but a Pi-class board cannot
   carry what the later releases will ask of this, and offering it there would be
   offering something that does not work.

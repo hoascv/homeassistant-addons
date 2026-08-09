@@ -39,7 +39,7 @@ BLOB_COLUMNS = {("snapshots", "image")}
 CHANGE_LOG_KEEP_DAYS = 90
 
 
-def _now():
+def now():
     return datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
 
 
@@ -186,14 +186,14 @@ def install_change_triggers(conn):
 def save_snapshot(conn, jpeg, width, height):
     cur = conn.execute(
         "INSERT INTO snapshots (image, width, height, taken_at) VALUES (?, ?, ?, ?)",
-        (sqlite3.Binary(jpeg), width, height, _now()),
+        (sqlite3.Binary(jpeg), width, height, now()),
     )
     return cur.lastrowid
 
 
 def record_detections(conn, camera, detections, snapshot_id=None, at=None):
     """Insert one row per detection. Does not commit — the caller batches."""
-    stamp = at or _now()
+    stamp = at or now()
     rows = [
         (
             camera,
@@ -323,7 +323,7 @@ def export(conn):
         rows = conn.execute(f"SELECT * FROM {table}").fetchall()
         tables[table] = [_serialisable(row, table) for row in rows]
     return {
-        "taken_at": _now(),
+        "taken_at": now(),
         "max_seq": max_seq(conn),
         "keys": dict(TRACKED_TABLES),
         "tables": tables,
@@ -397,7 +397,7 @@ def stats(conn, db_path=None):
         db_bytes = None
 
     return {
-        "taken_at": _now(),
+        "taken_at": now(),
         "db_bytes": db_bytes,
         "max_seq": max_seq(conn),
         "counts": counts,
