@@ -142,6 +142,78 @@ it logged), and "logged then taken back" is worth keeping. The payload stays
 JSON rather than typed columns because both apps gain columns regularly; parse
 it downstream with `from_json` and an explicit schema for the tables you query.
 
+## Is the storage the limit?
+
+When writes get slower at certain times of day, the question is whether the
+storage is the constraint or the workload grew — and a maximum settles neither.
+`jobs/iobench.sh` runs a load shaped like a refresh and reports what the device
+did under it: `bulk` sequential writes as Spark writes parquet, `commit` small
+fsynced writes as Postgres' WAL does, `read` back, and `mixed` — both at once,
+which is what a refresh actually does and the only phase where contention shows.
+
+It is published to `/share/pipeline-airflow/lib/iobench.sh` on every start:
+
+```sh
+sh /share/pipeline-airflow/lib/iobench.sh --dir /data --size 256
+```
+
+Two numbers carry the argument, and neither is throughput. **busy%** is the share
+of time the device had a request in flight; **write wait** is milliseconds per
+write:
+
+| busy% | write wait | reading |
+|---|---|---|
+| high | high | **saturated** — the device is the limit |
+| low | high | slow device, or one shared with something you cannot see |
+| high | low | busy but keeping up |
+| low | low | the storage is not the problem; look at the workload |
+
+`commit` will show far lower MB/s than `bulk` on any device — measured here,
+1422 MB/s against 2.9 MB/s on the same disk. That is not a fault: fsynced 8 KiB
+writes are latency-bound where bulk writes are throughput-bound, and a pipeline
+that commits often lives in the second world.
+
+`simulate_io.ipynb` drives it, saves runs by label, and compares a quiet baseline
+against one taken during the slow window — same workload either side, so the
+difference is the device rather than the work.
+
+### Running it on other servers
+
+**POSIX `sh` and coreutils only** — no Python, no packages, nothing to install.
+That is the point: copy the one file anywhere and results are comparable.
+
+```sh
+scp iobench.sh user@other:/tmp/ && ssh user@other 'sh /tmp/iobench.sh --dir /var/tmp --size 256'
+```
+
+Verified to give identical results under **dash** (Debian/Ubuntu `/bin/sh`),
+**ksh** and **bash**. No arrays, no `[[`, no `local`, no `seq`; the `awk` program
+avoids line-continued string literals so `mawk` (Debian's default), `gawk`,
+`busybox awk` and BSD `awk` all read it alike.
+
+Where a system differs it detects and reports rather than assuming:
+
+| Difference | What happens |
+|---|---|
+| No `O_DIRECT` (tmpfs, some overlays) | falls back to `conv=fsync`, and says figures include the page cache |
+| No `/proc/diskstats` | device columns read 0, workload timings still stand, `device:` says `unknown` |
+| No `/proc/uptime` or `date +%N` (busybox) | whole-second timing, announced on the `timer:` line — raise `--size` |
+| `df` wrapping long device names (any LVM host) | handled: free space is read from the last line, counting fields from the right |
+
+That last one was a real bug rather than a hypothetical: on
+`/dev/mapper/ubuntu--vg-ubuntu--lv`, `df` wraps, the naive parse read 0 MB free,
+and the script refused to start on a healthy machine.
+
+**Untested: a real Linux host.** This was written on macOS, which has no
+`/proc/diskstats`, so the utilisation and wait columns are exercised only by the
+equivalent arithmetic in the Add-on Watchdog's unit tests. If those columns read
+0 while `device:` names a real disk, that is the thing to report.
+
+The script writes real data and competes with whatever else is running. It
+refuses to start without enough free space and removes its test file on the way
+out, including on interrupt. For continuous capture rather than a point
+measurement, the Add-on Watchdog samples the same counters every ten seconds.
+
 ## Developing
 
 The pipeline code is three files, and none of them need a rebuild to read:

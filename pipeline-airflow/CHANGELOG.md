@@ -1,5 +1,22 @@
 # Changelog
 
+## 2.10.1
+
+- Fix `iobench.sh` refusing to run on any LVM system. `df` wraps onto a second
+  line when the device name is long — `/dev/mapper/ubuntu--vg-ubuntu--lv` and
+  anything like it — so reading a fixed field of line 2 found the empty first
+  line, computed 0 MB free, and declined to start on a healthy machine. Free
+  space now comes from the last line, counting fields from the right.
+- The `awk` program no longer uses a line-continued string literal — valid POSIX,
+  but concatenation is read identically by `mawk` (Debian's default), `gawk`,
+  `busybox awk` and BSD `awk`.
+- Verified to produce identical results under `dash`, `ksh` and `bash`.
+- Documents the portability position, including what is still untested: the
+  `/proc/diskstats` columns have never run on a real Linux host.
+- 2.10.0 shipped without its DOCS section: the insertion was anchored on a
+  heading that exists in the Spark add-on's docs, not this one, so the replace
+  silently did nothing.
+
 ## 2.10.0
 
 - **`jobs/iobench.sh`** — storage under a refresh-shaped write load: bulk

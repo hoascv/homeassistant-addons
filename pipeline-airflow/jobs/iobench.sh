@@ -66,7 +66,13 @@ trap cleanup EXIT INT TERM
 [ -d "$DIR" ] || { echo "no such directory: $DIR" >&2; exit 1; }
 
 # Refuse rather than fill the disk. df -k is portable where df -m is not.
-FREE_MB=$(df -k "$DIR" 2>/dev/null | awk 'NR==2 {print int($4/1024)}')
+#
+# Read the *last* line and count fields from the right. df wraps onto a second
+# line when the device name is long — which is the default on any LVM system,
+# e.g. /dev/mapper/ubuntu--vg-ubuntu--lv — and a fixed "$4 of line 2" then reads
+# the empty first line, computes 0MB free, and refuses to run on a perfectly
+# healthy machine. Available is always the third field from the right.
+FREE_MB=$(df -k "$DIR" 2>/dev/null | awk 'END {if (NF >= 4) print int($(NF-2)/1024)}')
 NEED_MB=$(( SIZE_MB + 256 ))
 if [ -n "$FREE_MB" ] && [ "$FREE_MB" -lt "$NEED_MB" ]; then
     echo "only ${FREE_MB}MB free in $DIR, need ${NEED_MB}MB — refusing" >&2
@@ -234,9 +240,10 @@ NF >= 17 {
 
     if (json != "") {
         if (!first) printf "," >> json
-        printf "{\"phase\":\"%s\",\"seconds\":%.3f,\"mb_s\":%.2f,\"util_percent\":%.1f,\
-\"iops\":%.1f,\"read_wait_ms\":%.2f,\"write_wait_ms\":%.2f}", \
-               name, secs, mb_s, util, iops, rwait, wwait >> json
+        fmt = "{\"phase\":\"%s\",\"seconds\":%.3f,\"mb_s\":%.2f,"
+        fmt = fmt "\"util_percent\":%.1f,\"iops\":%.1f,"
+        fmt = fmt "\"read_wait_ms\":%.2f,\"write_wait_ms\":%.2f}"
+        printf fmt, name, secs, mb_s, util, iops, rwait, wwait >> json
         first = 0
     }
 }
