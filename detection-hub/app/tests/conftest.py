@@ -9,6 +9,7 @@ import os
 import pytest
 
 import app as hub
+import store
 
 FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures")
 
@@ -19,6 +20,15 @@ def _reset_module_state(monkeypatch):
     local/dev mode, and no detector carried over from a previous test."""
     monkeypatch.setattr(hub, "SUPERVISOR_TOKEN", None)
     monkeypatch.setattr(hub, "_detector", None)
+
+
+@pytest.fixture
+def db_path(tmp_path, monkeypatch):
+    """A throwaway database, initialised the way the container would."""
+    path = str(tmp_path / "detections.db")
+    monkeypatch.setattr(store, "DB_PATH", path)
+    store.init_db(path)
+    return path
 
 
 @pytest.fixture
@@ -43,7 +53,7 @@ def set_options(options_path):
 
 
 @pytest.fixture
-def client(options_path):
+def client(options_path, db_path):
     """A browser arriving through Home Assistant's ingress proxy.
 
     The ingress user header is set on every request because that is how the app
@@ -57,7 +67,7 @@ def client(options_path):
 
 
 @pytest.fixture
-def direct_client(options_path):
+def direct_client(options_path, db_path):
     """A caller on the published port: no ingress header, nothing but what it
     sends itself."""
     hub.app.testing = True

@@ -1,8 +1,8 @@
 """Detection Hub — object detection as a service for Home Assistant.
 
-Phase 1: the detector and the HTTP API in front of it. Cameras, storage and the
-change feed land in later releases; this is the piece everything else depends
-on, so it ships and gets proven first.
+The detector and the HTTP API in front of it, plus the store that remembers what
+was seen and the change feed that hands it to the data pipeline. Cameras and the
+Home Assistant integration land on top of these.
 """
 import hmac
 import html
@@ -11,13 +11,15 @@ import os
 import signal
 import sys
 import threading
+import time
 from datetime import datetime
 
-from flask import Flask, Response, jsonify, render_template, request
+from flask import Flask, Response, g, jsonify, render_template, request
 
 import detector
+import store
 
-APP_VERSION = "1.0.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.1.0"  # keep in sync with the "version" field in config.yaml
 
 OPTIONS_PATH = os.environ.get("DETECTION_HUB_OPTIONS_PATH", "/data/options.json")
 
@@ -101,6 +103,42 @@ def get_labels():
 
 def get_model_path():
     return (_read_options().get("model_path") or "").strip() or None
+
+
+def _int_option(name, default, low, high):
+    try:
+        return min(high, max(low, int(_read_options().get(name, default))))
+    except (TypeError, ValueError):
+        return default
+
+
+def get_retention():
+    return {
+        "detection_days": _int_option("detection_retention_days", 30, 1, 3650),
+        "snapshot_days": _int_option("snapshot_retention_days", 7, 1, 365),
+        "snapshot_max": _int_option("snapshot_max_count", 2000, 0, 100000),
+    }
+
+
+# --- database -----------------------------------------------------------------
+
+
+def get_db():
+    """One connection per request, closed on teardown.
+
+    sqlite3 connections are not shareable across threads and waitress serves
+    from four, so nothing here is cached beyond the request.
+    """
+    if "db" not in g:
+        g.db = store.connect(actor="user")
+    return g.db
+
+
+@app.teardown_appcontext
+def close_db(exception=None):
+    db = g.pop("db", None)
+    if db is not None:
+        db.close()
 
 
 def get_detector():
@@ -263,15 +301,96 @@ def api_detect():
         # not the caller's, so it is a 503 rather than a 400.
         return jsonify({"error": error}), 503
 
+    body = {
+        "detections": detections,
+        "count": len(detections),
+        "image": {"width": image.shape[1], "height": image.shape[0]},
+        "confidence": confidence,
+        "latency_ms": get_detector().last_latency_ms,
+    }
+
+    # `?camera=<name>` turns this from a calculator into an input source: the
+    # detections are recorded under that name and reach the lakehouse on the
+    # next ingest, exactly as a camera's would. Without it nothing is stored,
+    # which is what keeps the try-it page from filling the database.
+    camera = (request.args.get("camera") or "").strip()
+    if camera and detections:
+        db = get_db()
+        snapshot_id = None
+        jpeg = detector.encode_jpeg(image)
+        if jpeg:
+            snapshot_id = store.save_snapshot(db, jpeg, image.shape[1], image.shape[0])
+        store.upsert_camera(db, camera, "api", state="ok", last_detection_at=None)
+        store.record_detections(db, camera, detections, snapshot_id=snapshot_id)
+        store.bump_camera_counters(db, camera, frames_seen=1, frames_detected=1)
+        db.commit()
+        body["stored"] = {"camera": camera, "snapshot_id": snapshot_id}
+
+    return jsonify(body)
+
+
+# --- the change feed ----------------------------------------------------------
+
+
+@app.route("/api/export")
+def api_export():
+    """Full snapshot of every tracked table, plus the seq it corresponds to."""
+    payload = store.export(get_db())
+    payload["app_version"] = APP_VERSION
+    return jsonify(payload)
+
+
+@app.route("/api/changes")
+def api_changes():
+    """Everything after a watermark. The steady-state ingest path."""
+    try:
+        since = int(request.args.get("since", 0))
+    except (TypeError, ValueError):
+        return jsonify({"error": "since must be a number"}), 400
+    try:
+        limit = int(request.args.get("limit", 1000))
+    except (TypeError, ValueError):
+        return jsonify({"error": "limit must be a number"}), 400
+    return jsonify(store.changes(get_db(), since=since, limit=limit))
+
+
+@app.route("/api/stats")
+def api_stats():
+    """Row counts and size without serialising a row — what the watchdog polls."""
+    payload = store.stats(get_db())
+    payload["app_version"] = APP_VERSION
+    return jsonify(payload)
+
+
+# --- reading what was seen ----------------------------------------------------
+
+
+@app.route("/api/detections")
+def api_detections():
     return jsonify(
         {
-            "detections": detections,
-            "count": len(detections),
-            "image": {"width": image.shape[1], "height": image.shape[0]},
-            "confidence": confidence,
-            "latency_ms": get_detector().last_latency_ms,
+            "detections": store.recent_detections(
+                get_db(),
+                limit=request.args.get("limit", 50),
+                camera=request.args.get("camera"),
+            )
         }
     )
+
+
+@app.route("/api/snapshots/<int:snapshot_id>")
+def api_snapshot(snapshot_id):
+    """The stored JPEG. Kept out of the change feed on purpose — a consumer that
+    wants the image asks for it by id rather than receiving every one inline."""
+    row = store.snapshot(get_db(), snapshot_id)
+    if row is None:
+        return jsonify({"error": "no such snapshot"}), 404
+    return Response(bytes(row["image"]), mimetype="image/jpeg")
+
+
+@app.route("/api/cameras")
+def api_cameras():
+    return jsonify({"cameras": store.cameras(get_db())})
 
 
 def _float_arg(name, default):
@@ -325,12 +444,37 @@ def _handle_shutdown_signal(signum, frame):
     sys.exit(0)
 
 
+def _background_loop():
+    """Housekeeping, once a minute.
+
+    Retention is the whole job for now: a camera generates far more rows than a
+    person logging eggs, and `/data` is inside Home Assistant's backups. Any one
+    iteration failing must not end the loop — a pruning error is not a reason to
+    stop detecting.
+    """
+    while True:
+        try:
+            conn = store.connect(actor="automation")
+            try:
+                removed = store.prune(conn, **get_retention())
+                conn.commit()
+                if any(removed.values()):
+                    _log("pruned " + ", ".join(f"{n} {t}" for t, n in removed.items() if n))
+            finally:
+                conn.close()
+        except Exception as exc:  # noqa: BLE001 - the loop outlives any one failure
+            _log(f"background loop iteration failed: {type(exc).__name__}: {exc}")
+        time.sleep(60)
+
+
 if __name__ == "__main__":
     from waitress import serve
 
     signal.signal(signal.SIGTERM, _handle_shutdown_signal)
     _log(f"Detection Hub {APP_VERSION} starting")
     _log(_api_access_summary())
+    store.init_db()
+    threading.Thread(target=_background_loop, daemon=True).start()
 
     # Load the model at startup rather than on the first request: a 15ms model
     # takes a moment to read from disk, and a broken one should be in the log

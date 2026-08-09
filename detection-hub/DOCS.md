@@ -4,12 +4,9 @@ Object detection for Home Assistant: send it an image, get back what is in it
 and where. Runs entirely on the CPU, on this machine — no cloud service, no API
 key, nothing leaves the host.
 
-> **This is the first release, and it is the foundation rather than the whole
-> thing.** Today it detects on demand through an HTTP API and a drop-an-image
-> page. Cameras, stored detections, Home Assistant sensors and events, and the
-> feed into the data pipeline are the releases that follow. What is here is the
-> part everything else depends on, shipped once it was proven rather than
-> alongside a lot of untested plumbing.
+> **Being built in stages.** Today it detects on demand, remembers what it saw,
+> and hands that to the data pipeline. Live cameras and the Home Assistant
+> sensors and events are the releases that follow.
 
 ## What it does
 
@@ -32,8 +29,8 @@ Every endpoint requires authentication — see **Access** below.
 
 ### `POST /api/detect`
 
-An image in, detections out. Nothing is stored. Accepts either a multipart
-upload under `image` or the raw bytes as the request body:
+An image in, detections out. Accepts either a multipart upload under `image` or
+the raw bytes as the request body:
 
 ```bash
 curl -H "Authorization: Bearer <api_token>" \
@@ -58,12 +55,41 @@ curl -H "Authorization: Bearer <api_token>" \
 sent** — which is why `image` reports the size it read rather than leaving you
 to assume it.
 
-Two query parameters override the configured defaults for one call:
+Query parameters:
 
 - `?confidence=0.8` — raise or lower the threshold for this image.
 - `?labels=person,dog` — report only these classes.
+- `?camera=front_door` — **record** this detection under that name, with a
+  snapshot. Without it nothing is stored, which is what keeps the try-it page
+  from filling the database. With it, the HTTP API is an input source on the
+  same footing as a camera, and what it records reaches the lakehouse.
 
 Images are capped at 20 MB.
+
+### Reading what it saw
+
+- **`GET /api/detections?camera=&limit=`** — recent rows, newest first.
+- **`GET /api/snapshots/<id>`** — the stored JPEG for a detection.
+- **`GET /api/cameras`** — every source that has reported, and its last state.
+
+### Feeding a pipeline
+
+The same three endpoints the trackers expose, so `pipeline-airflow` ingests this
+add-on with no new machinery:
+
+- **`GET /api/export`** — every tracked table plus the `max_seq` it corresponds
+  to. The bootstrap, and what to fall back to after a gap.
+- **`GET /api/changes?since=<seq>&limit=<n>`** — everything after a watermark.
+  The steady state. `full_reload_required` tells a consumer that has fallen
+  further behind than the retained history to bootstrap instead of silently
+  skipping rows.
+- **`GET /api/stats`** — row counts and database size **without serialising a
+  single row**, so the Add-on Watchdog can ask how much data there is once a
+  minute without being handed the data.
+
+**Snapshots are deliberately not in the feed.** Images live in their own table,
+which keeps a change event small by construction rather than by remembering to
+filter one out. A consumer that wants the picture asks for it by id.
 
 ### `GET /api/health`
 
@@ -95,6 +121,13 @@ path and any load error.
   which is noisier than it sounds — `chair`, `potted plant` and `tv` fire
   constantly indoors and bury the ones you would automate on. Unknown names are
   ignored rather than matching nothing.
+- **detection_retention_days**: `30` (default). How long a detection row is
+  kept.
+- **snapshot_retention_days**: `7` (default) / **snapshot_max_count**: `2000`.
+  Images are bounded by age *and* count, because either alone fails — a quiet
+  week keeps images longer than you meant, and a busy hour blows past any size
+  expectation well inside the age window. `/data` is inside Home Assistant's
+  backups, which is what makes the ceiling matter rather than just being tidy.
 - **model_path**: empty uses the bundled YOLOX-Nano. Point it at another ONNX
   file to swap models; it must be a YOLOX export at the same input size, and the
   add-on refuses one whose output shape disagrees rather than producing boxes in
@@ -144,8 +177,12 @@ The model is baked into the image, so the add-on needs no internet at any point.
 
 ## Notes
 
-- **Nothing is stored.** This release keeps no database and writes no images.
-  A detection is computed, returned and forgotten.
+- **Nothing is stored unless you ask.** A detection is computed, returned and
+  forgotten unless the call names a `camera`.
+- **Writes are batched, not per detection.** This host measures 286 durable
+  commits a second, a budget the pipeline's Postgres shares. A commit per
+  detection would compete with it directly and show up as rising disk write
+  latency while utilisation stayed flat.
 - **CPU only, by design.** Home Assistant OS makes GPU passthrough to add-ons
   awkward, and a 15 ms model does not need one.
 - **amd64 only.** opencv publishes aarch64 wheels, but a Pi-class board cannot
