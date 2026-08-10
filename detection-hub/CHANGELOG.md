@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.5.0
+
+- The sidebar page now shows **Last detected**: the most recent detection with
+  its snapshot, camera, confidence and time, and a strip of recent ones,
+  refreshing every ten seconds. It reads the `/api/detections` and
+  `/api/snapshots` endpoints that already existed, so it is a live view of what
+  the cameras see without opening Developer Tools. A detection whose snapshot
+  was already pruned shows without a thumbnail rather than a broken image.
+
 ## 1.4.0
 
 - **Camera-offline push notifications.** Set `notify_service` and you get a push

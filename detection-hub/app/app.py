@@ -21,7 +21,7 @@ import detector
 import hass
 import store
 
-APP_VERSION = "1.4.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.5.0"  # keep in sync with the "version" field in config.yaml
 
 OPTIONS_PATH = os.environ.get("DETECTION_HUB_OPTIONS_PATH", "/data/options.json")
 

@@ -29,6 +29,21 @@
     #preview { max-width: 100%; border-radius: 8px; margin-top: 1rem; display: none; }
     pre { background: #14161a; padding: .75rem; border-radius: 8px; overflow-x: auto;
           font-size: .85rem; }
+    .card h2 .muted { text-transform: none; letter-spacing: 0; color: #5f6672;
+                      font-weight: normal; float: right; }
+    .latest { display: flex; gap: 1rem; align-items: center; }
+    .latest img { width: 160px; height: 90px; object-fit: cover; border-radius: 8px;
+                  background: #14161a; flex: none; }
+    .latest .what { font-size: 1.5rem; text-transform: capitalize; }
+    .latest .meta { color: #9aa0a6; font-size: .9rem; }
+    .recent { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+              gap: .6rem; margin-top: 1rem; }
+    .shot { background: #14161a; border-radius: 8px; overflow: hidden; }
+    .shot img { width: 100%; height: 84px; object-fit: cover; display: block; background: #22262c; }
+    .shot .cap { padding: .3rem .5rem; font-size: .8rem; }
+    .shot .cap b { text-transform: capitalize; }
+    .shot .cap span { color: #9aa0a6; display: block; font-size: .72rem; }
+    .empty { color: #9aa0a6; }
   </style>
 </head>
 <body>
@@ -58,6 +73,12 @@
     <div class="labels">
       {% for label in labels %}<span class="chip">{{ label }}</span>{% endfor %}
     </div>
+  </div>
+
+  <div class="card">
+    <h2>Last detected <span class="muted" id="det-updated"></span></h2>
+    <div id="latest" class="latest"><span class="empty">Nothing detected yet.</span></div>
+    <div id="recent" class="recent"></div>
   </div>
 
   <div class="card">
@@ -106,6 +127,71 @@ async function send(image) {
     + data.detections.map(d => `  ${d.label}  ${d.confidence}  [${d.box}]`).join('\n');
   draw(image, data.detections);
 }
+
+// --- Last detected, polled ---------------------------------------------------
+// Same-origin relative URLs, and no auth header needed: through ingress the
+// browser is already an authenticated session, which is the whole point of
+// serving this behind the panel rather than the published port.
+const latest = document.getElementById('latest');
+const recent = document.getElementById('recent');
+const detUpdated = document.getElementById('det-updated');
+
+function ago(iso) {
+  // detected_at is local wall-clock 'YYYY-MM-DDTHH:MM:SS'; treat it as local.
+  const then = new Date(iso.replace(' ', 'T'));
+  const secs = Math.max(0, Math.round((Date.now() - then) / 1000));
+  if (secs < 60) return secs + 's ago';
+  if (secs < 3600) return Math.round(secs / 60) + 'm ago';
+  if (secs < 86400) return Math.round(secs / 3600) + 'h ago';
+  return Math.round(secs / 86400) + 'd ago';
+}
+
+function shotUrl(d) {
+  // A detection can outlive its snapshot (images are pruned sooner), so guard
+  // the missing case rather than requesting an id that 404s.
+  return d.snapshot_id ? `api/snapshots/${encodeURIComponent(d.snapshot_id)}` : null;
+}
+
+// Camera names come from the user's own config, but they still land in innerHTML
+// here, so escape them rather than trust them. Labels are a fixed COCO set;
+// escaped too, at no cost, so nothing interpolated below is an exception.
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, c => (
+    {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
+}
+
+async function loadDetections() {
+  let rows;
+  try {
+    const res = await fetch('api/detections?limit=13');
+    rows = (await res.json()).detections || [];
+  } catch (err) { return; }  // transient; the next tick tries again
+
+  if (!rows.length) {
+    latest.innerHTML = '<span class="empty">Nothing detected yet.</span>';
+    recent.innerHTML = '';
+    detUpdated.textContent = '';
+    return;
+  }
+
+  const [head, ...rest] = rows;
+  const headShot = shotUrl(head);
+  latest.innerHTML =
+    (headShot ? `<img src="${headShot}" alt="">` : '') +
+    `<div><div class="what">${esc(head.label)}</div>` +
+    `<div class="meta">${esc(head.camera)} · ${Math.round(head.confidence * 100)}% · ${ago(head.detected_at)}</div></div>`;
+  detUpdated.textContent = 'updated ' + new Date().toLocaleTimeString();
+
+  recent.innerHTML = rest.map(d => {
+    const s = shotUrl(d);
+    return `<div class="shot">${s ? `<img src="${s}" alt="">` : ''}` +
+      `<div class="cap"><b>${esc(d.label)}</b>` +
+      `<span>${esc(d.camera)} · ${ago(d.detected_at)}</span></div></div>`;
+  }).join('');
+}
+
+loadDetections();
+setInterval(loadDetections, 10000);
 
 function draw(imageFile, detections) {
   const img = new Image();

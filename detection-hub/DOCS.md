@@ -121,6 +121,14 @@ state shows on the sensors below and in the log, with or without a notify servic
 Camera names become entity ids with anything non-alphanumeric replaced, so
 `back garden` is `..._back_garden_online`.
 
+## The page
+
+The add-on's sidebar page shows **Last detected** — the most recent detection
+with its snapshot, camera, confidence and how long ago, and a strip of the ones
+before it. It refreshes every ten seconds, so it is a live view of what the
+cameras are seeing without leaving Home Assistant. A detection whose snapshot has
+already been pruned shows without a thumbnail rather than a broken image.
+
 ## Trying it
 
 Open the add-on from the sidebar and drop a photo onto the page. It draws the
