@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.6.0
+
+- **A stationary object is logged once, not on every frame.** A parked car was
+  re-detected whenever the wind, the light or the camera's exposure tripped the
+  motion gate — the old rule suppressed a label only for a fixed window and then
+  re-fired, and time cannot tell "same car, still parked" from "a new car
+  arrived". Detections are now matched to recent ones of the same label by box
+  overlap: a match is the same object still present and is suppressed however
+  long it stays, while something in a new position, or the same spot after it
+  emptied, is a fresh event. Expiry is driven by absence from the frames the
+  detector actually looks at, so a car on a still scene is never wrongly declared
+  gone and re-logged.
+- **New `collapse_repeats` option (default on)** to turn that off and log every
+  detection, for anyone who wants the raw stream.
+- `cooldown_seconds` keeps its name but now means how long an object must be
+  *absent* before a reappearance counts as new, rather than a fixed re-fire
+  timer.
+
 ## 1.5.0
 
 - The sidebar page now shows **Last detected**: the most recent detection with

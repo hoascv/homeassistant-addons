@@ -21,7 +21,7 @@ import detector
 import hass
 import store
 
-APP_VERSION = "1.5.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.6.0"  # keep in sync with the "version" field in config.yaml
 
 OPTIONS_PATH = os.environ.get("DETECTION_HUB_OPTIONS_PATH", "/data/options.json")
 
@@ -132,6 +132,7 @@ def get_capture_options():
         "max_fps": _float_option("max_fps", 2.0, 0.0, 30.0),
         "motion_threshold": _float_option("motion_threshold", 0.005, 0.0, 1.0),
         "cooldown_seconds": _int_option("cooldown_seconds", 30, 0, 3600),
+        "collapse_repeats": bool(_read_options().get("collapse_repeats", True)),
     }
 
 

@@ -156,52 +156,124 @@ def test_every_frame_is_read_even_though_few_are_considered(street, street_later
     assert worker.frames_considered < 30, "the sampling throttle did nothing"
 
 
-# --- the cooldown --------------------------------------------------------------
+# --- presence tracking: one event per object, not one per frame ---------------
 
 
-def test_the_same_label_is_reported_once_per_window():
-    cooldown = capture.Cooldown(seconds=30)
-    assert cooldown.allows("drive", "person", now=100) is True
-    assert cooldown.allows("drive", "person", now=110) is False
-    assert cooldown.allows("drive", "person", now=131) is True
+def _det(label="car", box=(100, 100, 40, 30)):
+    return {"label": label, "confidence": 0.9, "box": list(box)}
 
 
-def test_cooldown_is_per_camera_and_per_label():
-    """A car arriving while a person is already in view is news, and the back
-    garden is not the driveway."""
-    cooldown = capture.Cooldown(seconds=30)
-    assert cooldown.allows("drive", "person", now=100) is True
-    assert cooldown.allows("drive", "car", now=100) is True
-    assert cooldown.allows("garden", "person", now=100) is True
-    assert cooldown.allows("drive", "person", now=100) is False
+def test_iou_is_one_for_identical_boxes():
+    assert capture._iou([0, 0, 10, 10], [0, 0, 10, 10]) == 1.0
 
 
-def test_filter_keeps_only_what_is_off_cooldown():
-    cooldown = capture.Cooldown(seconds=30)
-    detections = [
-        {"label": "person", "confidence": 0.9, "box": [0, 0, 1, 1]},
-        {"label": "car", "confidence": 0.8, "box": [0, 0, 1, 1]},
-    ]
-    assert len(cooldown.filter("drive", detections, now=100)) == 2
-    again = cooldown.filter("drive", detections, now=105)
-    assert again == []
+def test_iou_is_zero_for_disjoint_boxes():
+    assert capture._iou([0, 0, 10, 10], [100, 100, 10, 10]) == 0.0
 
 
-def test_a_person_standing_still_produces_one_event_not_sixty(street, street_later):
-    """The database and the recorder both care about this more than the CPU
-    does."""
+def test_iou_is_partial_for_overlap():
+    # two 10x10 boxes offset by 5 in x: intersection 5x10=50, union 150.
+    assert capture._iou([0, 0, 10, 10], [5, 0, 10, 10]) == pytest.approx(50 / 150)
+
+
+def test_a_stationary_object_is_reported_once():
+    """The reported bug: a parked car re-detected whenever the light shifts must
+    log once, not on every frame the gate opens."""
+    t = capture.PresenceTracker(absent_seconds=30)
+    first = t.reconcile("drive", [_det()], now=0)
+    assert len(first) == 1, "the arrival should be reported"
+    # Re-detected, same spot, over the next few minutes — all suppressed.
+    for when in (35, 90, 200, 400):
+        assert t.reconcile("drive", [_det()], now=when) == []
+
+
+def test_a_slightly_drifting_box_is_still_the_same_object():
+    """Detector jitter nudges a parked car's box a few pixels; that is not a new
+    car."""
+    t = capture.PresenceTracker(absent_seconds=30)
+    t.reconcile("drive", [_det(box=(100, 100, 40, 30))], now=0)
+    assert t.reconcile("drive", [_det(box=(103, 98, 41, 30))], now=10) == []
+
+
+def test_an_object_in_a_new_place_is_a_new_event():
+    """A second car on the far side of the drive is news even while the first
+    sits there."""
+    t = capture.PresenceTracker(absent_seconds=30)
+    t.reconcile("drive", [_det(box=(100, 100, 40, 30))], now=0)
+    fresh = t.reconcile(
+        "drive", [_det(box=(100, 100, 40, 30)), _det(box=(500, 100, 40, 30))], now=5
+    )
+    assert len(fresh) == 1 and fresh[0]["box"] == [500, 100, 40, 30]
+
+
+def test_an_object_that_leaves_and_returns_is_logged_again():
+    """Once it has been absent from analysed frames past the grace, its return
+    is a fresh arrival."""
+    t = capture.PresenceTracker(absent_seconds=30)
+    t.reconcile("drive", [_det()], now=0)
+    # Frames with other activity but no car: it is absent, and after the grace
+    # the track is dropped.
+    t.reconcile("drive", [_det(label="person", box=(0, 0, 20, 40))], now=10)
+    t.reconcile("drive", [_det(label="person", box=(0, 0, 20, 40))], now=50)
+    assert t.reconcile("drive", [_det()], now=60) == [_det()]
+
+
+def test_a_single_missed_frame_does_not_count_as_leaving():
+    """Occlusion or a dropped detection for one frame must not fabricate a
+    departure and a re-arrival."""
+    t = capture.PresenceTracker(absent_seconds=30)
+    t.reconcile("drive", [_det()], now=0)
+    t.reconcile("drive", [], now=5)               # briefly not seen
+    assert t.reconcile("drive", [_det()], now=10) == []  # same car, still here
+
+
+def test_cameras_are_tracked_independently():
+    t = capture.PresenceTracker(absent_seconds=30)
+    assert len(t.reconcile("drive", [_det()], now=0)) == 1
+    assert len(t.reconcile("garden", [_det()], now=0)) == 1  # different camera
+
+
+def test_labels_are_tracked_independently():
+    """A car arriving where a person already stands is still news."""
+    t = capture.PresenceTracker(absent_seconds=30)
+    t.reconcile("drive", [_det(label="person", box=(100, 100, 40, 30))], now=0)
+    fresh = t.reconcile(
+        "drive",
+        [_det(label="person", box=(100, 100, 40, 30)),
+         _det(label="car", box=(100, 100, 40, 30))],
+        now=5,
+    )
+    assert [d["label"] for d in fresh] == ["car"]
+
+
+def test_a_parked_car_through_the_worker_logs_once(street, street_later):
+    """End to end: the same frames that flooded the log now yield one event."""
     det = CountingDetector()
     seen = []
-    frames = [street, street_later] * 30
     worker = capture.CameraWorker(
         "drive", "fake://", det, lambda *a: seen.append(a),
-        max_fps=0, cooldown=capture.Cooldown(seconds=3600),
-        capture_factory=lambda url: FakeCapture(frames),
+        max_fps=0, presence=capture.PresenceTracker(absent_seconds=3600),
+        capture_factory=lambda url: FakeCapture([street, street_later] * 30),
     )
     _run_worker(worker)
 
     assert det.calls > 1, "the detector should have run repeatedly"
-    assert len(seen) == 1, f"cooldown let {len(seen)} events through"
+    assert len(seen) == 1, f"presence tracking let {len(seen)} events through"
+
+
+def test_disabling_collapse_logs_every_detection(street, street_later):
+    """The toggle off: presence=None means no suppression, every detection
+    through the gate is emitted."""
+    det = CountingDetector()
+    seen = []
+    worker = capture.CameraWorker(
+        "drive", "fake://", det, lambda *a: seen.append(a),
+        max_fps=0, presence=None,
+        capture_factory=lambda url: FakeCapture([street, street_later] * 5),
+    )
+    _run_worker(worker)
+
+    assert len(seen) > 1, "with collapsing off, repeats should not be suppressed"
 
 
 # --- failure handling ----------------------------------------------------------

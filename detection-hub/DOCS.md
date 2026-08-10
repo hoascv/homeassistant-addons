@@ -42,9 +42,12 @@ three throttles sit between a camera and the model:
 2. **The motion gate** — a considered frame is compared against the previous one
    at 320 px greyscale. Unchanged frames never reach the detector. On a still
    scene this is the whole cost: a cheap comparison instead of a forward pass.
-3. **The cooldown** — one event per camera per label per **cooldown_seconds**.
-   A person standing in view is one event, not sixty. This protects the database
-   and Home Assistant's recorder rather than the CPU.
+3. **Collapse repeats** — one event per *object*, not per frame it is seen in.
+   A parked car does not move, but wind, shifting light and the camera's own
+   exposure keep tripping the gate, so the detector keeps finding the car sitting
+   there. Rather than log each of those, an object is matched to the last one of
+   its kind by position: same place, same object, logged once and then quiet
+   until it leaves. Turn it off with `collapse_repeats` to log every detection.
 
 The first frame after a camera connects always goes to the detector — it has no
 baseline to compare against, and a camera pointed at a parked car should report
@@ -252,8 +255,12 @@ path and any load error.
 - **motion_threshold**: `0.005` (default). The fraction of the frame that must
   change before the detector is woken. Raise it if a swaying tree keeps
   triggering; lower it if slow movement is missed.
-- **cooldown_seconds**: `30` (default). One event per camera per label per
-  window.
+- **collapse_repeats**: `true` (default). Log an object once while it stays in
+  view instead of repeatedly. A parked car logs on arrival and stays quiet until
+  it leaves; turn this off to record every detection the gate lets through.
+- **cooldown_seconds**: `30` (default). How long an object must be **absent**
+  from the frames the detector examines before it is treated as gone, so a later
+  reappearance is a new event. Only relevant while `collapse_repeats` is on.
 - **ha_sensors_enabled** / **ha_events_enabled**: both on. Turn events off if
   you only want the history and the lakehouse — that saves an HTTP call per
   detection.

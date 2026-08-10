@@ -241,4 +241,5 @@ def test_camera_options_are_parsed_and_clamped(client, set_options):
 def test_nonsense_capture_options_fall_back(client, set_options):
     set_options(max_fps="fast", motion_threshold=None, cooldown_seconds="soon")
     options = hub.get_capture_options()
-    assert options == {"max_fps": 2.0, "motion_threshold": 0.005, "cooldown_seconds": 30}
+    assert options == {"max_fps": 2.0, "motion_threshold": 0.005,
+                       "cooldown_seconds": 30, "collapse_repeats": True}

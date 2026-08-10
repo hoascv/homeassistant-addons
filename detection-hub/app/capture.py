@@ -36,6 +36,10 @@ os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp")
 RECONNECT_DELAY_SECONDS = 2
 RECONNECT_MAX_SECONDS = 60
 
+# Distinguishes "no tracker was passed, use the default" from "a tracker was
+# explicitly disabled (None)".
+_UNSET = object()
+
 
 def open_stream(url):
     """Open a video source. Separated so tests can substitute a fake."""
@@ -63,36 +67,100 @@ def _explain(exc):
     return text
 
 
-class Cooldown:
-    """One event per camera per label per window.
+# How much two boxes must overlap to be the same physical object between frames.
+# 0.3 rather than 0.5: at a couple of frames a second a walking person moves
+# enough that consecutive boxes only partly overlap, and treating that as two
+# people would defeat the point. A parked car overlaps itself almost completely.
+SAME_OBJECT_IOU = 0.3
 
-    Without this a person who stands still produces a detection every sampled
-    frame: hundreds of near-identical rows, hundreds of snapshots, and an
-    automation that fires until they move away.
+
+def _iou(a, b):
+    """Intersection-over-union of two [x, y, w, h] boxes, 0..1."""
+    ax, ay, aw, ah = a
+    bx, by, bw, bh = b
+    ix1, iy1 = max(ax, bx), max(ay, by)
+    ix2, iy2 = min(ax + aw, bx + bw), min(ay + ah, by + bh)
+    inter = max(0, ix2 - ix1) * max(0, iy2 - iy1)
+    if inter <= 0:
+        return 0.0
+    union = aw * ah + bw * bh - inter
+    return inter / union if union > 0 else 0.0
+
+
+class PresenceTracker:
+    """One event per object, not one per frame it happens to be seen.
+
+    The naive rule — suppress a label for N seconds after logging it — re-fires
+    the moment N elapses, so a parked car floods the log: it does not move, but
+    the wind, the light or the camera's own exposure keeps opening the motion
+    gate, the detector keeps finding the car sitting there, and every re-find
+    past the window reads as new. Time cannot tell "same car, still parked" from
+    "a different car arrived"; position can.
+
+    So a detection is matched to a remembered one of the same label by box
+    overlap. A match is the same object still present — its position is refreshed
+    and it is suppressed, however long it stays. A detection that matches nothing
+    is a genuine arrival and is emitted. A remembered object that stops appearing
+    in analysed frames is expired after `absent_seconds`, so when it finally
+    leaves and something new turns up, that is logged.
+
+    Expiry is driven by *absence from frames the detector looked at*, not by wall
+    clock, which is what makes it robust on a still scene: however rarely the
+    gate opens, a car that is present is in every frame the detector examines, so
+    it is never wrongly declared gone and never re-logged.
     """
 
-    def __init__(self, seconds=30):
-        self.seconds = seconds
-        self._last = {}
+    def __init__(self, absent_seconds=30, iou_threshold=SAME_OBJECT_IOU):
+        self.absent_seconds = absent_seconds
+        self.iou_threshold = iou_threshold
+        self._tracks = {}  # camera -> [{label, box, missed_since}]
         self._lock = threading.Lock()
 
-    def allows(self, camera, label, now=None):
-        now = now if now is not None else time.monotonic()
-        key = (camera, label)
-        with self._lock:
-            last = self._last.get(key)
-            if last is not None and now - last < self.seconds:
-                return False
-            self._last[key] = now
-            return True
+    def reconcile(self, camera, detections, now=None):
+        """Return only the detections that are new arrivals this frame.
 
-    def filter(self, camera, detections, now=None):
-        """Keep only the detections whose label is off cooldown.
-
-        Applied per label rather than per frame: a car arriving while a person
-        is already in view is news, even though the person is not.
+        `detections` is the whole frame's set, so absence is observable: a track
+        with no match here has not been seen, and after the grace period it is
+        dropped.
         """
-        return [d for d in detections if self.allows(camera, d["label"], now)]
+        now = now if now is not None else time.monotonic()
+        with self._lock:
+            tracks = self._tracks.get(camera, [])
+            claimed = set()
+            fresh = []
+
+            for det in detections:
+                best, best_iou = None, self.iou_threshold
+                for i, track in enumerate(tracks):
+                    if i in claimed or track["label"] != det["label"]:
+                        continue
+                    overlap = _iou(det["box"], track["box"])
+                    if overlap >= best_iou:
+                        best, best_iou = i, overlap
+                if best is not None:
+                    tracks[best]["box"] = det["box"]  # follow it if it drifts
+                    tracks[best]["missed_since"] = None
+                    claimed.add(best)
+                else:
+                    tracks.append(
+                        {"label": det["label"], "box": det["box"], "missed_since": None}
+                    )
+                    claimed.add(len(tracks) - 1)
+                    fresh.append(det)
+
+            survivors = []
+            for i, track in enumerate(tracks):
+                if i in claimed:
+                    survivors.append(track)
+                    continue
+                if track["missed_since"] is None:
+                    track["missed_since"] = now
+                # A single missed frame is flicker or a brief occlusion, not a
+                # departure; only give up after the grace period.
+                if now - track["missed_since"] < self.absent_seconds:
+                    survivors.append(track)
+            self._tracks[camera] = survivors
+            return fresh
 
 
 class CameraWorker(threading.Thread):
@@ -114,7 +182,7 @@ class CameraWorker(threading.Thread):
         motion_threshold=0.005,
         confidence=0.6,
         labels=None,
-        cooldown=None,
+        presence=_UNSET,
         capture_factory=open_stream,
         log=print,
     ):
@@ -131,7 +199,10 @@ class CameraWorker(threading.Thread):
         self.motion_threshold = float(motion_threshold)
         self.confidence = confidence
         self.labels = labels
-        self.cooldown = cooldown or Cooldown()
+        # A shared tracker collapses repeats to one event per object present;
+        # None turns that off and logs every detection the gate lets through.
+        # Omitted entirely (the standalone default) gets its own tracker.
+        self.presence = PresenceTracker() if presence is _UNSET else presence
         self.capture_factory = capture_factory
         self.log = log
 
@@ -234,7 +305,13 @@ class CameraWorker(threading.Thread):
             self.detail = error
             return
 
-        fresh = self.cooldown.filter(self.camera_id, detections)
+        # With a tracker, only genuine arrivals get through; without one, every
+        # detection does. The tracker is fed the whole frame's set either way so
+        # it can tell an object left.
+        if self.presence is not None:
+            fresh = self.presence.reconcile(self.camera_id, detections)
+        else:
+            fresh = detections
         if not fresh:
             return
 
@@ -282,7 +359,12 @@ class CaptureManager:
         """(re)start workers for `cameras`, a list of {"id", "url"} dicts."""
         with self._lock:
             self._stop_all()
-            cooldown = Cooldown(options.pop("cooldown_seconds", 30))
+            absent_seconds = options.pop("cooldown_seconds", 30)
+            collapse = options.pop("collapse_repeats", True)
+            # One tracker shared across the cameras, keyed by camera inside, so a
+            # car on the drive and a car in the street are tracked apart. None
+            # when the operator has turned collapsing off.
+            presence = PresenceTracker(absent_seconds=absent_seconds) if collapse else None
             for camera in cameras:
                 if not camera.get("url"):
                     continue
@@ -291,7 +373,7 @@ class CaptureManager:
                     camera["url"],
                     self.detector,
                     self.on_detections,
-                    cooldown=cooldown,
+                    presence=presence,
                     log=self.log,
                     **options,
                 )

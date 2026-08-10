@@ -1,5 +1,5 @@
 name: "Detection Hub"
-version: "1.5.0"
+version: "1.6.0"
 slug: "detection-hub"
 description: "Object detection for Home Assistant — an image in, what's in it out"
 url: "https://github.com/hoascv/homeassistant-addons/tree/main/detection-hub"
@@ -67,8 +67,14 @@ options:
   # cheap greyscale comparison instead of a forward pass. Raise it if a swaying
   # tree keeps triggering; lower it if slow movement is missed.
   motion_threshold: 0.005
-  # One event per camera per label per this many seconds. Without it a person
-  # standing in view produces a detection every sampled frame.
+  # Collapse repeats: log an object once while it stays in view, rather than
+  # again and again. A parked car in a busy scene (wind, shifting light) keeps
+  # tripping the motion gate and being re-detected; with this on, it is logged
+  # once and stays quiet until it leaves. Turn off to log every detection.
+  collapse_repeats: true
+  # How long an object must be ABSENT from the frames the detector looks at
+  # before a reappearance counts as new. While an object stays in view it is
+  # logged once regardless of this; this only governs re-logging after it leaves.
   cooldown_seconds: 30
   ha_sensors_enabled: true
   ha_events_enabled: true
@@ -97,6 +103,7 @@ schema:
   cameras: "str?"
   max_fps: "float(0,30)"
   motion_threshold: "float(0,1)"
+  collapse_repeats: "bool"
   cooldown_seconds: "int(0,3600)"
   ha_sensors_enabled: "bool"
   ha_events_enabled: "bool"
