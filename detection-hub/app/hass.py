@@ -84,6 +84,21 @@ def fire_event(camera, detection, snapshot_id=None, event_type=EVENT_TYPE):
     )[1]
 
 
+def notify(service, message, title="Detection Hub"):
+    """Send a push notification through a notify.* service, or report why not.
+
+    Same shape the trackers use: the service is stored without the `notify.`
+    prefix, because that is how a Home Assistant user names it and re-adding the
+    prefix here would only invite double-prefix mistakes.
+    """
+    service = (service or "").strip()
+    if not service:
+        return "no notify service configured"
+    return api_request(
+        "POST", f"/services/notify/{service}", {"message": message, "title": title}
+    )[1]
+
+
 def camera_snapshot(entity_id, timeout=10):
     """A still from a Home Assistant camera entity, as JPEG bytes.
 

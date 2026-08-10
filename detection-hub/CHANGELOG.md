@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.4.0
+
+- **Camera-offline push notifications.** Set `notify_service` and you get a push
+  when a camera drops and another when it recovers — on the transition, so a
+  camera down for an hour is one message rather than sixty. Offline includes a
+  **frozen feed**: a camera delivering no frame for `camera_offline_seconds`
+  (default 120) counts as down even if its thread never errored, which a plain
+  connection check would miss. A camera offline at first sight is recorded
+  without paging — the alert is for one that was working and stopped.
+- **A positive log line when a camera connects**, with the stream resolution:
+  `camera driveway: connected (640x360)`. A working camera used to produce only
+  silence, indistinguishable from one that never started — and the resolution is
+  otherwise nowhere, since many cameras' RTSP handshake does not advertise it.
+- **Readable connection failures.** A failed open now names the likely causes —
+  a rejected password, a wrong path, an unreachable camera — rather than leaving
+  only ffmpeg's raw error. On some cameras a wrong password surfaces as `406 Not
+  Acceptable`, which reads like a protocol fault; the message now says so.
+
 ## 1.3.0
 
 - **Snapshots are files now, not blobs in the database, and they are excluded

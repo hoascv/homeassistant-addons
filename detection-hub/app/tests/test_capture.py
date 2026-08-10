@@ -392,3 +392,65 @@ def test_rtsp_is_forced_over_tcp():
     """UDP over wifi yields torn frames, which the motion gate reads as movement
     and the detector then wakes for, all night."""
     assert "rtsp_transport;tcp" in os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"]
+
+
+# --- logging: positive confirmation and readable failures ---------------------
+
+
+def test_connecting_logs_a_positive_line(street):
+    """A working camera used to produce only silence — the same as one that
+    never started. The connected line is the confirmation frames are arriving."""
+    logs = []
+    worker = capture.CameraWorker(
+        "drive", "fake://", CountingDetector(), lambda *a: None,
+        max_fps=0, log=logs.append,
+        capture_factory=lambda url: FakeCapture([street] * 3),
+    )
+    _run_worker(worker)
+    assert any("connected" in line for line in logs), logs
+
+
+def test_the_connected_line_reports_the_resolution(street):
+    """The camera's RTSP SDP does not advertise dimensions on this hardware, so
+    the capture properties are the only place the resolution surfaces."""
+    logs = []
+
+    class SizedCapture(FakeCapture):
+        def get(self, prop):
+            import cv2
+            return {cv2.CAP_PROP_FRAME_WIDTH: 640,
+                    cv2.CAP_PROP_FRAME_HEIGHT: 480}.get(prop, 0)
+
+    worker = capture.CameraWorker(
+        "drive", "fake://", CountingDetector(), lambda *a: None,
+        max_fps=0, log=logs.append,
+        capture_factory=lambda url: SizedCapture([street] * 2),
+    )
+    _run_worker(worker)
+    assert any("640x480" in line for line in logs), logs
+
+
+def test_a_failed_open_explains_itself(street):
+    """The raw failure is 'could not open stream', which alongside an ffmpeg
+    401/406 above it is unactionable. The message now names the likely causes —
+    including that a rejected password shows as a protocol error on this
+    hardware, the trail that misled everyone."""
+    logs = []
+    worker = capture.CameraWorker(
+        "drive", "rtsp://nope", CountingDetector(), lambda *a: None,
+        log=logs.append,
+        capture_factory=lambda url: FakeCapture([], opened=False),
+    )
+    worker.start()
+    import time as _t
+    _t.sleep(0.3)
+    worker.stop()
+    worker.join(timeout=5)
+
+    failure = next((l for l in logs if "could not open" in l), "")
+    assert "credentials" in failure and "reachable" in failure, failure
+
+
+def test_explain_passes_other_errors_through():
+    assert "stream ended" in capture._explain(OSError("stream ended"))
+    assert capture._explain(OSError("x" * 500)).__len__() <= 200

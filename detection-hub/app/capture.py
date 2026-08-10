@@ -44,6 +44,25 @@ def open_stream(url):
     return cv2.VideoCapture(url)
 
 
+def _explain(exc):
+    """Turn a capture failure into something a person can act on.
+
+    OpenCV's ffmpeg backend prints the telling line — `401`, `406`, `Connection
+    refused` — to its own stderr, out of reach of this exception, which only ever
+    says "could not open stream". So the raw error is kept and a hint appended
+    for the causes worth naming: a wrong password reads as a protocol fault (this
+    hardware answers 406, not 401), which is exactly the trail that misleads.
+    """
+    text = str(exc)[:200]
+    if "could not open stream" in text:
+        return (
+            f"{text} — check the URL, the credentials (a rejected password can "
+            "show as an ffmpeg 401/406 line above), and that the camera is "
+            "reachable on the network"
+        )
+    return text
+
+
 class Cooldown:
     """One event per camera per label per window.
 
@@ -145,10 +164,19 @@ class CameraWorker(threading.Thread):
                 self.state = "ok"
                 self.detail = "streaming"
                 backoff = RECONNECT_DELAY_SECONDS
+                # A positive line, on purpose. The only stream log used to be the
+                # failure one, so a working camera produced silence — which reads
+                # the same as a camera that never started. This says, in the log,
+                # that frames are actually arriving, and at what size: the RTSP
+                # SDP on this hardware does not advertise dimensions, so the
+                # capture properties are the only place the resolution shows up.
+                width, height = self._dimensions(capture)
+                where = f" ({width}x{height})" if width else ""
+                self.log(f"camera {self.camera_id}: connected{where}")
                 self._read_until_failure(capture)
             except Exception as exc:  # noqa: BLE001 - a camera failing is routine
                 self.state = "error"
-                self.detail = str(exc)[:200]
+                self.detail = _explain(exc)
                 self.log(f"camera {self.camera_id}: {self.detail}")
             finally:
                 if capture is not None:
@@ -162,6 +190,16 @@ class CameraWorker(threading.Thread):
             # retried in a tight loop — that is its own kind of CPU burn.
             self._stopped.wait(backoff)
             backoff = min(RECONNECT_MAX_SECONDS, backoff * 2)
+
+    @staticmethod
+    def _dimensions(capture):
+        try:
+            import cv2
+
+            return (int(capture.get(cv2.CAP_PROP_FRAME_WIDTH)),
+                    int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT)))
+        except Exception:  # noqa: BLE001 - a fake capture in tests, or no cv2
+            return (0, 0)
 
     def _read_until_failure(self, capture):
         interval = (1.0 / self.max_fps) if self.max_fps else 0.0

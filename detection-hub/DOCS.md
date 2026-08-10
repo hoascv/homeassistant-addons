@@ -50,8 +50,17 @@ The first frame after a camera connects always goes to the detector — it has n
 baseline to compare against, and a camera pointed at a parked car should report
 it rather than wait for it to move.
 
+When a camera connects, the log says so — `camera driveway: connected
+(640x360)` — with the stream's resolution, which is the one place it shows up
+since the RTSP handshake on many cameras does not advertise it. A working camera
+that produced only silence used to be indistinguishable from one that never
+started.
+
 If a camera drops, it reconnects with a widening backoff up to a minute, so a
-rebooting camera is not retried in a tight loop.
+rebooting camera is not retried in a tight loop. A failure to open now names the
+likely causes — a rejected password, a wrong path, an unreachable camera —
+rather than only echoing ffmpeg's raw error (on some cameras a bad password
+even shows as a `406`, which reads like a protocol fault and is not).
 
 ## Home Assistant
 
@@ -79,6 +88,22 @@ automation:
 Events rather than states, because a detection happens at an instant. As a state
 two in a row look like one, and an automation watching for a change misses the
 second entirely.
+
+### A camera going offline
+
+Set **notify_service** to a `notify.*` service (without the `notify.` prefix,
+e.g. `mobile_app_pixel`) and you get a push when a camera drops — and another
+when it comes back. It fires on the *change*, so a camera down for an hour is one
+message, not sixty.
+
+Offline includes a **frozen feed**, not just a dropped connection: a camera that
+delivers no frame for **camera_offline_seconds** (default 120) is offline even if
+its thread never errored. That is the failure a plain connection check misses.
+
+The first time the add-on sees a camera it records its state without notifying —
+a camera still connecting at startup, or misconfigured from the start, should not
+page you. The alert is for a camera that was working and stopped. Either way the
+state shows on the sensors below and in the log, with or without a notify service.
 
 ### Sensors — for dashboards
 
@@ -225,6 +250,11 @@ path and any load error.
   you only want the history and the lakehouse — that saves an HTTP call per
   detection.
 - **sensor_prefix**: `detection_hub` (default). The entity-id prefix.
+- **notify_service**: a `notify.*` service (no `notify.` prefix) for
+  camera-offline push alerts. Empty means no push — the state still shows on the
+  sensors and in the log.
+- **camera_offline_seconds**: `120` (default). How long without a frame before a
+  camera counts as offline. Covers a hung feed, not just a dropped connection.
 - **model_path**: empty uses the bundled YOLOX-Nano. Point it at another ONNX
   file to swap models; it must be a YOLOX export at the same input size, and the
   add-on refuses one whose output shape disagrees rather than producing boxes in

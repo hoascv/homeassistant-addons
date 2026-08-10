@@ -12,7 +12,7 @@ import signal
 import sys
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from flask import Flask, Response, g, jsonify, render_template, request, send_file
 
@@ -21,7 +21,7 @@ import detector
 import hass
 import store
 
-APP_VERSION = "1.3.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.4.0"  # keep in sync with the "version" field in config.yaml
 
 OPTIONS_PATH = os.environ.get("DETECTION_HUB_OPTIONS_PATH", "/data/options.json")
 
@@ -43,6 +43,14 @@ app.config["MAX_CONTENT_LENGTH"] = MAX_IMAGE_BYTES
 _detector = None
 _detector_lock = threading.Lock()
 _capture = None
+
+# Per-camera online/offline memory, so a notification fires on the *transition*
+# rather than every minute a camera stays down. Seeded on first sighting without
+# a notification: a camera still connecting at the first health check should not
+# page anyone, and a camera broken from boot is a config error you are already
+# watching for — the surprise worth paging on is one that was working and
+# stopped.
+_camera_online = {}
 
 
 def _log(msg):
@@ -140,6 +148,8 @@ def get_ha_config():
         "sensors": bool(options.get("ha_sensors_enabled", True)),
         "events": bool(options.get("ha_events_enabled", True)),
         "prefix": (options.get("sensor_prefix") or "detection_hub").strip(),
+        "notify_service": (options.get("notify_service") or "").strip(),
+        "offline_seconds": _int_option("camera_offline_seconds", 120, 30, 3600),
     }
 
 
@@ -546,8 +556,57 @@ def _camera_rows():
     return rows
 
 
+def _camera_is_online(row, offline_seconds, now=None):
+    """Online means: a live thread, in the ok state, that produced a frame
+    recently.
+
+    The staleness check is the one that catches a hung stream — a camera whose
+    thread is alive and never threw, but whose frames stopped arriving. Without
+    it a frozen feed reads as healthy, which is the failure a watchdog exists to
+    catch rather than miss.
+    """
+    if not row.get("alive") or row.get("state") != "ok":
+        return False
+    last = row.get("last_frame_at")
+    if not last:
+        return False
+    try:
+        seen = datetime.strptime(last, "%Y-%m-%dT%H:%M:%S")
+    except (TypeError, ValueError):
+        return False
+    return (now or datetime.now()) - seen <= timedelta(seconds=offline_seconds)
+
+
+def _check_camera_health(cameras, ha, now=None):
+    """Notify on a camera crossing between online and offline. Returns the
+    transitions, so the loop can log them and a test can assert on them."""
+    transitions = []
+    for row in cameras:
+        camera_id = row["id"]
+        online = _camera_is_online(row, ha["offline_seconds"], now=now)
+        previous = _camera_online.get(camera_id)
+        _camera_online[camera_id] = online
+
+        if previous is None or previous == online:
+            continue  # first sighting, or no change — neither is news
+
+        transitions.append((camera_id, online))
+        if online:
+            message, log = f"{camera_id} camera back online", "recovered"
+        else:
+            detail = (row.get("detail") or "no recent frames").strip()
+            message, log = f"{camera_id} camera offline — {detail}", "offline"
+        _log(f"camera {camera_id}: {log}"
+             + ("" if not ha["notify_service"] else " (notifying)"))
+        if ha["notify_service"]:
+            error = hass.notify(ha["notify_service"], message)
+            if error:
+                _log(f"could not notify about {camera_id}: {error}")
+    return transitions
+
+
 def _publish(conn):
-    """Sensors and the watchdog status file, once a minute."""
+    """Sensors, the camera watchdog, and the add-on's own status file."""
     ha = get_ha_config()
     cameras = _camera_rows()
     metrics = get_capture().metrics()
@@ -560,6 +619,8 @@ def _publish(conn):
         )
         for error in errors:
             _log(f"could not publish sensor {error}")
+
+    _check_camera_health(cameras, ha)
 
     # The watchdog's own view. `ok` is false when the detector is broken or when
     # a configured camera is not running — the two failures an HTTP probe of

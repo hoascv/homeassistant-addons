@@ -1,5 +1,5 @@
 name: "Detection Hub"
-version: "1.3.0"
+version: "1.4.0"
 slug: "detection-hub"
 description: "Object detection for Home Assistant — an image in, what's in it out"
 url: "https://github.com/hoascv/homeassistant-addons/tree/main/detection-hub"
@@ -73,6 +73,14 @@ options:
   ha_sensors_enabled: true
   ha_events_enabled: true
   sensor_prefix: "detection_hub"
+  # The notify.* service for camera-offline alerts, WITHOUT the "notify."
+  # prefix — e.g. "mobile_app_pixel". Empty means no push notifications; the
+  # offline state still shows on the sensors and in the log regardless.
+  notify_service: ""
+  # How long a camera can go without delivering a frame before it counts as
+  # offline. Covers a hung stream, not just a dropped connection — a frozen feed
+  # whose thread never errors is exactly what a watchdog should catch.
+  camera_offline_seconds: 120
   # Retention, bounded two ways because either alone fails: a quiet week keeps
   # images longer than intended, and a busy hour blows past any size
   # expectation well inside the age window. /data is inside Home Assistant's
@@ -93,6 +101,8 @@ schema:
   ha_sensors_enabled: "bool"
   ha_events_enabled: "bool"
   sensor_prefix: "str"
+  notify_service: "str?"
+  camera_offline_seconds: "int(30,3600)"
   detection_retention_days: "int(1,3650)"
   snapshot_retention_days: "int(1,365)"
   snapshot_max_count: "int(0,100000)"
