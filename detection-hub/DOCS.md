@@ -132,6 +132,17 @@ before it. It refreshes every ten seconds, so it is a live view of what the
 cameras are seeing without leaving Home Assistant. A detection whose snapshot has
 already been pruned shows without a thumbnail rather than a broken image.
 
+**Click any snapshot to expand it** — it opens full size with the detection's
+bounding box drawn on, plus the label, camera, confidence and timestamp. Click
+outside it or press Escape to close.
+
+**Pick a date range** with the From / To fields to browse past detections
+instead of the live view; either field works on its own, and **Clear** returns
+to live. Bear in mind snapshots are pruned on their own schedule
+(`snapshot_retention_days`), so an old day may list detections whose images are
+already gone — they show without a thumbnail. Detections themselves are kept for
+`detection_retention_days`, so a range older than that will be empty.
+
 ## Trying it
 
 Open the add-on from the sidebar and drop a photo onto the page. It draws the

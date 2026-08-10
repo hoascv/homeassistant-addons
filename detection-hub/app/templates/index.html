@@ -44,6 +44,25 @@
     .shot .cap b { text-transform: capitalize; }
     .shot .cap span { color: #9aa0a6; display: block; font-size: .72rem; }
     .empty { color: #9aa0a6; }
+    .latest img, .shot img { cursor: zoom-in; }
+    .filter { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center;
+              margin-bottom: 1rem; font-size: .85rem; color: #9aa0a6; }
+    .filter input { background: #14161a; color: #e8eaed; border: 1px solid #2c3037;
+                    border-radius: 6px; padding: .3rem .5rem; font: inherit;
+                    color-scheme: dark; }
+    .filter button { background: #2a2f37; color: #e8eaed; border: 0;
+                     border-radius: 6px; padding: .35rem .7rem; cursor: pointer; }
+    .filter button:hover { background: #3a4049; }
+    /* Lightbox */
+    #lb { position: fixed; inset: 0; background: rgba(0,0,0,.85); display: none;
+          align-items: center; justify-content: center; padding: 1.5rem; z-index: 50; }
+    #lb.open { display: flex; }
+    #lb .box { max-width: 100%; max-height: 100%; text-align: center; }
+    #lb canvas { max-width: 100%; max-height: 80vh; border-radius: 8px; background: #000; }
+    #lb .lbmeta { color: #e8eaed; margin-top: .6rem; }
+    #lb .lbmeta span { color: #9aa0a6; }
+    #lb .close { position: fixed; top: 1rem; right: 1.25rem; font-size: 2rem;
+                 color: #e8eaed; cursor: pointer; line-height: 1; }
   </style>
 </head>
 <body>
@@ -77,6 +96,12 @@
 
   <div class="card">
     <h2>Last detected <span class="muted" id="det-updated"></span></h2>
+    <div class="filter">
+      <label>From <input type="date" id="from"></label>
+      <label>To <input type="date" id="to"></label>
+      <button type="button" id="clear-dates">Clear</button>
+      <span id="filter-note"></span>
+    </div>
     <div id="latest" class="latest"><span class="empty">Nothing detected yet.</span></div>
     <div id="recent" class="recent"></div>
   </div>
@@ -89,6 +114,14 @@
     </div>
     <img id="preview" alt="annotated result">
     <pre id="out" hidden></pre>
+  </div>
+</div>
+
+<div id="lb">
+  <span class="close" id="lb-close">&times;</span>
+  <div class="box">
+    <canvas id="lb-canvas"></canvas>
+    <div class="lbmeta" id="lb-meta"></div>
   </div>
 </div>
 
@@ -160,38 +193,116 @@ function esc(s) {
     {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
 }
 
+const fromInput = document.getElementById('from');
+const toInput = document.getElementById('to');
+const filterNote = document.getElementById('filter-note');
+let detById = {};  // id -> detection, so a click can open the right one
+
+function dateFiltered() {
+  return Boolean(fromInput.value || toInput.value);
+}
+
 async function loadDetections() {
+  const params = new URLSearchParams();
+  // A day can hold far more than the live view's handful, so ask for more when
+  // a range is set.
+  params.set('limit', dateFiltered() ? '200' : '13');
+  if (fromInput.value) params.set('from', fromInput.value);
+  if (toInput.value) params.set('to', toInput.value);
+
   let rows;
   try {
-    const res = await fetch('api/detections?limit=13');
+    const res = await fetch('api/detections?' + params.toString());
     rows = (await res.json()).detections || [];
   } catch (err) { return; }  // transient; the next tick tries again
 
-  if (!rows.length) {
-    latest.innerHTML = '<span class="empty">Nothing detected yet.</span>';
-    recent.innerHTML = '';
+  detById = {};
+  for (const d of rows) detById[d.id] = d;
+
+  if (dateFiltered()) {
+    const span = [fromInput.value || '…', toInput.value || '…'].join(' → ');
+    filterNote.textContent = `${rows.length} in ${span}`;
     detUpdated.textContent = '';
+  } else {
+    filterNote.textContent = '';
+    detUpdated.textContent = rows.length ? 'updated ' + new Date().toLocaleTimeString() : '';
+  }
+
+  if (!rows.length) {
+    latest.innerHTML = '<span class="empty">Nothing '
+      + (dateFiltered() ? 'in that range.' : 'detected yet.') + '</span>';
+    recent.innerHTML = '';
     return;
   }
 
   const [head, ...rest] = rows;
   const headShot = shotUrl(head);
   latest.innerHTML =
-    (headShot ? `<img src="${headShot}" alt="">` : '') +
+    (headShot ? `<img data-id="${head.id}" src="${headShot}" alt="">` : '') +
     `<div><div class="what">${esc(head.label)}</div>` +
     `<div class="meta">${esc(head.camera)} · ${Math.round(head.confidence * 100)}% · ${ago(head.detected_at)}</div></div>`;
-  detUpdated.textContent = 'updated ' + new Date().toLocaleTimeString();
 
   recent.innerHTML = rest.map(d => {
     const s = shotUrl(d);
-    return `<div class="shot">${s ? `<img src="${s}" alt="">` : ''}` +
+    return `<div class="shot">${s ? `<img data-id="${d.id}" src="${s}" alt="">` : ''}` +
       `<div class="cap"><b>${esc(d.label)}</b>` +
       `<span>${esc(d.camera)} · ${ago(d.detected_at)}</span></div></div>`;
   }).join('');
 }
 
+// One refresh loop. It keeps ticking while a range is set (harmless — the same
+// past set comes back), so switching back to live needs no special resume.
 loadDetections();
 setInterval(loadDetections, 10000);
+
+fromInput.addEventListener('change', loadDetections);
+toInput.addEventListener('change', loadDetections);
+document.getElementById('clear-dates').addEventListener('click', () => {
+  fromInput.value = ''; toInput.value = ''; loadDetections();
+});
+
+// --- Lightbox: expand a snapshot, with its detection box drawn on ------------
+const lb = document.getElementById('lb');
+const lbCanvas = document.getElementById('lb-canvas');
+const lbMeta = document.getElementById('lb-meta');
+
+function openLightbox(det) {
+  const url = shotUrl(det);
+  if (!url) return;  // its snapshot was pruned; nothing to expand
+  const img = new Image();
+  img.onload = () => {
+    lbCanvas.width = img.naturalWidth;
+    lbCanvas.height = img.naturalHeight;
+    const ctx = lbCanvas.getContext('2d');
+    ctx.drawImage(img, 0, 0);
+    // The box is in the captured frame's pixels — the same space as this image,
+    // since the snapshot is that frame — so it is drawn without scaling.
+    if (Number.isFinite(det.box_x)) {
+      ctx.lineWidth = Math.max(2, img.naturalWidth / 300);
+      ctx.strokeStyle = '#6ddb8c';
+      ctx.strokeRect(det.box_x, det.box_y, det.box_w, det.box_h);
+    }
+    lbMeta.innerHTML = `<b style="text-transform:capitalize">${esc(det.label)}</b> ` +
+      `<span>${esc(det.camera)} · ${Math.round(det.confidence * 100)}% · ` +
+      `${esc(det.detected_at.replace('T', ' '))}</span>`;
+    lb.classList.add('open');
+  };
+  img.onerror = () => { /* pruned between listing and click; just don't open */ };
+  img.src = url;
+}
+
+function closeLightbox() { lb.classList.remove('open'); }
+
+// Delegate clicks from either the hero or the strip to the detection they name.
+document.getElementById('latest').addEventListener('click', onThumbClick);
+document.getElementById('recent').addEventListener('click', onThumbClick);
+function onThumbClick(e) {
+  const img = e.target.closest('img[data-id]');
+  if (img && detById[img.dataset.id]) openLightbox(detById[img.dataset.id]);
+}
+document.getElementById('lb-close').addEventListener('click', closeLightbox);
+lb.addEventListener('click', e => { if (e.target === lb) closeLightbox(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeLightbox(); });
 
 function draw(imageFile, detections) {
   const img = new Image();

@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.7.0
+
+- **Click a snapshot to expand it.** The sidebar page opens any detection full
+  size with its bounding box drawn on and the label, camera, confidence and time
+  beneath — click outside or press Escape to close.
+- **Browse past detections by date.** From / To fields filter the list to a day
+  or a range (either bound works alone; Clear returns to the live view), backed
+  by new `from`/`to` parameters on `/api/detections`. A malformed date is a 400
+  rather than a silent all-results.
+- Both build only on data already stored — the box coordinates and `detected_at`
+  were always there; nothing new is recorded.
+
 ## 1.6.0
 
 - **A stationary object is logged once, not on every frame.** A parked car was

@@ -8,6 +8,7 @@ import hmac
 import html
 import json
 import os
+import re
 import signal
 import sys
 import threading
@@ -21,7 +22,7 @@ import detector
 import hass
 import store
 
-APP_VERSION = "1.6.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.7.0"  # keep in sync with the "version" field in config.yaml
 
 OPTIONS_PATH = os.environ.get("DETECTION_HUB_OPTIONS_PATH", "/data/options.json")
 
@@ -452,14 +453,33 @@ def api_stats():
 # --- reading what was seen ----------------------------------------------------
 
 
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _date_arg(name):
+    """An optional YYYY-MM-DD query arg, or a 400-worthy ValueError."""
+    value = (request.args.get(name) or "").strip()
+    if not value:
+        return None
+    if not _DATE_RE.match(value):
+        raise ValueError(name)
+    return value
+
+
 @app.route("/api/detections")
 def api_detections():
+    try:
+        date_from, date_to = _date_arg("from"), _date_arg("to")
+    except ValueError as exc:
+        return jsonify({"error": f"{exc} must be YYYY-MM-DD"}), 400
     return jsonify(
         {
             "detections": store.recent_detections(
                 get_db(),
                 limit=request.args.get("limit", 50),
                 camera=request.args.get("camera"),
+                date_from=date_from,
+                date_to=date_to,
             )
         }
     )

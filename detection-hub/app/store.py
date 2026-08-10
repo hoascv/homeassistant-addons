@@ -613,12 +613,28 @@ def stats(conn, db_path=None):
 # --- reading for the UI and sensors -------------------------------------------
 
 
-def recent_detections(conn, limit=50, camera=None):
-    sql = "SELECT * FROM detections"
-    params = []
+def recent_detections(conn, limit=50, camera=None, date_from=None, date_to=None):
+    """Recent detections, newest first, optionally by camera and date range.
+
+    `date_from`/`date_to` are inclusive `YYYY-MM-DD` days, compared against the
+    date part of `detected_at` — which is stored as local `YYYY-MM-DDT…`, so a
+    prefix comparison is exact and needs no parsing. Either bound may be given
+    alone.
+    """
+    clauses, params = [], []
     if camera:
-        sql += " WHERE camera = ?"
+        clauses.append("camera = ?")
         params.append(camera)
+    if date_from:
+        clauses.append("substr(detected_at, 1, 10) >= ?")
+        params.append(date_from)
+    if date_to:
+        clauses.append("substr(detected_at, 1, 10) <= ?")
+        params.append(date_to)
+
+    sql = "SELECT * FROM detections"
+    if clauses:
+        sql += " WHERE " + " AND ".join(clauses)
     sql += " ORDER BY id DESC LIMIT ?"
     params.append(max(1, min(500, int(limit))))
     return [dict(row) for row in conn.execute(sql, params).fetchall()]

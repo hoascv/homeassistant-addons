@@ -158,6 +158,49 @@ def test_detections_can_be_filtered_by_camera(client, street_jpeg):
     assert {r["camera"] for r in rows} == {"a"}
 
 
+def test_detections_can_be_filtered_by_date_range(client, street_jpeg, db_path):
+    """The calendar picker's backend. Rows are placed on known days directly,
+    since the API always stamps 'now'."""
+    import store
+
+    client.post("/api/detect?camera=drive", data=street_jpeg)  # today, with a snapshot
+    conn = store.connect(db_path, actor="user")
+    for day in ("2026-01-10", "2026-02-15", "2026-03-20"):
+        store.record_detections(conn, "drive",
+                                [{"label": "car", "confidence": 0.9, "box": [1, 2, 3, 4]}],
+                                at=f"{day}T12:00:00")
+    conn.commit(); conn.close()
+
+    got = client.get("/api/detections?from=2026-02-01&to=2026-02-28").get_json()["detections"]
+    assert [d["detected_at"][:10] for d in got] == ["2026-02-15"]
+
+
+def test_a_single_bound_works_alone(client, street_jpeg, db_path):
+    import store
+    conn = store.connect(db_path, actor="user")
+    for day in ("2026-01-10", "2026-03-20"):
+        store.record_detections(conn, "drive",
+                                [{"label": "car", "confidence": 0.9, "box": [1, 2, 3, 4]}],
+                                at=f"{day}T12:00:00")
+    conn.commit(); conn.close()
+
+    after = client.get("/api/detections?from=2026-02-01").get_json()["detections"]
+    assert [d["detected_at"][:10] for d in after] == ["2026-03-20"]
+    before = client.get("/api/detections?to=2026-02-01").get_json()["detections"]
+    assert [d["detected_at"][:10] for d in before] == ["2026-01-10"]
+
+
+def test_a_malformed_date_is_a_400(client):
+    res = client.get("/api/detections?from=last-tuesday")
+    assert res.status_code == 400
+    assert "from must be YYYY-MM-DD" in res.get_json()["error"]
+
+
+def test_no_date_is_the_live_view(client, street_jpeg):
+    client.post("/api/detect?camera=drive", data=street_jpeg)
+    assert client.get("/api/detections").get_json()["detections"]
+
+
 def test_cameras_lists_what_has_been_seen(client, street_jpeg):
     client.post("/api/detect?camera=front_door", data=street_jpeg)
     cameras = client.get("/api/cameras").get_json()["cameras"]
