@@ -22,7 +22,7 @@ import detector
 import hass
 import store
 
-APP_VERSION = "1.7.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.8.0"  # keep in sync with the "version" field in config.yaml
 
 OPTIONS_PATH = os.environ.get("DETECTION_HUB_OPTIONS_PATH", "/data/options.json")
 
@@ -453,25 +453,48 @@ def api_stats():
 # --- reading what was seen ----------------------------------------------------
 
 
-_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+# A date, a date-and-minute (what a datetime-local picker sends), or a full
+# timestamp. Anything else is a 400 rather than a silently ignored filter.
+_WHEN_RE = re.compile(r"^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2})?)?$")
 
 
-def _date_arg(name):
-    """An optional YYYY-MM-DD query arg, or a 400-worthy ValueError."""
+def _time_bound(name, *, end):
+    """An optional lower/upper time bound, widened to the edge of its precision.
+
+    A bound has to be inclusive of everything it names: `to=2026-08-09` should
+    include all of that day, and `to=…T14:30` all of that minute. So a date-only
+    or minute-only value is stretched to the end of the day/minute for an upper
+    bound, and to the start for a lower one — otherwise `detected_at <= to`
+    would drop the very rows the reader meant to include, because a full
+    timestamp sorts after the shorter prefix.
+    """
     value = (request.args.get(name) or "").strip()
     if not value:
         return None
-    if not _DATE_RE.match(value):
+    if not _WHEN_RE.match(value):
         raise ValueError(name)
-    return value
+    if len(value) == 10:       # date only
+        full = value + ("T23:59:59" if end else "T00:00:00")
+    elif len(value) == 16:     # date and minute
+        full = value + (":59" if end else ":00")
+    else:
+        full = value           # full timestamp
+    # The regex only checks shape; parse it so 2026-13-40 or T25:99 are refused
+    # rather than compared as nonsense strings.
+    try:
+        datetime.strptime(full, "%Y-%m-%dT%H:%M:%S")
+    except ValueError as exc:
+        raise ValueError(name) from exc
+    return full
 
 
 @app.route("/api/detections")
 def api_detections():
     try:
-        date_from, date_to = _date_arg("from"), _date_arg("to")
+        date_from = _time_bound("from", end=False)
+        date_to = _time_bound("to", end=True)
     except ValueError as exc:
-        return jsonify({"error": f"{exc} must be YYYY-MM-DD"}), 400
+        return jsonify({"error": f"{exc} must be a date or date-time"}), 400
     return jsonify(
         {
             "detections": store.recent_detections(

@@ -190,10 +190,63 @@ def test_a_single_bound_works_alone(client, street_jpeg, db_path):
     assert [d["detected_at"][:10] for d in before] == ["2026-01-10"]
 
 
+def test_detections_can_be_filtered_by_time_within_a_day(client, db_path):
+    """The point of adding time: pick a window inside a single day."""
+    import store
+
+    conn = store.connect(db_path, actor="user")
+    for hhmm in ("08:00", "12:30", "18:45"):
+        store.record_detections(conn, "drive",
+                                [{"label": "car", "confidence": 0.9, "box": [1, 2, 3, 4]}],
+                                at=f"2026-08-09T{hhmm}:00")
+    conn.commit(); conn.close()
+
+    got = client.get(
+        "/api/detections?from=2026-08-09T12:00&to=2026-08-09T13:00"
+    ).get_json()["detections"]
+    assert [d["detected_at"] for d in got] == ["2026-08-09T12:30:00"]
+
+
+def test_a_date_only_bound_still_covers_the_whole_day(client, db_path):
+    """Backward compatible: a plain date must include midnight-to-midnight, not
+    stop at 00:00:00 — which is what a naive `<=` comparison would do."""
+    import store
+
+    conn = store.connect(db_path, actor="user")
+    for hhmm in ("00:00", "23:59"):
+        store.record_detections(conn, "drive",
+                                [{"label": "car", "confidence": 0.9, "box": [1, 2, 3, 4]}],
+                                at=f"2026-08-09T{hhmm}:00")
+    conn.commit(); conn.close()
+
+    got = client.get("/api/detections?from=2026-08-09&to=2026-08-09").get_json()["detections"]
+    assert len(got) == 2, "a date-only range dropped part of its own day"
+
+
+def test_a_minute_bound_is_inclusive_of_that_minute(client, db_path):
+    import store
+
+    conn = store.connect(db_path, actor="user")
+    store.record_detections(conn, "drive",
+                            [{"label": "car", "confidence": 0.9, "box": [1, 2, 3, 4]}],
+                            at="2026-08-09T14:30:45")
+    conn.commit(); conn.close()
+
+    got = client.get(
+        "/api/detections?from=2026-08-09T14:30&to=2026-08-09T14:30"
+    ).get_json()["detections"]
+    assert len(got) == 1, "a :45 detection was excluded by a same-minute bound"
+
+
 def test_a_malformed_date_is_a_400(client):
     res = client.get("/api/detections?from=last-tuesday")
     assert res.status_code == 400
-    assert "from must be YYYY-MM-DD" in res.get_json()["error"]
+    assert "from must be a date or date-time" in res.get_json()["error"]
+
+
+def test_a_malformed_time_is_a_400(client):
+    res = client.get("/api/detections?to=2026-08-09T25:99")
+    assert res.status_code == 400
 
 
 def test_no_date_is_the_live_view(client, street_jpeg):

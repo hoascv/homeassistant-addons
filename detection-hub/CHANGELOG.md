@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.8.0
+
+- **The date filter now includes time.** The From / To fields are date-and-time
+  pickers, so you can narrow to a window within a day rather than a whole day at
+  a time. `/api/detections` `from`/`to` accept a date (`2026-08-09`), a
+  date-and-minute (`2026-08-09T18:00`), or a full timestamp; a date-only bound
+  still covers midnight to midnight, so existing date-only use is unchanged.
+- An impossible date or time (`2026-13-40`, `T25:99`) is a 400 rather than a
+  filter that quietly matches nothing — the shape *and* the values are checked.
+
 ## 1.7.0
 
 - **Click a snapshot to expand it.** The sidebar page opens any detection full

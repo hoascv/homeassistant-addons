@@ -614,22 +614,25 @@ def stats(conn, db_path=None):
 
 
 def recent_detections(conn, limit=50, camera=None, date_from=None, date_to=None):
-    """Recent detections, newest first, optionally by camera and date range.
+    """Recent detections, newest first, optionally by camera and time range.
 
-    `date_from`/`date_to` are inclusive `YYYY-MM-DD` days, compared against the
-    date part of `detected_at` — which is stored as local `YYYY-MM-DDT…`, so a
-    prefix comparison is exact and needs no parsing. Either bound may be given
-    alone.
+    `date_from`/`date_to` are inclusive bounds compared directly against
+    `detected_at`, which is stored as local `YYYY-MM-DDTHH:MM:SS`. That format
+    sorts lexicographically, so a plain string comparison is an exact
+    chronological one — no parsing, and it works whether the caller passes a
+    whole timestamp or just a date. The caller is responsible for widening a
+    date-only bound to the right edge of the day (see the endpoint); here the
+    bounds are used as given. Either may be omitted.
     """
     clauses, params = [], []
     if camera:
         clauses.append("camera = ?")
         params.append(camera)
     if date_from:
-        clauses.append("substr(detected_at, 1, 10) >= ?")
+        clauses.append("detected_at >= ?")
         params.append(date_from)
     if date_to:
-        clauses.append("substr(detected_at, 1, 10) <= ?")
+        clauses.append("detected_at <= ?")
         params.append(date_to)
 
     sql = "SELECT * FROM detections"

@@ -136,9 +136,13 @@ already been pruned shows without a thumbnail rather than a broken image.
 bounding box drawn on, plus the label, camera, confidence and timestamp. Click
 outside it or press Escape to close.
 
-**Pick a date range** with the From / To fields to browse past detections
-instead of the live view; either field works on its own, and **Clear** returns
-to live. Bear in mind snapshots are pruned on their own schedule
+**Pick a date-and-time range** with the From / To fields to browse past
+detections instead of the live view — down to the minute, so you can narrow to,
+say, 6–7pm on one day. Either field works on its own, and **Clear** returns to
+live. The `/api/detections` `from`/`to` parameters accept a plain date too
+(`2026-08-09`, covering the whole day) as well as `2026-08-09T18:00`, so anything
+already using date-only filtering keeps working. Bear in mind snapshots are
+pruned on their own schedule
 (`snapshot_retention_days`), so an old day may list detections whose images are
 already gone — they show without a thumbnail. Detections themselves are kept for
 `detection_retention_days`, so a range older than that will be empty.

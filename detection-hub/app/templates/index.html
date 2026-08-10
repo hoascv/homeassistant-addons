@@ -97,8 +97,8 @@
   <div class="card">
     <h2>Last detected <span class="muted" id="det-updated"></span></h2>
     <div class="filter">
-      <label>From <input type="date" id="from"></label>
-      <label>To <input type="date" id="to"></label>
+      <label>From <input type="datetime-local" id="from"></label>
+      <label>To <input type="datetime-local" id="to"></label>
       <button type="button" id="clear-dates">Clear</button>
       <span id="filter-note"></span>
     </div>
@@ -220,7 +220,10 @@ async function loadDetections() {
   for (const d of rows) detById[d.id] = d;
 
   if (dateFiltered()) {
-    const span = [fromInput.value || '…', toInput.value || '…'].join(' → ');
+    // datetime-local values carry a 'T'; show them with a space to read as a
+    // time rather than an ISO string.
+    const pretty = v => v ? v.replace('T', ' ') : '…';
+    const span = `${pretty(fromInput.value)} → ${pretty(toInput.value)}`;
     filterNote.textContent = `${rows.length} in ${span}`;
     detUpdated.textContent = '';
   } else {
