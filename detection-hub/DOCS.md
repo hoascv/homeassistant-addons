@@ -136,13 +136,18 @@ already been pruned shows without a thumbnail rather than a broken image.
 bounding box drawn on, plus the label, camera, confidence and timestamp. Click
 outside it or press Escape to close.
 
-**Pick a date-and-time range** with the From / To fields to browse past
-detections instead of the live view — down to the minute, so you can narrow to,
-say, 6–7pm on one day. Either field works on its own, and **Clear** returns to
-live. The `/api/detections` `from`/`to` parameters accept a plain date too
-(`2026-08-09`, covering the whole day) as well as `2026-08-09T18:00`, so anything
-already using date-only filtering keeps working. Bear in mind snapshots are
-pruned on their own schedule
+**Filter what you see.** An **Object** dropdown narrows to one type — person,
+car, dog — offering only the types actually detected. A row of time buttons —
+**Live · 1h · Today · 7 days · Custom** — picks the window; Live is the
+auto-refreshing view, the presets need no calendar, and **Custom** reveals a
+From / To date-and-time picker for an exact range down to the minute. The filters
+combine, so "cars, today" is two clicks.
+
+Under the hood these are `label`, `from` and `to` on `/api/detections`. `from`
+and `to` accept a plain date (`2026-08-09`, the whole day) as well as a
+date-and-time (`2026-08-09T18:00`), and `/api/labels` lists the object types seen.
+
+Bear in mind snapshots are pruned on their own schedule
 (`snapshot_retention_days`), so an old day may list detections whose images are
 already gone — they show without a thumbnail. Detections themselves are kept for
 `detection_retention_days`, so a range older than that will be empty.

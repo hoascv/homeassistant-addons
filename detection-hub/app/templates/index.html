@@ -5,104 +5,165 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Detection Hub</title>
   <style>
-    :root { color-scheme: dark; }
-    body { font-family: system-ui, -apple-system, sans-serif; background: #14161a;
-           color: #e8eaed; margin: 0; padding: 1.5rem; line-height: 1.5; }
-    .wrap { max-width: 52rem; margin: 0 auto; }
-    h1 { font-size: 1.4rem; margin: 0 0 .25rem; }
-    .version { color: #9aa0a6; font-size: .85rem; margin-bottom: 1.5rem; }
-    .card { background: #1e2126; border: 1px solid #2c3037; border-radius: 10px;
-            padding: 1rem 1.25rem; margin-bottom: 1rem; }
-    .card h2 { font-size: .95rem; margin: 0 0 .75rem; color: #9aa0a6;
-               text-transform: uppercase; letter-spacing: .04em; }
-    .ok { color: #6ddb8c; } .bad { color: #f2777a; }
-    dl { display: grid; grid-template-columns: auto 1fr; gap: .35rem 1rem; margin: 0; }
-    dt { color: #9aa0a6; } dd { margin: 0; font-variant-numeric: tabular-nums; }
-    code { background: #14161a; padding: .1rem .35rem; border-radius: 4px;
-           font-size: .9em; word-break: break-all; }
+    :root {
+      color-scheme: dark;
+      --bg: #0f1115; --card: #191c22; --card-2: #14161a; --line: #262a31;
+      --text: #e6e8eb; --muted: #8a9099; --accent: #5ad19a; --bad: #f2777a;
+    }
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+           background: var(--bg); color: var(--text); margin: 0; padding: 1.5rem 1rem;
+           line-height: 1.5; -webkit-font-smoothing: antialiased; }
+    .wrap { max-width: 60rem; margin: 0 auto; }
+
+    header { display: flex; align-items: center; gap: .6rem; margin-bottom: 1.25rem; }
+    header h1 { font-size: 1.25rem; margin: 0; font-weight: 650; letter-spacing: -.01em; }
+    header .v { color: var(--muted); font-size: .8rem; background: var(--card);
+                border: 1px solid var(--line); border-radius: 999px; padding: .1rem .55rem; }
+
+    .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+            padding: 1.1rem 1.25rem; margin-bottom: 1rem; }
+    .card > h2 { font-size: .78rem; margin: 0 0 .9rem; color: var(--muted);
+                 text-transform: uppercase; letter-spacing: .06em; font-weight: 600;
+                 display: flex; align-items: center; gap: .5rem; }
+    .card > h2 .muted { margin-left: auto; text-transform: none; letter-spacing: 0;
+                        color: var(--muted); font-weight: 400; font-size: .8rem; }
+
+    /* Status row */
+    .status-row { display: flex; flex-wrap: wrap; gap: .75rem; }
+    .pill { display: inline-flex; align-items: center; gap: .4rem; font-size: .85rem;
+            background: var(--card-2); border: 1px solid var(--line);
+            border-radius: 999px; padding: .3rem .75rem; }
+    .dot { width: .55rem; height: .55rem; border-radius: 50%; background: var(--muted); }
+    .dot.good { background: var(--accent); box-shadow: 0 0 0 3px rgba(90,209,154,.15); }
+    .dot.bad { background: var(--bad); box-shadow: 0 0 0 3px rgba(242,119,122,.15); }
+    .status-row .meta { color: var(--muted); font-size: .8rem; }
+    .status-row code { background: var(--card-2); padding: .1rem .4rem; border-radius: 5px;
+                       font-size: .82em; }
     .labels { display: flex; flex-wrap: wrap; gap: .35rem; }
-    .chip { background: #2a2f37; border-radius: 999px; padding: .15rem .6rem;
-            font-size: .85rem; }
-    .drop { border: 2px dashed #3a4049; border-radius: 10px; padding: 2rem 1rem;
-            text-align: center; color: #9aa0a6; cursor: pointer; }
-    .drop:hover, .drop.over { border-color: #6ddb8c; color: #e8eaed; }
-    #preview { max-width: 100%; border-radius: 8px; margin-top: 1rem; display: none; }
-    pre { background: #14161a; padding: .75rem; border-radius: 8px; overflow-x: auto;
-          font-size: .85rem; }
-    .card h2 .muted { text-transform: none; letter-spacing: 0; color: #5f6672;
-                      font-weight: normal; float: right; }
-    .latest { display: flex; gap: 1rem; align-items: center; }
-    .latest img { width: 160px; height: 90px; object-fit: cover; border-radius: 8px;
-                  background: #14161a; flex: none; }
-    .latest .what { font-size: 1.5rem; text-transform: capitalize; }
-    .latest .meta { color: #9aa0a6; font-size: .9rem; }
-    .recent { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-              gap: .6rem; margin-top: 1rem; }
-    .shot { background: #14161a; border-radius: 8px; overflow: hidden; }
-    .shot img { width: 100%; height: 84px; object-fit: cover; display: block; background: #22262c; }
-    .shot .cap { padding: .3rem .5rem; font-size: .8rem; }
+    .tag { background: var(--card-2); border: 1px solid var(--line); border-radius: 999px;
+           padding: .15rem .6rem; font-size: .8rem; text-transform: capitalize; }
+
+    /* Filter bar */
+    .filter { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; margin-bottom: 1rem; }
+    .seg { display: inline-flex; background: var(--card-2); border: 1px solid var(--line);
+           border-radius: 9px; padding: 2px; }
+    .seg button { background: transparent; color: var(--muted); border: 0; cursor: pointer;
+                  font: inherit; font-size: .82rem; padding: .3rem .7rem; border-radius: 7px; }
+    .seg button:hover { color: var(--text); }
+    .seg button.active { background: var(--accent); color: #08130d; font-weight: 600; }
+    select, input[type=datetime-local] { background: var(--card-2); color: var(--text);
+           border: 1px solid var(--line); border-radius: 9px; padding: .35rem .55rem;
+           font: inherit; font-size: .85rem; color-scheme: dark; }
+    select { text-transform: capitalize; }
+    #custom-range { display: none; gap: .4rem; align-items: center; color: var(--muted);
+                    font-size: .82rem; }
+    #custom-range.show { display: inline-flex; }
+    .filter .note { color: var(--muted); font-size: .8rem; margin-left: auto;
+                    font-variant-numeric: tabular-nums; }
+
+    /* Hero: last detected */
+    .hero { display: flex; gap: 1.1rem; align-items: center; }
+    .hero .thumb { width: 260px; max-width: 45%; aspect-ratio: 16/9; border-radius: 11px;
+                   object-fit: cover; background: var(--card-2); cursor: zoom-in;
+                   border: 1px solid var(--line); }
+    .hero .what { font-size: 1.6rem; font-weight: 650; text-transform: capitalize;
+                  letter-spacing: -.01em; margin-bottom: .3rem; line-height: 1.15; }
+    .hero .sub { color: var(--muted); font-size: .9rem; display: flex; flex-wrap: wrap;
+                 align-items: center; gap: .5rem; }
+    .conf { color: var(--accent); background: rgba(90,209,154,.12); border-radius: 999px;
+            padding: .05rem .5rem; font-size: .8rem; font-weight: 600; }
+
+    /* Recent grid */
+    .recent { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+              gap: .7rem; margin-top: 1.1rem; }
+    .shot { position: relative; border-radius: 11px; overflow: hidden; background: var(--card-2);
+            border: 1px solid var(--line); transition: transform .12s ease, border-color .12s ease; }
+    .shot:hover { transform: translateY(-2px); border-color: #39404a; }
+    .shot img { width: 100%; aspect-ratio: 16/9; object-fit: cover; display: block; cursor: zoom-in; }
+    .shot .noimg { width: 100%; aspect-ratio: 16/9; display: flex; align-items: center;
+                   justify-content: center; color: #4a515b; font-size: .75rem; }
+    .shot .cap { position: absolute; left: 0; right: 0; bottom: 0; padding: .8rem .55rem .4rem;
+                 background: linear-gradient(transparent, rgba(0,0,0,.78));
+                 font-size: .78rem; pointer-events: none; }
     .shot .cap b { text-transform: capitalize; }
-    .shot .cap span { color: #9aa0a6; display: block; font-size: .72rem; }
-    .empty { color: #9aa0a6; }
-    .latest img, .shot img { cursor: zoom-in; }
-    .filter { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center;
-              margin-bottom: 1rem; font-size: .85rem; color: #9aa0a6; }
-    .filter input { background: #14161a; color: #e8eaed; border: 1px solid #2c3037;
-                    border-radius: 6px; padding: .3rem .5rem; font: inherit;
-                    color-scheme: dark; }
-    .filter button { background: #2a2f37; color: #e8eaed; border: 0;
-                     border-radius: 6px; padding: .35rem .7rem; cursor: pointer; }
-    .filter button:hover { background: #3a4049; }
+    .shot .cap span { display: block; color: #c3c8cf; font-size: .7rem; }
+    .empty { color: var(--muted); padding: .5rem 0; }
+
+    /* Try it */
+    .drop { border: 1.5px dashed #333a44; border-radius: 11px; padding: 1.6rem 1rem;
+            text-align: center; color: var(--muted); cursor: pointer; transition: .12s; }
+    .drop:hover, .drop.over { border-color: var(--accent); color: var(--text); }
+    #preview { max-width: 100%; border-radius: 10px; margin-top: 1rem; display: none; }
+    pre { background: var(--card-2); padding: .75rem; border-radius: 9px; overflow-x: auto;
+          font-size: .82rem; margin: .75rem 0 0; }
+
     /* Lightbox */
-    #lb { position: fixed; inset: 0; background: rgba(0,0,0,.85); display: none;
+    #lb { position: fixed; inset: 0; background: rgba(0,0,0,.9); display: none;
           align-items: center; justify-content: center; padding: 1.5rem; z-index: 50; }
     #lb.open { display: flex; }
     #lb .box { max-width: 100%; max-height: 100%; text-align: center; }
-    #lb canvas { max-width: 100%; max-height: 80vh; border-radius: 8px; background: #000; }
-    #lb .lbmeta { color: #e8eaed; margin-top: .6rem; }
-    #lb .lbmeta span { color: #9aa0a6; }
-    #lb .close { position: fixed; top: 1rem; right: 1.25rem; font-size: 2rem;
-                 color: #e8eaed; cursor: pointer; line-height: 1; }
+    #lb canvas { max-width: 100%; max-height: 78vh; border-radius: 10px; background: #000; }
+    #lb .lbmeta { color: var(--text); margin-top: .7rem; font-size: 1.05rem; }
+    #lb .lbmeta span { color: var(--muted); font-size: .85rem; }
+    #lb .close { position: fixed; top: .75rem; right: 1.1rem; font-size: 2.2rem;
+                 color: #cfd3d8; cursor: pointer; line-height: 1; }
+
+    @media (max-width: 640px) {
+      .hero { flex-direction: column; align-items: stretch; }
+      .hero .thumb { width: 100%; max-width: 100%; }
+      .filter .note { margin-left: 0; width: 100%; }
+    }
   </style>
 </head>
 <body>
 <div class="wrap">
-  <h1>👁 Detection Hub</h1>
-  <div class="version">{{ app_version }}</div>
+  <header>
+    <h1>👁 Detection Hub</h1>
+    <span class="v">{{ app_version }}</span>
+  </header>
 
   <div class="card">
-    <h2>Detector</h2>
-    {% if status.error %}
-      <p class="bad">Unavailable — {{ status.error }}</p>
-    {% else %}
-      <p class="ok">Ready</p>
-    {% endif %}
-    <dl>
-      <dt>Model</dt><dd><code>{{ status.model_path }}</code></dd>
-      <dt>Input</dt><dd>{{ status.input_size }}&times;{{ status.input_size }}</dd>
-      <dt>Confidence</dt><dd>{{ confidence }}</dd>
-      {% if status.last_latency_ms %}
-      <dt>Last inference</dt><dd>{{ status.last_latency_ms }} ms</dd>
+    <h2>Status</h2>
+    <div class="status-row">
+      {% if status.error %}
+        <span class="pill"><span class="dot bad"></span> Detector unavailable</span>
+        <span class="meta">{{ status.error }}</span>
+      {% else %}
+        <span class="pill"><span class="dot good"></span> Detector ready</span>
       {% endif %}
-    </dl>
-  </div>
-
-  <div class="card">
-    <h2>Reporting {{ 'these labels' if label_filter_active else 'all classes' }}</h2>
-    <div class="labels">
-      {% for label in labels %}<span class="chip">{{ label }}</span>{% endfor %}
+      <span class="pill">{{ status.input_size }}&times;{{ status.input_size }}</span>
+      <span class="pill">confidence {{ confidence }}</span>
+      {% if status.last_latency_ms %}
+      <span class="pill">{{ status.last_latency_ms }} ms</span>
+      {% endif %}
+    </div>
+    <div class="labels" style="margin-top:.85rem">
+      <span class="meta" style="color:var(--muted);font-size:.8rem;align-self:center;margin-right:.15rem">
+        {{ 'Reporting' if label_filter_active else 'All classes:' }}</span>
+      {% for label in labels %}<span class="tag">{{ label }}</span>{% endfor %}
     </div>
   </div>
 
   <div class="card">
-    <h2>Last detected <span class="muted" id="det-updated"></span></h2>
+    <h2>Detections <span class="muted" id="det-updated"></span></h2>
     <div class="filter">
-      <label>From <input type="datetime-local" id="from"></label>
-      <label>To <input type="datetime-local" id="to"></label>
-      <button type="button" id="clear-dates">Clear</button>
-      <span id="filter-note"></span>
+      <select id="object"><option value="">All objects</option></select>
+      <div class="seg" id="range-seg">
+        <button type="button" data-range="live" class="active">Live</button>
+        <button type="button" data-range="1h">1h</button>
+        <button type="button" data-range="today">Today</button>
+        <button type="button" data-range="7d">7 days</button>
+        <button type="button" data-range="custom">Custom</button>
+      </div>
+      <span id="custom-range">
+        <input type="datetime-local" id="from" aria-label="From">
+        →
+        <input type="datetime-local" id="to" aria-label="To">
+      </span>
+      <span class="note" id="filter-note"></span>
     </div>
-    <div id="latest" class="latest"><span class="empty">Nothing detected yet.</span></div>
+    <div id="latest" class="hero"><span class="empty">Nothing detected yet.</span></div>
     <div id="recent" class="recent"></div>
   </div>
 
@@ -126,8 +187,204 @@
 </div>
 
 <script>
-// Relative URL: the page is served under an ingress path that changes per
-// install, so anything absolute breaks the moment it is not at the root.
+// Relative URLs throughout: the page is served under an ingress path that
+// changes per install, so anything absolute breaks the moment it is not at root.
+// No auth header needed either — through ingress the browser is already an
+// authenticated session, which is why this is served behind the panel.
+
+function esc(s) {
+  // Camera names come from the user's own config and still land in innerHTML, so
+  // escape them. Labels are a fixed COCO set, escaped too at no cost.
+  return String(s).replace(/[&<>"']/g, c => (
+    {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
+}
+
+function ago(iso) {
+  // detected_at is local wall-clock 'YYYY-MM-DDTHH:MM:SS'; treat it as local.
+  const then = new Date(iso.replace(' ', 'T'));
+  const secs = Math.max(0, Math.round((Date.now() - then) / 1000));
+  if (secs < 60) return secs + 's ago';
+  if (secs < 3600) return Math.round(secs / 60) + 'm ago';
+  if (secs < 86400) return Math.round(secs / 3600) + 'h ago';
+  return Math.round(secs / 86400) + 'd ago';
+}
+
+function shotUrl(d) {
+  // A detection can outlive its snapshot (images prune sooner), so guard the
+  // missing case rather than request an id that 404s.
+  return d.snapshot_id ? `api/snapshots/${encodeURIComponent(d.snapshot_id)}` : null;
+}
+
+// --- Detections, filtered and polled -----------------------------------------
+const objectSelect = document.getElementById('object');
+const fromInput = document.getElementById('from');
+const toInput = document.getElementById('to');
+const customRange = document.getElementById('custom-range');
+const filterNote = document.getElementById('filter-note');
+const detUpdated = document.getElementById('det-updated');
+const latest = document.getElementById('latest');
+const recent = document.getElementById('recent');
+let detById = {};
+let currentRange = 'live';
+
+// Time presets are computed in the browser's local zone — the same zone the
+// detections are stored in on a normal install — so no conversion is needed.
+function localDT(d) {
+  const p = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}` +
+         `T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+function rangeBounds() {
+  const now = Date.now();
+  if (currentRange === '1h') return { from: localDT(new Date(now - 3600e3)) };
+  if (currentRange === '7d') return { from: localDT(new Date(now - 7 * 864e5)) };
+  if (currentRange === 'today') {
+    const d = new Date(); d.setHours(0, 0, 0, 0);
+    return { from: localDT(d) };
+  }
+  if (currentRange === 'custom') {
+    return { from: fromInput.value || undefined, to: toInput.value || undefined };
+  }
+  return {};  // live
+}
+
+const RANGE_LABEL = { '1h': 'last hour', 'today': 'today', '7d': 'last 7 days' };
+
+function filtered() {
+  return Boolean(objectSelect.value) || currentRange !== 'live';
+}
+
+async function loadDetections() {
+  const { from, to } = rangeBounds();
+  const params = new URLSearchParams();
+  params.set('limit', filtered() ? '200' : '13');
+  if (from) params.set('from', from);
+  if (to) params.set('to', to);
+  if (objectSelect.value) params.set('label', objectSelect.value);
+
+  let rows;
+  try {
+    rows = (await (await fetch('api/detections?' + params.toString())).json()).detections || [];
+  } catch (err) { return; }  // transient; the next tick retries
+
+  detById = {};
+  for (const d of rows) detById[d.id] = d;
+
+  // The header line: live gets a timestamp, a filter gets a summary of itself.
+  if (filtered()) {
+    const bits = [];
+    if (objectSelect.value) bits.push(objectSelect.value);
+    if (currentRange === 'custom') {
+      const pretty = v => v ? v.replace('T', ' ') : '…';
+      if (fromInput.value || toInput.value) bits.push(`${pretty(fromInput.value)} → ${pretty(toInput.value)}`);
+    } else if (RANGE_LABEL[currentRange]) {
+      bits.push(RANGE_LABEL[currentRange]);
+    }
+    filterNote.textContent = `${rows.length} · ${bits.join(' · ')}`;
+    detUpdated.textContent = '';
+  } else {
+    filterNote.textContent = '';
+    detUpdated.textContent = rows.length ? 'updated ' + new Date().toLocaleTimeString() : '';
+  }
+
+  if (!rows.length) {
+    latest.innerHTML = '<span class="empty">Nothing '
+      + (filtered() ? 'matches that filter.' : 'detected yet.') + '</span>';
+    recent.innerHTML = '';
+    return;
+  }
+
+  const [head, ...rest] = rows;
+  const hs = shotUrl(head);
+  latest.innerHTML =
+    (hs ? `<img class="thumb" data-id="${head.id}" src="${hs}" alt="">` : '') +
+    `<div><div class="what">${esc(head.label)}</div>` +
+    `<div class="sub"><span class="conf">${Math.round(head.confidence * 100)}%</span>` +
+    `<span>${esc(head.camera)}</span><span>·</span><span>${ago(head.detected_at)}</span></div></div>`;
+
+  recent.innerHTML = rest.map(d => {
+    const s = shotUrl(d);
+    const img = s ? `<img data-id="${d.id}" src="${s}" alt="">`
+                  : '<div class="noimg">no image</div>';
+    return `<div class="shot">${img}<div class="cap"><b>${esc(d.label)}</b>` +
+      `<span>${esc(d.camera)} · ${ago(d.detected_at)}</span></div></div>`;
+  }).join('');
+}
+
+// Object filter, populated from what has actually been detected so it offers
+// only real types. Done once; a reload picks up any newly seen object.
+async function loadObjectOptions() {
+  let labels;
+  try {
+    labels = (await (await fetch('api/labels')).json()).labels || [];
+  } catch (err) { return; }
+  const chosen = objectSelect.value;
+  objectSelect.innerHTML = '<option value="">All objects</option>' +
+    labels.map(l => `<option value="${esc(l)}">${esc(l)}</option>`).join('');
+  objectSelect.value = chosen;
+}
+
+// Time-range segmented control. Custom reveals the date-time inputs; the presets
+// avoid the native calendar entirely, which is the point.
+document.getElementById('range-seg').addEventListener('click', e => {
+  const btn = e.target.closest('button[data-range]');
+  if (!btn) return;
+  currentRange = btn.dataset.range;
+  for (const b of e.currentTarget.children) b.classList.toggle('active', b === btn);
+  customRange.classList.toggle('show', currentRange === 'custom');
+  loadDetections();
+});
+objectSelect.addEventListener('change', loadDetections);
+fromInput.addEventListener('change', () => { if (currentRange === 'custom') loadDetections(); });
+toInput.addEventListener('change', () => { if (currentRange === 'custom') loadDetections(); });
+
+loadObjectOptions();
+loadDetections();
+setInterval(loadDetections, 10000);
+
+// --- Lightbox: expand a snapshot, with its detection box drawn on ------------
+const lb = document.getElementById('lb');
+const lbCanvas = document.getElementById('lb-canvas');
+const lbMeta = document.getElementById('lb-meta');
+
+function openLightbox(det) {
+  const url = shotUrl(det);
+  if (!url) return;
+  const img = new Image();
+  img.onload = () => {
+    lbCanvas.width = img.naturalWidth;
+    lbCanvas.height = img.naturalHeight;
+    const ctx = lbCanvas.getContext('2d');
+    ctx.drawImage(img, 0, 0);
+    // The box is in the captured frame's pixels — the same space as this image —
+    // so it is drawn without scaling.
+    if (Number.isFinite(det.box_x)) {
+      ctx.lineWidth = Math.max(2, img.naturalWidth / 300);
+      ctx.strokeStyle = '#5ad19a';
+      ctx.strokeRect(det.box_x, det.box_y, det.box_w, det.box_h);
+    }
+    lbMeta.innerHTML = `<b style="text-transform:capitalize">${esc(det.label)}</b> ` +
+      `<span>${esc(det.camera)} · ${Math.round(det.confidence * 100)}% · ` +
+      `${esc(det.detected_at.replace('T', ' '))}</span>`;
+    lb.classList.add('open');
+  };
+  img.onerror = () => {};  // pruned between listing and click; just don't open
+  img.src = url;
+}
+function closeLightbox() { lb.classList.remove('open'); }
+
+latest.addEventListener('click', onThumbClick);
+recent.addEventListener('click', onThumbClick);
+function onThumbClick(e) {
+  const img = e.target.closest('img[data-id]');
+  if (img && detById[img.dataset.id]) openLightbox(detById[img.dataset.id]);
+}
+document.getElementById('lb-close').addEventListener('click', closeLightbox);
+lb.addEventListener('click', e => { if (e.target === lb) closeLightbox(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeLightbox(); });
+
+// --- Try it ------------------------------------------------------------------
 const drop = document.getElementById('drop');
 const file = document.getElementById('file');
 const out = document.getElementById('out');
@@ -149,163 +406,13 @@ async function send(image) {
   body.append('image', image);
   let data;
   try {
-    const res = await fetch('api/detect', { method: 'POST', body });
-    data = await res.json();
-  } catch (err) {
-    out.textContent = 'request failed: ' + err;
-    return;
-  }
+    data = await (await fetch('api/detect', { method: 'POST', body })).json();
+  } catch (err) { out.textContent = 'request failed: ' + err; return; }
   if (data.error) { out.textContent = data.error; return; }
   out.textContent = data.count + ' detected in ' + (data.latency_ms ?? '?') + ' ms\n'
     + data.detections.map(d => `  ${d.label}  ${d.confidence}  [${d.box}]`).join('\n');
   draw(image, data.detections);
 }
-
-// --- Last detected, polled ---------------------------------------------------
-// Same-origin relative URLs, and no auth header needed: through ingress the
-// browser is already an authenticated session, which is the whole point of
-// serving this behind the panel rather than the published port.
-const latest = document.getElementById('latest');
-const recent = document.getElementById('recent');
-const detUpdated = document.getElementById('det-updated');
-
-function ago(iso) {
-  // detected_at is local wall-clock 'YYYY-MM-DDTHH:MM:SS'; treat it as local.
-  const then = new Date(iso.replace(' ', 'T'));
-  const secs = Math.max(0, Math.round((Date.now() - then) / 1000));
-  if (secs < 60) return secs + 's ago';
-  if (secs < 3600) return Math.round(secs / 60) + 'm ago';
-  if (secs < 86400) return Math.round(secs / 3600) + 'h ago';
-  return Math.round(secs / 86400) + 'd ago';
-}
-
-function shotUrl(d) {
-  // A detection can outlive its snapshot (images are pruned sooner), so guard
-  // the missing case rather than requesting an id that 404s.
-  return d.snapshot_id ? `api/snapshots/${encodeURIComponent(d.snapshot_id)}` : null;
-}
-
-// Camera names come from the user's own config, but they still land in innerHTML
-// here, so escape them rather than trust them. Labels are a fixed COCO set;
-// escaped too, at no cost, so nothing interpolated below is an exception.
-function esc(s) {
-  return String(s).replace(/[&<>"']/g, c => (
-    {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
-}
-
-const fromInput = document.getElementById('from');
-const toInput = document.getElementById('to');
-const filterNote = document.getElementById('filter-note');
-let detById = {};  // id -> detection, so a click can open the right one
-
-function dateFiltered() {
-  return Boolean(fromInput.value || toInput.value);
-}
-
-async function loadDetections() {
-  const params = new URLSearchParams();
-  // A day can hold far more than the live view's handful, so ask for more when
-  // a range is set.
-  params.set('limit', dateFiltered() ? '200' : '13');
-  if (fromInput.value) params.set('from', fromInput.value);
-  if (toInput.value) params.set('to', toInput.value);
-
-  let rows;
-  try {
-    const res = await fetch('api/detections?' + params.toString());
-    rows = (await res.json()).detections || [];
-  } catch (err) { return; }  // transient; the next tick tries again
-
-  detById = {};
-  for (const d of rows) detById[d.id] = d;
-
-  if (dateFiltered()) {
-    // datetime-local values carry a 'T'; show them with a space to read as a
-    // time rather than an ISO string.
-    const pretty = v => v ? v.replace('T', ' ') : '…';
-    const span = `${pretty(fromInput.value)} → ${pretty(toInput.value)}`;
-    filterNote.textContent = `${rows.length} in ${span}`;
-    detUpdated.textContent = '';
-  } else {
-    filterNote.textContent = '';
-    detUpdated.textContent = rows.length ? 'updated ' + new Date().toLocaleTimeString() : '';
-  }
-
-  if (!rows.length) {
-    latest.innerHTML = '<span class="empty">Nothing '
-      + (dateFiltered() ? 'in that range.' : 'detected yet.') + '</span>';
-    recent.innerHTML = '';
-    return;
-  }
-
-  const [head, ...rest] = rows;
-  const headShot = shotUrl(head);
-  latest.innerHTML =
-    (headShot ? `<img data-id="${head.id}" src="${headShot}" alt="">` : '') +
-    `<div><div class="what">${esc(head.label)}</div>` +
-    `<div class="meta">${esc(head.camera)} · ${Math.round(head.confidence * 100)}% · ${ago(head.detected_at)}</div></div>`;
-
-  recent.innerHTML = rest.map(d => {
-    const s = shotUrl(d);
-    return `<div class="shot">${s ? `<img data-id="${d.id}" src="${s}" alt="">` : ''}` +
-      `<div class="cap"><b>${esc(d.label)}</b>` +
-      `<span>${esc(d.camera)} · ${ago(d.detected_at)}</span></div></div>`;
-  }).join('');
-}
-
-// One refresh loop. It keeps ticking while a range is set (harmless — the same
-// past set comes back), so switching back to live needs no special resume.
-loadDetections();
-setInterval(loadDetections, 10000);
-
-fromInput.addEventListener('change', loadDetections);
-toInput.addEventListener('change', loadDetections);
-document.getElementById('clear-dates').addEventListener('click', () => {
-  fromInput.value = ''; toInput.value = ''; loadDetections();
-});
-
-// --- Lightbox: expand a snapshot, with its detection box drawn on ------------
-const lb = document.getElementById('lb');
-const lbCanvas = document.getElementById('lb-canvas');
-const lbMeta = document.getElementById('lb-meta');
-
-function openLightbox(det) {
-  const url = shotUrl(det);
-  if (!url) return;  // its snapshot was pruned; nothing to expand
-  const img = new Image();
-  img.onload = () => {
-    lbCanvas.width = img.naturalWidth;
-    lbCanvas.height = img.naturalHeight;
-    const ctx = lbCanvas.getContext('2d');
-    ctx.drawImage(img, 0, 0);
-    // The box is in the captured frame's pixels — the same space as this image,
-    // since the snapshot is that frame — so it is drawn without scaling.
-    if (Number.isFinite(det.box_x)) {
-      ctx.lineWidth = Math.max(2, img.naturalWidth / 300);
-      ctx.strokeStyle = '#6ddb8c';
-      ctx.strokeRect(det.box_x, det.box_y, det.box_w, det.box_h);
-    }
-    lbMeta.innerHTML = `<b style="text-transform:capitalize">${esc(det.label)}</b> ` +
-      `<span>${esc(det.camera)} · ${Math.round(det.confidence * 100)}% · ` +
-      `${esc(det.detected_at.replace('T', ' '))}</span>`;
-    lb.classList.add('open');
-  };
-  img.onerror = () => { /* pruned between listing and click; just don't open */ };
-  img.src = url;
-}
-
-function closeLightbox() { lb.classList.remove('open'); }
-
-// Delegate clicks from either the hero or the strip to the detection they name.
-document.getElementById('latest').addEventListener('click', onThumbClick);
-document.getElementById('recent').addEventListener('click', onThumbClick);
-function onThumbClick(e) {
-  const img = e.target.closest('img[data-id]');
-  if (img && detById[img.dataset.id]) openLightbox(detById[img.dataset.id]);
-}
-document.getElementById('lb-close').addEventListener('click', closeLightbox);
-lb.addEventListener('click', e => { if (e.target === lb) closeLightbox(); });
-document.addEventListener('keydown', e => { if (e.key === 'Escape') closeLightbox(); });
 
 function draw(imageFile, detections) {
   const img = new Image();
@@ -315,8 +422,8 @@ function draw(imageFile, detections) {
     const ctx = canvas.getContext('2d');
     ctx.drawImage(img, 0, 0);
     ctx.lineWidth = Math.max(2, img.width / 400);
-    ctx.strokeStyle = '#6ddb8c';
-    ctx.fillStyle = '#6ddb8c';
+    ctx.strokeStyle = '#5ad19a';
+    ctx.fillStyle = '#5ad19a';
     ctx.font = `${Math.max(12, img.width / 45)}px system-ui, sans-serif`;
     for (const d of detections) {
       const [x, y, w, h] = d.box;

@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.9.0
+
+- **Filter detections by object type.** An Object dropdown on the page shows only
+  the types actually detected, backed by a new `label` parameter on
+  `/api/detections` (one type or several, comma-separated) and a `/api/labels`
+  endpoint listing what has been seen, most common first.
+- **A cleaner page, and no more wrestling the calendar.** The date filter is now
+  a row of buttons — Live · 1h · Today · 7 days · Custom — so the common windows
+  are one click and the native date-time picker only appears under Custom. The
+  rest of the page was redesigned too: a status strip, a proper featured "last
+  detected" with a confidence pill, and a tidier thumbnail grid with hover.
+- The object and time filters combine, and both fold into the API, so the same
+  narrowing is available to a script.
+
 ## 1.8.0
 
 - **The date filter now includes time.** The From / To fields are date-and-time

@@ -613,8 +613,9 @@ def stats(conn, db_path=None):
 # --- reading for the UI and sensors -------------------------------------------
 
 
-def recent_detections(conn, limit=50, camera=None, date_from=None, date_to=None):
-    """Recent detections, newest first, optionally by camera and time range.
+def recent_detections(conn, limit=50, camera=None, date_from=None, date_to=None,
+                       labels=None):
+    """Recent detections, newest first, optionally by camera, time and label.
 
     `date_from`/`date_to` are inclusive bounds compared directly against
     `detected_at`, which is stored as local `YYYY-MM-DDTHH:MM:SS`. That format
@@ -622,7 +623,11 @@ def recent_detections(conn, limit=50, camera=None, date_from=None, date_to=None)
     chronological one — no parsing, and it works whether the caller passes a
     whole timestamp or just a date. The caller is responsible for widening a
     date-only bound to the right edge of the day (see the endpoint); here the
-    bounds are used as given. Either may be omitted.
+    bounds are used as given. Any filter may be omitted.
+
+    `labels` restricts to those object types (a list); an empty list is treated
+    as no restriction, so "show everything" and "show nothing" don't collapse
+    into the same call.
     """
     clauses, params = [], []
     if camera:
@@ -634,6 +639,9 @@ def recent_detections(conn, limit=50, camera=None, date_from=None, date_to=None)
     if date_to:
         clauses.append("detected_at <= ?")
         params.append(date_to)
+    if labels:
+        clauses.append("label IN (%s)" % ",".join("?" for _ in labels))
+        params.extend(labels)
 
     sql = "SELECT * FROM detections"
     if clauses:
@@ -641,6 +649,18 @@ def recent_detections(conn, limit=50, camera=None, date_from=None, date_to=None)
     sql += " ORDER BY id DESC LIMIT ?"
     params.append(max(1, min(500, int(limit))))
     return [dict(row) for row in conn.execute(sql, params).fetchall()]
+
+
+def distinct_labels(conn):
+    """The object types actually recorded, most frequent first.
+
+    Feeds the UI's object filter so it offers only what has been seen — no
+    "giraffe" on a driveway — and puts the labels you care about at the top.
+    """
+    rows = conn.execute(
+        "SELECT label, COUNT(*) n FROM detections GROUP BY label ORDER BY n DESC, label"
+    ).fetchall()
+    return [row["label"] for row in rows]
 
 
 def snapshot(conn, snapshot_id, directory=None):

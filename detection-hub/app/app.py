@@ -22,7 +22,7 @@ import detector
 import hass
 import store
 
-APP_VERSION = "1.8.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.9.0"  # keep in sync with the "version" field in config.yaml
 
 OPTIONS_PATH = os.environ.get("DETECTION_HUB_OPTIONS_PATH", "/data/options.json")
 
@@ -495,6 +495,9 @@ def api_detections():
         date_to = _time_bound("to", end=True)
     except ValueError as exc:
         return jsonify({"error": f"{exc} must be a date or date-time"}), 400
+    # `label` may name one type or several, comma-separated. Blank entries are
+    # dropped so a trailing comma is harmless.
+    labels = [x.strip() for x in (request.args.get("label") or "").split(",") if x.strip()]
     return jsonify(
         {
             "detections": store.recent_detections(
@@ -503,9 +506,16 @@ def api_detections():
                 camera=request.args.get("camera"),
                 date_from=date_from,
                 date_to=date_to,
+                labels=labels,
             )
         }
     )
+
+
+@app.route("/api/labels")
+def api_labels():
+    """The object types that have actually been recorded, for the UI filter."""
+    return jsonify({"labels": store.distinct_labels(get_db())})
 
 
 @app.route("/api/snapshots/<int:snapshot_id>")

@@ -254,6 +254,82 @@ def test_no_date_is_the_live_view(client, street_jpeg):
     assert client.get("/api/detections").get_json()["detections"]
 
 
+def test_detections_can_be_filtered_by_object(client, db_path):
+    import store
+
+    conn = store.connect(db_path, actor="user")
+    for label in ("car", "person", "car", "dog"):
+        store.record_detections(conn, "drive",
+                                [{"label": label, "confidence": 0.9, "box": [1, 2, 3, 4]}])
+    conn.commit(); conn.close()
+
+    got = client.get("/api/detections?label=car").get_json()["detections"]
+    assert [d["label"] for d in got] == ["car", "car"]
+
+
+def test_object_filter_accepts_several(client, db_path):
+    import store
+
+    conn = store.connect(db_path, actor="user")
+    for label in ("car", "person", "dog"):
+        store.record_detections(conn, "drive",
+                                [{"label": label, "confidence": 0.9, "box": [1, 2, 3, 4]}])
+    conn.commit(); conn.close()
+
+    got = client.get("/api/detections?label=car,dog").get_json()["detections"]
+    assert {d["label"] for d in got} == {"car", "dog"}
+
+
+def test_an_empty_label_is_not_a_filter(client, street_jpeg):
+    """A trailing comma or blank must mean "everything", not "nothing"."""
+    client.post("/api/detect?camera=drive", data=street_jpeg)
+    assert client.get("/api/detections?label=").get_json()["detections"]
+    assert client.get("/api/detections?label=,").get_json()["detections"]
+
+
+def test_object_and_date_filters_combine(client, db_path):
+    import store
+
+    conn = store.connect(db_path, actor="user")
+    store.record_detections(conn, "drive",
+                            [{"label": "car", "confidence": 0.9, "box": [1, 2, 3, 4]}],
+                            at="2026-08-09T12:00:00")
+    store.record_detections(conn, "drive",
+                            [{"label": "person", "confidence": 0.9, "box": [1, 2, 3, 4]}],
+                            at="2026-08-09T12:00:00")
+    store.record_detections(conn, "drive",
+                            [{"label": "car", "confidence": 0.9, "box": [1, 2, 3, 4]}],
+                            at="2026-08-08T12:00:00")
+    conn.commit(); conn.close()
+
+    got = client.get(
+        "/api/detections?label=car&from=2026-08-09&to=2026-08-09"
+    ).get_json()["detections"]
+    assert [(d["label"], d["detected_at"][:10]) for d in got] == [("car", "2026-08-09")]
+
+
+def test_labels_endpoint_lists_what_was_seen_most_common_first(client, db_path):
+    import store
+
+    conn = store.connect(db_path, actor="user")
+    for label in ("car", "car", "car", "person", "dog", "dog"):
+        store.record_detections(conn, "drive",
+                                [{"label": label, "confidence": 0.9, "box": [1, 2, 3, 4]}])
+    conn.commit(); conn.close()
+
+    labels = client.get("/api/labels").get_json()["labels"]
+    assert labels[0] == "car"           # most frequent first
+    assert set(labels) == {"car", "person", "dog"}
+
+
+def test_labels_endpoint_is_empty_before_anything_is_seen(client):
+    assert client.get("/api/labels").get_json()["labels"] == []
+
+
+def test_labels_endpoint_needs_the_token_on_the_published_port(direct_client):
+    assert direct_client.get("/api/labels").status_code == 401
+
+
 def test_cameras_lists_what_has_been_seen(client, street_jpeg):
     client.post("/api/detect?camera=front_door", data=street_jpeg)
     cameras = client.get("/api/cameras").get_json()["cameras"]
