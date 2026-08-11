@@ -1,5 +1,50 @@
 # Changelog
 
+## 1.11.0
+
+- **It can put a name to the people it sees.** Enrol somebody by opening a
+  detection of them and choosing *Who is this?*, and from then on their arrivals
+  are recorded with their name. Off by default — `identify_people` — because this
+  processes biometric data, costs CPU, and on many cameras cannot work at all.
+- **Check whether your camera can do it before turning it on.** The page answers
+  in plain words: *"largest face found: 34 px. Identification needs 60. This
+  camera will not identify people at this distance."* Measured on the driveway
+  this was built against, a person filling a 218×289 px box gave a **67 px** face
+  — over the floor, but not by much. The street frame this repository ships as a
+  fixture, where people are 74–87 px tall, gives **no face at all**.
+- **It will not guess.** A name needs a score above `face_match_threshold` *and*
+  a lead of `face_margin` over the next best person; two people at 0.47 and 0.46
+  get neither name. Every person detection ends in one of four distinct states —
+  nothing looked, no face seen, unrecognised, or a name — because "a stranger"
+  and "a camera that cannot see faces" are different problems with different
+  fixes. The score is recorded even when nobody is named; that number is what
+  tells you whether to move the threshold.
+- **A person is identified once per visit, not once per frame.** They are logged
+  the moment they appear, which is usually before they turn towards the camera,
+  so the following frames are checked too — up to `face_attempts` — and the name
+  lands on the row already written. Measured: 1.1 ms to look for a face, 5.5 ms
+  to turn one into a vector, against the ~12 ms the detector already spends.
+- **New event `detection_hub_identified`**, fired for strangers as well as for
+  names — "an unrecognised person at 3am" is the automation worth having. Plus
+  `sensor.detection_hub_last_person` and `..._people_identified_today`.
+  Deliberately no per-person presence sensor: a camera sees arrivals, never
+  departures.
+- **Deleting a person really deletes their face data**, prints and crops both.
+  That is only an honest promise because **embeddings never enter the change
+  feed** — a biometric template copied into Delta history and a replica could not
+  be recalled. Names and `person_id` do flow, so the lakehouse can still say who
+  was seen. Needs `pipeline-airflow` 2.12.0 for the schema.
+- Enrolments are outside retention: `prune` ages out what the cameras saw, and a
+  person you enrolled by hand is not that. Face crops **are** in Home Assistant
+  backups, unlike snapshots — ~4 KB each, and losing them would mean re-enrolling
+  everybody.
+- Two models bundled, both under permissive licences and both run through the
+  OpenCV already here: **YuNet** (MIT, 232 KB) and **SFace** (Apache-2.0,
+  38.7 MB). No new dependency. What the zoo does not say — SFace's training set —
+  is written down in DOCS as an open question rather than glossed over.
+- 280 tests, and still no photograph of anybody's face in this repository. See
+  `app/tests/fixtures/README.md` for how that is done and why.
+
 ## 1.11.0-rc1
 
 Not the feature — the instrument that decides whether the feature is worth

@@ -1,5 +1,20 @@
 # Changelog
 
+## 2.12.0
+
+- Keeps up with **Detection Hub 1.11.0**, which can now identify people:
+  `detections` gains `person_id`, `person_score` and `face_state`, and the new
+  `people` table joins the schemas. Without this the columns would be **silently
+  dropped** — `from_json` parses against the declared schema and anything absent
+  from it simply vanishes, with no error anywhere to notice.
+- `face_state` is worth knowing when querying: null means no face pass ran at
+  all, which is not the same as `no_face` (it looked and saw nobody's face) or
+  `unknown` (it saw a face and did not recognise it).
+- **Face embeddings are not in the feed and will not be.** They are biometric
+  templates, and a copy in Delta history or on the replica could not be recalled
+  when somebody is deleted in the add-on. Names are here; the vectors stay in the
+  add-on's own database.
+
 ## 2.11.0
 
 - Ingests the new **Detection Hub** add-on into Delta alongside the trackers,

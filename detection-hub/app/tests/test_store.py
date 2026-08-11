@@ -4,6 +4,7 @@ The feed's shape is a contract with `pipeline-airflow/jobs/trackers_feed.py`,
 which reads specific JSON paths and fails obscurely if they move. These tests
 assert that contract rather than whatever the code happens to emit.
 """
+import os
 from datetime import datetime, timedelta
 
 import pytest
@@ -150,7 +151,7 @@ def test_export_names_the_key_column_per_table(db):
     """trackers_merge.py needs this to know what identifies a row; guessing the
     first JSON key collapses a table."""
     payload = store.export(db)
-    assert payload["keys"] == {"detections": "id", "cameras": "id"}
+    assert payload["keys"] == {"detections": "id", "cameras": "id", "people": "id"}
 
 
 def test_export_carries_every_tracked_table_and_the_watermark(db):
@@ -159,7 +160,10 @@ def test_export_carries_every_tracked_table_and_the_watermark(db):
     db.commit()
 
     payload = store.export(db)
-    assert set(payload["tables"]) == {"detections", "cameras"}
+    # Pinned deliberately: a table added to the feed without the lakehouse
+    # schema being widened to match is data silently dropped downstream, so the
+    # set changing should have to be a decision somebody wrote down.
+    assert set(payload["tables"]) == {"detections", "cameras", "people"}
     assert len(payload["tables"]["detections"]) == 1
     assert payload["max_seq"] == store.max_seq(db)
 
@@ -271,3 +275,191 @@ def test_counts_since_groups_by_label(db):
     store.record_detections(db, "a", [_det(), _det(), _det(label="car")])
     db.commit()
     assert store.counts_since(db, "2000-01-01T00:00:00") == {"person": 2, "car": 1}
+
+
+# --- people and their faces ---------------------------------------------------
+
+
+def _print_bytes(seed=1.0):
+    """A stand-in embedding: 128 float32, which is what the column expects."""
+    import numpy as np
+
+    return np.full(128, seed, dtype="<f4").tobytes()
+
+
+def test_a_person_can_be_added_renamed_and_found(db):
+    person_id = store.add_person(db, "Alice")
+    assert store.rename_person(db, person_id, "Alice B") is True
+    db.commit()
+
+    everyone = store.people(db)
+    assert [p["name"] for p in everyone] == ["Alice B"]
+    assert everyone[0]["prints"] == 0
+
+
+def test_two_people_cannot_share_a_name(db):
+    """A duplicate is somebody typing the same name twice, not a fault — so the
+    caller gets None to turn into a 409 rather than an exception in a route."""
+    assert store.add_person(db, "Alice") is not None
+    assert store.add_person(db, "Alice") is None
+
+
+def test_prints_carry_the_model_that_made_them(db):
+    """A vector from one recogniser scored against another's would not error, it
+    would quietly rate strangers as matches — so the gallery is filtered."""
+    person_id = store.add_person(db, "Alice")
+    store.add_face_print(db, person_id, _print_bytes(), "sface_2021dec", "snapshot")
+    store.add_face_print(db, person_id, _print_bytes(2.0), "some_other_model", "snapshot")
+    db.commit()
+
+    assert len(store.face_prints(db, model="sface_2021dec")) == 1
+    assert len(store.face_prints(db)) == 2
+
+
+def test_the_gallery_skips_archived_people(db):
+    """Archived means removed as far as matching is concerned; the row survives
+    only so old detections still read as somebody."""
+    person_id = store.add_person(db, "Alice")
+    store.add_face_print(db, person_id, _print_bytes(), "sface_2021dec", "snapshot")
+    store.record_detections(db, "drive", [_det()])
+    store.set_detection_identity(db, 1, person_id, 0.7, "matched")
+    db.commit()
+
+    store.delete_person(db, person_id)
+    db.commit()
+    assert store.face_prints(db, model="sface_2021dec") == []
+
+
+def test_deleting_a_person_really_deletes_the_biometrics(db, tmp_path):
+    """The promise this feature makes. It is only honest because face_prints
+    never entered the change feed — a published row could not be recalled."""
+    directory = str(tmp_path / "faces")
+    person_id = store.add_person(db, "Alice")
+    print_id = store.add_face_print(db, person_id, _print_bytes(), "sface_2021dec",
+                                    "snapshot", crop_jpeg=b"\xff\xd8jpeg",
+                                    directory=directory)
+    db.commit()
+    assert os.path.exists(store.face_path(print_id, directory))
+
+    outcome = store.delete_person(db, person_id, directory=directory)
+    db.commit()
+    assert outcome == {"prints": 1, "person": "deleted"}
+    assert db.execute("SELECT COUNT(*) FROM face_prints").fetchone()[0] == 0
+    assert not os.path.exists(store.face_path(print_id, directory))
+
+
+def test_a_person_with_history_is_archived_rather_than_erased(db):
+    """Deleting the name out from under old detections would leave rows pointing
+    at nobody; the history stays readable, the template does not survive."""
+    person_id = store.add_person(db, "Alice")
+    store.add_face_print(db, person_id, _print_bytes(), "sface_2021dec", "snapshot")
+    store.record_detections(db, "drive", [_det()])
+    store.set_detection_identity(db, 1, person_id, 0.72, "matched")
+    db.commit()
+
+    assert store.delete_person(db, person_id) == {"prints": 1, "person": "archived"}
+    db.commit()
+    assert db.execute("SELECT archived FROM people WHERE id = ?", (person_id,)).fetchone()[0] == 1
+    assert db.execute("SELECT COUNT(*) FROM face_prints").fetchone()[0] == 0
+
+
+def test_an_identified_detection_carries_the_name(db):
+    person_id = store.add_person(db, "Alice")
+    store.record_detections(db, "drive", [_det()])
+    store.set_detection_identity(db, 1, person_id, 0.68, "matched")
+    db.commit()
+
+    row = store.recent_detections(db)[0]
+    assert row["person"] == "Alice"
+    assert row["face_state"] == "matched"
+    assert row["person_score"] == 0.68
+
+
+def test_the_four_face_states_stay_distinct(db):
+    """Collapsing these would leave a reader unable to tell a stranger from a
+    camera that never sees a face — different problems with different fixes."""
+    store.record_detections(db, "drive", [_det(), _det(), _det(), _det()])
+    store.set_detection_identity(db, 2, None, None, "no_face")
+    store.set_detection_identity(db, 3, None, 0.31, "unknown")
+    store.set_detection_identity(db, 4, store.add_person(db, "Alice"), 0.8, "matched")
+    db.commit()
+
+    rows = {r["id"]: r for r in store.recent_detections(db)}
+    assert rows[1]["face_state"] is None, "nothing looked at this one"
+    assert rows[2]["face_state"] == "no_face" and rows[2]["person_score"] is None
+    assert rows[3]["face_state"] == "unknown" and rows[3]["person_score"] == 0.31
+    assert rows[4]["person"] == "Alice"
+
+
+def test_enrolled_prints_survive_a_prune_that_deletes_everything_else(db, tmp_path):
+    """Prints are curated data, not observations. Retention is about what the
+    camera saw, and a person you enrolled is not something it saw."""
+    old = (datetime.now() - timedelta(days=60)).strftime("%Y-%m-%dT%H:%M:%S")
+    person_id = store.add_person(db, "Alice")
+    snap = store.save_snapshot(db, b"\xff\xd8jpeg", 640, 480,
+                               directory=str(tmp_path / "snaps"))
+    store.add_face_print(db, person_id, _print_bytes(), "sface_2021dec", "snapshot",
+                         source_snapshot_id=snap, directory=str(tmp_path / "faces"))
+    store.record_detections(db, "drive", [_det()], snapshot_id=snap, at=old)
+    db.execute("UPDATE snapshots SET taken_at = ?", (old,))
+    db.commit()
+
+    store.prune(db, detection_days=1, snapshot_days=1, directory=str(tmp_path / "snaps"))
+    db.commit()
+
+    assert db.execute("SELECT COUNT(*) FROM detections").fetchone()[0] == 0
+    assert db.execute("SELECT COUNT(*) FROM snapshots").fetchone()[0] == 0
+    assert len(store.face_prints(db, model="sface_2021dec")) == 1, "prune ate an enrolment"
+    # The image it came from is gone, so the pointer says so rather than naming
+    # a row that no longer exists.
+    assert db.execute("SELECT source_snapshot_id FROM face_prints").fetchone()[0] is None
+
+
+def test_an_orphan_face_crop_is_swept(db, tmp_path):
+    """A crash between deleting the row and the file must not leave a picture of
+    somebody's face on disk that nothing references."""
+    directory = str(tmp_path / "faces")
+    os.makedirs(directory)
+    with open(os.path.join(directory, "999.jpg"), "wb") as handle:
+        handle.write(b"\xff\xd8jpeg")
+
+    assert store.sweep_orphan_face_files(db, directory) == 1
+    assert not os.path.exists(os.path.join(directory, "999.jpg"))
+
+
+def test_an_embedding_never_reaches_the_change_feed(db):
+    """The load-bearing privacy property: a biometric template that entered the
+    feed would be copied into Delta history and a replica, where a local DELETE
+    can never reach it."""
+    person_id = store.add_person(db, "Alice")
+    store.add_face_print(db, person_id, _print_bytes(7.5), "sface_2021dec", "snapshot")
+    db.commit()
+
+    payload = store.export(db)
+    assert "face_prints" not in payload["tables"]
+    assert "people" in payload["tables"], "the name is meant to be exported"
+
+    serialised = str(store.changes(db)) + str(payload)
+    assert "embedding" not in serialised
+    assert _print_bytes(7.5).hex()[:16] not in serialised
+
+
+def test_identifications_are_counted_per_person(db):
+    alice, bob = store.add_person(db, "Alice"), store.add_person(db, "Bob")
+    store.record_detections(db, "drive", [_det(), _det(), _det()])
+    store.set_detection_identity(db, 1, alice, 0.7, "matched")
+    store.set_detection_identity(db, 2, alice, 0.8, "matched")
+    store.set_detection_identity(db, 3, bob, 0.9, "matched")
+    db.commit()
+
+    assert store.person_counts_since(db, "2000-01-01T00:00:00") == {"Alice": 2, "Bob": 1}
+    assert store.last_identified(db)["name"] == "Bob"
+
+
+def test_recording_detections_returns_the_ids_it_wrote(db):
+    """Identification comes back a few frames later and has to name the row that
+    was written on arrival."""
+    ids = store.record_detections(db, "drive", [_det(), _det(label="car")])
+    db.commit()
+    assert ids == [1, 2]
+    assert store.record_detections(db, "drive", []) == []

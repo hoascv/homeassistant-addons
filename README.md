@@ -13,7 +13,8 @@ Personal Home Assistant add-on repository.
 - **[Detection Hub](detection-hub/DOCS.md)** — object detection on the CPU:
   watches RTSP cameras, answers on demand over HTTP, fires a Home Assistant
   event the moment something appears, and keeps the history for the pipeline.
-  amd64 only.
+  Optionally puts a **name** to the people it sees, if your camera shows faces
+  big enough — it has a check that tells you. amd64 only.
 - **[Add-on Watchdog](addon-watchdog/DOCS.md)** — whether the add-ons here are
   actually working, not merely running: a status page plus a sensor per add-on,
   with a probe that catches a live container around a dead service. It also

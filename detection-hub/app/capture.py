@@ -113,8 +113,12 @@ class PresenceTracker:
     def __init__(self, absent_seconds=30, iou_threshold=SAME_OBJECT_IOU):
         self.absent_seconds = absent_seconds
         self.iou_threshold = iou_threshold
-        self._tracks = {}  # camera -> [{label, box, missed_since}]
+        self._tracks = {}  # camera -> [{label, box, missed_since, track_id, ...}]
         self._lock = threading.Lock()
+        # Tracks used to be anonymous, which was fine while the only question was
+        # "is this the same object". Identification asks a second one — "have we
+        # named this one yet" — and that needs something to hang an answer on.
+        self._next_track_id = 1
 
     def reconcile(self, camera, detections, now=None):
         """Return only the detections that are new arrivals this frame.
@@ -142,9 +146,21 @@ class PresenceTracker:
                     tracks[best]["missed_since"] = None
                     claimed.add(best)
                 else:
-                    tracks.append(
-                        {"label": det["label"], "box": det["box"], "missed_since": None}
-                    )
+                    tracks.append({
+                        "label": det["label"], "box": det["box"], "missed_since": None,
+                        "track_id": self._next_track_id,
+                        # Filled in by the worker once the arrival has been
+                        # written: identification updates that row rather than
+                        # writing a second one.
+                        "detection_id": None,
+                        "attempts": 0,
+                        "resolved": False,
+                    })
+                    # Stamped on the detection so the worker can tie the row it
+                    # is about to write back to the track. Inert everywhere else:
+                    # neither record_detections nor fire_event looks at it.
+                    det["track_id"] = self._next_track_id
+                    self._next_track_id += 1
                     claimed.add(len(tracks) - 1)
                     fresh.append(det)
 
@@ -161,6 +177,57 @@ class PresenceTracker:
                     survivors.append(track)
             self._tracks[camera] = survivors
             return fresh
+
+    def note_detection_id(self, camera, track_id, detection_id):
+        """Tell a track which row its arrival was written to."""
+        with self._lock:
+            for track in self._tracks.get(camera, []):
+                if track.get("track_id") == track_id:
+                    track["detection_id"] = detection_id
+                    return True
+        return False
+
+    def awaiting_identity(self, camera, label="person", max_attempts=5):
+        """Live tracks still worth looking at for a face.
+
+        This is what makes identification possible at all. `reconcile` emits a
+        detection once, on arrival — and somebody walking up a path is usually
+        facing anywhere but the camera at that moment. The track outlives the
+        arrival, so the frames after it can keep looking and name the row that
+        was already written.
+
+        Returns shallow copies: the caller runs slow vision work against these
+        and must not be holding a reference into the tracker's own state while
+        another thread reconciles it.
+        """
+        with self._lock:
+            return [
+                dict(track)
+                for track in self._tracks.get(camera, [])
+                if track["label"] == label
+                and not track.get("resolved")
+                and track.get("detection_id") is not None
+                and track.get("attempts", 0) < max_attempts
+            ]
+
+    def note_attempt(self, camera, track_id):
+        """Count one face pass against a track, returning attempts so far."""
+        with self._lock:
+            for track in self._tracks.get(camera, []):
+                if track.get("track_id") == track_id:
+                    track["attempts"] = track.get("attempts", 0) + 1
+                    return track["attempts"]
+        return None
+
+    def resolve(self, camera, track_id):
+        """This track is done — matched, or out of attempts. Either way nothing
+        else is spent on it while it stays in view."""
+        with self._lock:
+            for track in self._tracks.get(camera, []):
+                if track.get("track_id") == track_id:
+                    track["resolved"] = True
+                    return True
+        return False
 
 
 class CameraWorker(threading.Thread):
@@ -185,6 +252,10 @@ class CameraWorker(threading.Thread):
         presence=_UNSET,
         capture_factory=open_stream,
         log=print,
+        identifier=None,
+        on_identity=None,
+        face_attempts=5,
+        face_min_pixels=60,
     ):
         super().__init__(name=f"camera-{camera_id}", daemon=True)
         self.camera_id = camera_id
@@ -205,6 +276,13 @@ class CameraWorker(threading.Thread):
         self.presence = PresenceTracker() if presence is _UNSET else presence
         self.capture_factory = capture_factory
         self.log = log
+        # Both None unless identification is switched on, and the face pass is
+        # skipped entirely when either is missing — so the cost of the feature
+        # for someone not using it is one `if`.
+        self.identifier = identifier
+        self.on_identity = on_identity
+        self.face_attempts = max(1, int(face_attempts))
+        self.face_min_pixels = int(face_min_pixels)
 
         # NOT `_stop`: threading.Thread._stop() is an internal method that
         # join() calls, and shadowing it with an Event makes every join raise
@@ -312,16 +390,93 @@ class CameraWorker(threading.Thread):
             fresh = self.presence.reconcile(self.camera_id, detections)
         else:
             fresh = detections
-        if not fresh:
+
+        written = None
+        if fresh:
+            self.frames_detected += 1
+            self.last_detection_at = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+            try:
+                written = self.on_detections(self.camera_id, fresh, frame)
+                self._remember_rows(fresh, written)
+            except Exception as exc:  # noqa: BLE001 - a storage failure is not a
+                # reason to stop watching the camera; the next frame may well work.
+                self.log(f"camera {self.camera_id}: could not record: {exc}")
+
+        # Deliberately outside the `if fresh` above: after the arrival frame a
+        # person who is still standing there produces no fresh detections at all,
+        # and those are exactly the frames in which they finally turn towards the
+        # camera. `detections` rather than `fresh` is the test for "somebody is
+        # in view right now".
+        if detections and self.identifier is not None:
+            try:
+                if self.presence is not None:
+                    self._identify_pending(frame)
+                else:
+                    self._identify_once(frame, fresh, written)
+            except Exception as exc:  # noqa: BLE001 - same reasoning as above:
+                # a face pass that failed must not end the camera thread.
+                self.log(f"camera {self.camera_id}: could not identify: {exc}")
+
+    def _remember_rows(self, fresh, written):
+        """Tie each arrival to the row it was written to, for identification.
+
+        `written` is the list of ids the recorder produced, in the same order.
+        An older recorder returning None simply means no identification: the
+        pass needs a row to update, and inventing an id would corrupt one.
+        """
+        if not written or self.presence is None:
+            return
+        for det, detection_id in zip(fresh, written):
+            if det.get("track_id") is not None:
+                self.presence.note_detection_id(
+                    self.camera_id, det["track_id"], detection_id
+                )
+
+    def _identify_once(self, frame, fresh, written):
+        """The no-tracker path: one attempt per detection, no retry.
+
+        With `collapse_repeats` off there are no tracks, so there is nothing to
+        retry against — every frame is an arrival. Identification still works,
+        it just gets the one look, which is the cost the operator chose when they
+        turned collapsing off. Saying nothing here would be worse: a feature that
+        silently does nothing under a supported setting is a trap.
+        """
+        if self.on_identity is None or not written:
+            return
+        for det, detection_id in zip(fresh, written):
+            if det.get("label") != "person":
+                continue
+            found = self.identifier.find_in_person(
+                frame, det["box"], self.face_min_pixels
+            )
+            self.on_identity(self.camera_id, detection_id, found, True)
+
+    def _identify_pending(self, frame):
+        """Look for a face on every person still waiting for a name.
+
+        Bounded twice over: only tracks under their attempt budget are
+        considered, and a track is resolved — permanently, for as long as it
+        stays in view — the moment it is matched or runs out. So a person who
+        never shows their face costs `face_attempts` crops for the whole visit,
+        not one per frame for as long as they stand there.
+        """
+        if self.identifier is None or self.on_identity is None or self.presence is None:
             return
 
-        self.frames_detected += 1
-        self.last_detection_at = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
-        try:
-            self.on_detections(self.camera_id, fresh, frame)
-        except Exception as exc:  # noqa: BLE001 - a storage failure is not a
-            # reason to stop watching the camera; the next frame may well work.
-            self.log(f"camera {self.camera_id}: could not record: {exc}")
+        for track in self.presence.awaiting_identity(
+            self.camera_id, "person", self.face_attempts
+        ):
+            attempts = self.presence.note_attempt(self.camera_id, track["track_id"])
+            final = attempts is not None and attempts >= self.face_attempts
+            found = self.identifier.find_in_person(
+                frame, track["box"], self.face_min_pixels
+            )
+            # Nothing usable and budget left: say nothing, look again next frame.
+            # This is what keeps one visit to one database write.
+            if found is None and not final:
+                continue
+            if self.on_identity(self.camera_id, track["detection_id"], found, final):
+                self.presence.resolve(self.camera_id, track["track_id"])
 
     # -- reporting -------------------------------------------------------------
 
@@ -348,10 +503,14 @@ class CaptureManager:
     implementation would be more code for a case that barely arises.
     """
 
-    def __init__(self, det, on_detections, log=print):
+    def __init__(self, det, on_detections, log=print, identifier=None, on_identity=None):
         self.detector = det
         self.on_detections = on_detections
         self.log = log
+        # The face models and the callback that decides who somebody is. Both
+        # None means identification is off, which is the default.
+        self.identifier = identifier
+        self.on_identity = on_identity
         self.workers = {}
         self._lock = threading.Lock()
 
@@ -375,6 +534,8 @@ class CaptureManager:
                     self.on_detections,
                     presence=presence,
                     log=self.log,
+                    identifier=self.identifier,
+                    on_identity=self.on_identity,
                     **options,
                 )
                 self.workers[camera["id"]] = worker

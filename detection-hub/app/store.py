@@ -36,11 +36,24 @@ DB_PATH = os.environ.get("DETECTION_HUB_DB_PATH", "/data/detections.db")
 TRACKED_TABLES = {
     "detections": "id",
     "cameras": "id",
+    # Names, so `detections.person_id` is not a dangling integer downstream.
+    "people": "id",
 }
 
-# Belt and braces. Nothing in TRACKED_TABLES holds a blob today; this is what
-# stops that being silently untrue the day someone adds one.
-BLOB_COLUMNS = {("snapshots", "image")}
+# `face_prints` is deliberately NOT tracked, and the reason is worth stating
+# because it is the load-bearing part of a promise this add-on makes.
+#
+# A face embedding is a biometric template. The feed lands in Delta tables with
+# object versioning, plus a Postgres replica — copies a `DELETE FROM face_prints`
+# here can never reach. If prints were in the feed, "delete a person and their
+# biometrics are gone" would be a lie. Keeping them out is what makes it true.
+# They have no downstream use either: there is nothing a lakehouse can do with a
+# 128-D vector except re-identify people, which happens here already.
+#
+# Belt and braces. `_serialisable` only runs for tracked tables, so this entry is
+# inert today; it is what stops the exclusion being silently untrue the day
+# somebody adds the table to the feed.
+BLOB_COLUMNS = {("snapshots", "image"), ("face_prints", "embedding")}
 
 CHANGE_LOG_KEEP_DAYS = 90
 
@@ -148,6 +161,70 @@ def init_db(path=None):
     )
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_detections_camera ON detections(camera, detected_at)"
+    )
+
+    # Who this person was, added in 1.11.0. Left NULL on rows written before it:
+    # they were never looked at, and back-filling them with "no face" would claim
+    # a pass that never ran.
+    detection_columns = {row[1] for row in conn.execute("PRAGMA table_info(detections)")}
+    for column, declaration in (
+        ("person_id", "INTEGER"),
+        ("person_score", "REAL"),
+        # The honesty column, and the reason there are four states rather than a
+        # nullable person_id. NULL means nothing looked — feature off, not a
+        # person, or a camera excluded. 'no_face' means it looked until the
+        # budget ran out and never saw a face big enough. 'unknown' means it saw
+        # one and did not recognise it, with person_score holding what it scored.
+        # 'matched' means person_id is somebody. Collapsing these would leave a
+        # reader unable to tell a stranger from a camera that cannot see faces.
+        ("face_state", "TEXT"),
+    ):
+        if column not in detection_columns:
+            conn.execute(f"ALTER TABLE detections ADD COLUMN {column} {declaration}")
+
+    # Curated data, not observations: a person is enrolled by hand and stays
+    # until deleted by hand. Nothing in prune() touches either of these tables.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS people (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT,
+            -- Archived rather than deleted when detections still reference them,
+            -- so history stays legible after somebody is removed.
+            archived INTEGER NOT NULL DEFAULT 0
+        )
+        """
+    )
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_people_name ON people(name)")
+
+    # Face embeddings: biometric templates, and treated as such. They are the one
+    # thing here deliberately kept out of the change feed — see TRACKED_TABLES.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS face_prints (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            person_id INTEGER NOT NULL,
+            embedding BLOB NOT NULL,
+            dims INTEGER NOT NULL,
+            -- Which recogniser produced it. A vector from one model means
+            -- nothing to another, and comparing across them would not error --
+            -- it would quietly score strangers as matches.
+            model TEXT NOT NULL,
+            source TEXT NOT NULL,
+            -- Nullable, and nulled rather than cascaded when the snapshot ages
+            -- out: the print outlives the image it came from.
+            source_snapshot_id INTEGER,
+            face_w INTEGER,
+            face_h INTEGER,
+            detect_score REAL,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_face_prints_person ON face_prints(person_id)"
     )
 
     # An index, not a blob store: the bytes live in files beside the database.
@@ -282,6 +359,23 @@ def install_change_triggers(conn):
 # --- writing ------------------------------------------------------------------
 
 
+def face_dir(db_path=None):
+    """Where enrolled face crops live: beside the database, like snapshots.
+
+    Kept out of `snapshots/` because the two age completely differently — those
+    are pruned within days, these last until somebody deletes a person.
+    """
+    return os.path.join(os.path.dirname(db_path or DB_PATH), "faces")
+
+
+def face_dir_for(conn):
+    return face_dir(getattr(conn, "db_path", None))
+
+
+def face_path(print_id, directory=None):
+    return os.path.join(directory or face_dir(), f"{print_id}.jpg")
+
+
 def snapshot_dir_for(conn):
     """The image directory belonging to whatever database this connection opened."""
     return snapshot_dir(getattr(conn, "db_path", None))
@@ -319,25 +413,32 @@ def save_snapshot(conn, jpeg, width, height, directory=None):
 
 
 def record_detections(conn, camera, detections, snapshot_id=None, at=None):
-    """Insert one row per detection. Does not commit — the caller batches."""
+    """Insert one row per detection, returning their ids in order.
+
+    A loop rather than `executemany`, which cannot report the ids it wrote. The
+    ids are what lets identification come back a few frames later and name the
+    row that was written on arrival, and N here is the fresh detections in one
+    frame — usually one, never many.
+
+    Does not commit; the caller batches.
+    """
     stamp = at or now()
-    rows = [
-        (
-            camera,
-            det["label"],
-            float(det["confidence"]),
-            det["box"][0], det["box"][1], det["box"][2], det["box"][3],
-            stamp,
-            snapshot_id,
+    ids = []
+    for det in detections:
+        cur = conn.execute(
+            "INSERT INTO detections (camera, label, confidence, box_x, box_y, box_w,"
+            " box_h, detected_at, snapshot_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                camera,
+                det["label"],
+                float(det["confidence"]),
+                det["box"][0], det["box"][1], det["box"][2], det["box"][3],
+                stamp,
+                snapshot_id,
+            ),
         )
-        for det in detections
-    ]
-    conn.executemany(
-        "INSERT INTO detections (camera, label, confidence, box_x, box_y, box_w,"
-        " box_h, detected_at, snapshot_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        rows,
-    )
-    return len(rows)
+        ids.append(cur.lastrowid)
+    return ids
 
 
 def upsert_camera(conn, camera_id, kind, **fields):
@@ -365,6 +466,185 @@ def bump_camera_counters(conn, camera_id, frames_seen=0, frames_detected=0):
         " frames_detected = frames_detected + ? WHERE id = ?",
         (frames_seen, frames_detected, camera_id),
     )
+
+
+# --- people and their faces ---------------------------------------------------
+
+
+def add_person(conn, name):
+    """A named person, or None if that name is taken.
+
+    None rather than an exception because the caller is an HTTP route turning
+    this into a 409, and a duplicate name is a user typing something twice, not a
+    fault.
+    """
+    try:
+        cur = conn.execute(
+            "INSERT INTO people (name, created_at) VALUES (?, ?)", (name, now())
+        )
+    except sqlite3.IntegrityError:
+        return None
+    return cur.lastrowid
+
+
+def rename_person(conn, person_id, name):
+    cur = conn.execute(
+        "UPDATE people SET name = ?, updated_at = ? WHERE id = ?",
+        (name, now(), person_id),
+    )
+    return cur.rowcount > 0
+
+
+def delete_person(conn, person_id, directory=None):
+    """Remove a person, and really remove their biometrics.
+
+    The prints are hard-deleted with their crop files, always. The `people` row
+    is archived instead when a detection still points at it, so history stays
+    readable — "someone was identified here" survives, the template that made it
+    possible does not.
+
+    This promise is only honest because face_prints never entered the change
+    feed: a row that had been published to the lakehouse could not be recalled.
+    """
+    directory = directory or face_dir_for(conn)
+    prints = [row[0] for row in conn.execute(
+        "SELECT id FROM face_prints WHERE person_id = ?", (person_id,)
+    )]
+    conn.execute("DELETE FROM face_prints WHERE person_id = ?", (person_id,))
+    for print_id in prints:
+        _remove_quietly(face_path(print_id, directory))
+
+    referenced = conn.execute(
+        "SELECT 1 FROM detections WHERE person_id = ? LIMIT 1", (person_id,)
+    ).fetchone()
+    if referenced:
+        conn.execute(
+            "UPDATE people SET archived = 1, updated_at = ? WHERE id = ?",
+            (now(), person_id),
+        )
+        return {"prints": len(prints), "person": "archived"}
+    conn.execute("DELETE FROM people WHERE id = ?", (person_id,))
+    return {"prints": len(prints), "person": "deleted"}
+
+
+def add_face_print(conn, person_id, embedding, model, source, crop_jpeg=None,
+                   source_snapshot_id=None, face_w=None, face_h=None,
+                   detect_score=None, directory=None):
+    """Store one embedding for a person, and the crop it came from.
+
+    Same ordering as `save_snapshot`: the row names the file. A crop that cannot
+    be written costs the picture, not the print — the vector is the part that
+    identifies anybody, and the image only exists so a human can audit which
+    print is the bad one.
+    """
+    cur = conn.execute(
+        "INSERT INTO face_prints (person_id, embedding, dims, model, source,"
+        " source_snapshot_id, face_w, face_h, detect_score, created_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (person_id, embedding, len(embedding) // 4, model, source,
+         source_snapshot_id, face_w, face_h, detect_score, now()),
+    )
+    print_id = cur.lastrowid
+    if crop_jpeg:
+        directory = directory or face_dir_for(conn)
+        try:
+            os.makedirs(directory, exist_ok=True)
+            with open(face_path(print_id, directory), "wb") as handle:
+                handle.write(crop_jpeg)
+        except OSError:
+            pass
+    return print_id
+
+
+def delete_face_print(conn, print_id, directory=None):
+    removed = conn.execute(
+        "DELETE FROM face_prints WHERE id = ?", (print_id,)
+    ).rowcount
+    if removed:
+        _remove_quietly(face_path(print_id, directory or face_dir_for(conn)))
+    return removed > 0
+
+
+def face_prints(conn, model=None):
+    """(person_id, embedding) for every print, optionally one model's only.
+
+    Filtered by model because a print made by a different recogniser is not
+    comparable — scoring it would produce a number, and the number would be
+    meaningless. This is the gallery the live matcher loads.
+    """
+    if model:
+        rows = conn.execute(
+            "SELECT fp.person_id, fp.embedding FROM face_prints fp"
+            " JOIN people p ON p.id = fp.person_id"
+            " WHERE fp.model = ? AND p.archived = 0",
+            (model,),
+        )
+    else:
+        rows = conn.execute(
+            "SELECT fp.person_id, fp.embedding FROM face_prints fp"
+            " JOIN people p ON p.id = fp.person_id WHERE p.archived = 0"
+        )
+    return [(row[0], row[1]) for row in rows]
+
+
+def people(conn, include_archived=False):
+    """Everyone enrolled, with what is known about their prints.
+
+    `min_face_w` rides along because it is the number that predicts whether
+    matching will work: a person enrolled only from large close-up faces will not
+    be recognised from the far end of a driveway, and that is visible here rather
+    than as months of silence.
+    """
+    clause = "" if include_archived else " WHERE p.archived = 0"
+    rows = conn.execute(
+        "SELECT p.id, p.name, p.created_at, p.updated_at, p.archived,"
+        " COUNT(fp.id) AS prints, MIN(fp.face_w) AS min_face_w,"
+        " MAX(fp.created_at) AS last_print_at"
+        " FROM people p LEFT JOIN face_prints fp ON fp.person_id = p.id"
+        f"{clause} GROUP BY p.id ORDER BY p.name"
+    )
+    return [dict(row) for row in rows]
+
+
+def person_prints(conn, person_id):
+    """One person's prints, without the vectors — this feeds a UI, and an
+    embedding is not something to hand to a browser."""
+    rows = conn.execute(
+        "SELECT id, model, source, source_snapshot_id, face_w, face_h,"
+        " detect_score, created_at FROM face_prints WHERE person_id = ?"
+        " ORDER BY id DESC",
+        (person_id,),
+    )
+    return [dict(row) for row in rows]
+
+
+def set_detection_identity(conn, detection_id, person_id, score, face_state):
+    """Write the outcome of a face pass onto the detection it belongs to."""
+    cur = conn.execute(
+        "UPDATE detections SET person_id = ?, person_score = ?, face_state = ?"
+        " WHERE id = ?",
+        (person_id, score, face_state, detection_id),
+    )
+    return cur.rowcount > 0
+
+
+def person_counts_since(conn, since_iso):
+    """Identifications per person since a timestamp — what the sensor publishes."""
+    rows = conn.execute(
+        "SELECT p.name, COUNT(*) n FROM detections d JOIN people p ON p.id = d.person_id"
+        " WHERE d.detected_at >= ? GROUP BY p.name ORDER BY n DESC",
+        (since_iso,),
+    ).fetchall()
+    return {row["name"]: row["n"] for row in rows}
+
+
+def last_identified(conn):
+    """The most recent named detection, or None."""
+    row = conn.execute(
+        "SELECT d.detected_at, d.camera, d.person_score, p.name FROM detections d"
+        " JOIN people p ON p.id = d.person_id ORDER BY d.id DESC LIMIT 1"
+    ).fetchone()
+    return dict(row) if row else None
 
 
 # --- retention ----------------------------------------------------------------
@@ -411,8 +691,17 @@ def prune(conn, detection_days=30, snapshot_days=7, snapshot_max=2000, directory
         "UPDATE detections SET snapshot_id = NULL WHERE snapshot_id IS NOT NULL"
         " AND snapshot_id NOT IN (SELECT id FROM snapshots)"
     )
+    # A print outlives the image it was enrolled from, for the same reason and
+    # more strongly: it is curated data. Nothing here deletes `people` or
+    # `face_prints` — they are outside retention by design, not by oversight —
+    # so only the pointer goes.
+    conn.execute(
+        "UPDATE face_prints SET source_snapshot_id = NULL WHERE source_snapshot_id"
+        " IS NOT NULL AND source_snapshot_id NOT IN (SELECT id FROM snapshots)"
+    )
 
     removed["orphan_files"] = sweep_orphan_files(conn, directory)
+    removed["orphan_faces"] = sweep_orphan_face_files(conn)
     removed["change_log"] = prune_change_log(conn)
     return removed
 
@@ -470,6 +759,34 @@ def sweep_orphan_files(conn, directory=None):
         except ValueError:
             continue
         if snapshot_id not in known and _remove_quietly(os.path.join(directory, name)):
+            removed += 1
+    return removed
+
+
+def sweep_orphan_face_files(conn, directory=None):
+    """Delete face crops with no print row.
+
+    The same self-healing as `sweep_orphan_files`, and it matters more here: a
+    crash between deleting a print and deleting its file would leave a picture of
+    somebody's face on disk that nothing references — which is exactly the thing
+    "delete a person and their data is gone" must not leave behind.
+    """
+    directory = directory or face_dir_for(conn)
+    try:
+        names = os.listdir(directory)
+    except OSError:
+        return 0
+
+    known = {row[0] for row in conn.execute("SELECT id FROM face_prints")}
+    removed = 0
+    for name in names:
+        if not name.endswith(".jpg"):
+            continue
+        try:
+            print_id = int(name[:-4])
+        except ValueError:
+            continue
+        if print_id not in known and _remove_quietly(os.path.join(directory, name)):
             removed += 1
     return removed
 
@@ -582,7 +899,9 @@ def stats(conn, db_path=None):
     counts, other = {}, {}
     for table in TRACKED_TABLES:
         counts[table] = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
-    for table in ("snapshots", "change_log"):
+    # face_prints sits with the untracked tables because that is what it is —
+    # counted so the number of enrolled templates is visible, never exported.
+    for table in ("snapshots", "change_log", "face_prints"):
         other[table] = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
 
     try:
@@ -643,10 +962,13 @@ def recent_detections(conn, limit=50, camera=None, date_from=None, date_to=None,
         clauses.append("label IN (%s)" % ",".join("?" for _ in labels))
         params.extend(labels)
 
-    sql = "SELECT * FROM detections"
+    # The name rides along by join rather than being denormalised onto the row:
+    # renaming somebody must not need a pass over every detection they appear in,
+    # and a name in two places is a name that will disagree with itself.
+    sql = "SELECT d.*, p.name AS person FROM detections d LEFT JOIN people p ON p.id = d.person_id"
     if clauses:
-        sql += " WHERE " + " AND ".join(clauses)
-    sql += " ORDER BY id DESC LIMIT ?"
+        sql += " WHERE " + " AND ".join("d." + clause for clause in clauses)
+    sql += " ORDER BY d.id DESC LIMIT ?"
     params.append(max(1, min(500, int(limit))))
     return [dict(row) for row in conn.execute(sql, params).fetchall()]
 

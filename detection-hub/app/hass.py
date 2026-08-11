@@ -31,6 +31,9 @@ STATUS_DIR = os.environ.get("PIPELINE_STATUS_DIR", "/share/pipeline-status")
 SLUG = "detection-hub"
 
 EVENT_TYPE = "detection_hub_detection"
+# Who, as opposed to what. Separate because it is a separate fact arriving later
+# — see fire_identified.
+IDENTIFIED_EVENT_TYPE = "detection_hub_identified"
 
 
 def api_request(method, path, payload=None, timeout=5):
@@ -84,6 +87,34 @@ def fire_event(camera, detection, snapshot_id=None, event_type=EVENT_TYPE):
     )[1]
 
 
+def fire_identified(camera, detection_id, person, person_id, score, state,
+                    event_type=IDENTIFIED_EVENT_TYPE):
+    """Announce who a person was — including when the answer is "nobody I know".
+
+    A separate event from `fire_event` rather than a richer detection payload,
+    because they are two different facts arriving at two different times. The
+    detection fires on arrival, before any face has been seen; waiting for a name
+    would delay every detection by up to `face_attempts` frames, and attaching a
+    name to it later would mean the event lied when it was sent.
+
+    Fired on the unknown case too, and that is the point: "an unrecognised person
+    at 3am" is the automation worth having, and it is only expressible if the
+    event exists.
+    """
+    return api_request(
+        "POST",
+        f"/events/{event_type}",
+        {
+            "camera": camera,
+            "detection_id": detection_id,
+            "person": person,
+            "person_id": person_id,
+            "score": score,
+            "state": state,
+        },
+    )[1]
+
+
 def notify(service, message, title="Detection Hub"):
     """Send a push notification through a notify.* service, or report why not.
 
@@ -121,6 +152,46 @@ def camera_snapshot(entity_id, timeout=10):
 def _entity_suffix(name):
     """A camera name as an entity-id fragment: lowercase, underscores only."""
     return "".join(ch if ch.isalnum() else "_" for ch in name.lower()).strip("_")
+
+
+def publish_people_sensors(prefix, person_totals, last):
+    """Who has been recognised. Returns a list of errors, not an exception.
+
+    Deliberately not a `binary_sensor.<person>_home` each. A camera sees an
+    arrival; it never sees a departure, so a presence sensor built on this would
+    be wrong for most of the day — and inventing a state the system cannot
+    observe is the one thing this add-on does not do.
+    """
+    errors = []
+
+    def push(entity, state, attrs):
+        error = push_state(entity, state, attrs)
+        if error:
+            errors.append(f"{entity}: {error}")
+
+    push(
+        f"sensor.{prefix}_people_identified_today",
+        sum(person_totals.values()),
+        {
+            "friendly_name": "People identified today",
+            "icon": "mdi:account-check",
+            "unit_of_measurement": "identifications",
+            "state_class": "measurement",
+            "by_person": person_totals,
+        },
+    )
+    push(
+        f"sensor.{prefix}_last_person",
+        (last or {}).get("name") or "never",
+        {
+            "friendly_name": "Last person identified",
+            "icon": "mdi:account",
+            "camera": (last or {}).get("camera"),
+            "score": (last or {}).get("person_score"),
+            "at": (last or {}).get("detected_at"),
+        },
+    )
+    return errors
 
 
 def publish_sensors(prefix, totals, cameras, detector_status):

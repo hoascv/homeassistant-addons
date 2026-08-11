@@ -215,7 +215,15 @@ def test_an_object_that_leaves_and_returns_is_logged_again():
     # the track is dropped.
     t.reconcile("drive", [_det(label="person", box=(0, 0, 20, 40))], now=10)
     t.reconcile("drive", [_det(label="person", box=(0, 0, 20, 40))], now=50)
-    assert t.reconcile("drive", [_det()], now=60) == [_det()]
+
+    returning = t.reconcile("drive", [_det()], now=60)
+    assert len(returning) == 1
+    # Compared field by field rather than whole-dict: an arrival now also carries
+    # the track_id identification needs, and that is not part of what the caller
+    # asked about.
+    assert returning[0]["label"] == "car"
+    assert returning[0]["box"] == _det()["box"]
+    assert returning[0]["track_id"] is not None
 
 
 def test_a_single_missed_frame_does_not_count_as_leaving():
@@ -526,3 +534,178 @@ def test_a_failed_open_explains_itself(street):
 def test_explain_passes_other_errors_through():
     assert "stream ended" in capture._explain(OSError("stream ended"))
     assert capture._explain(OSError("x" * 500)).__len__() <= 200
+
+
+# --- identifying who a person is ----------------------------------------------
+
+
+class FakeIdentifier:
+    """Stands in for the face models: says what it was told to say, and counts
+    how often it was asked — which is the number the retry budget exists to
+    bound."""
+
+    def __init__(self, results=()):
+        # One entry per call: a dict for "found a usable face", None for "no
+        # usable face this frame". Runs out to None.
+        self.results = list(results)
+        self.calls = 0
+
+    def find_in_person(self, frame, box, min_pixels=60):
+        self.calls += 1
+        if self.calls <= len(self.results):
+            return self.results[self.calls - 1]
+        return None
+
+
+def _face(score=0.9):
+    return {"usable": True, "embedding": [score] * 128, "face_box": [1, 2, 60, 60],
+            "face_width": 60, "detect_score": score, "aligned": None, "reason": None}
+
+
+def _worker(identifier, on_identity, presence=None, **kwargs):
+    """A worker wired for identification, with recording stubbed to hand back
+    row ids the way the real recorder does.
+
+    `motion_threshold=0` because these tests feed identical blank frames and the
+    gate would otherwise stop every frame after the first — see
+    test_retries_only_happen_on_frames_that_pass_the_motion_gate, which is about
+    that interaction rather than around it.
+    """
+    written = []
+
+    def record(camera, detections, frame):
+        ids = [100 + len(written) + i for i in range(len(detections))]
+        written.extend(ids)
+        return ids
+
+    kwargs.setdefault("motion_threshold", 0)
+    worker = capture.CameraWorker(
+        "drive", "rtsp://x", CountingDetector(), record,
+        presence=capture.PresenceTracker() if presence is None else presence,
+        identifier=identifier, on_identity=on_identity, **kwargs,
+    )
+    return worker
+
+
+def test_retries_only_happen_on_frames_that_pass_the_motion_gate():
+    """A consequence worth knowing rather than discovering. Identification runs
+    inside the detection pass, so a person who arrives and then stands perfectly
+    still stops producing frames to look at. In practice somebody walking up to a
+    door is moving the whole way, which is when the retries happen — but it means
+    the budget is an upper bound, not a promise."""
+    calls = []
+    identifier = FakeIdentifier([None, _face()])
+    worker = _worker(identifier, lambda *args: calls.append(args) or True,
+                     motion_threshold=0.5)
+    frame = np.zeros((100, 100, 3), dtype=np.uint8)
+
+    for _ in range(5):
+        worker._consider(frame)
+
+    assert identifier.calls == 1, "a frozen scene kept paying for face passes"
+    assert calls == [], "and nothing was written on the strength of one look"
+
+
+def test_a_person_is_identified_on_the_frame_they_arrive():
+    calls = []
+    identifier = FakeIdentifier([_face()])
+    worker = _worker(identifier, lambda *args: calls.append(args) or True)
+
+    worker._consider(np.zeros((100, 100, 3), dtype=np.uint8))
+
+    assert len(calls) == 1
+    camera, detection_id, found, final = calls[0]
+    assert camera == "drive"
+    assert detection_id == 100, "the pass must name the row the arrival wrote"
+    assert found["usable"] is True
+
+
+def test_a_face_that_appears_later_still_names_the_arrival_row():
+    """The reason tracks have identity at all. A person is logged the moment
+    they appear, which is usually before they turn towards the camera — without
+    the retry they could never be named."""
+    calls = []
+    identifier = FakeIdentifier([None, None, _face()])
+    worker = _worker(identifier, lambda *args: calls.append(args) or True)
+    frame = np.zeros((100, 100, 3), dtype=np.uint8)
+
+    for _ in range(3):
+        worker._consider(frame)
+
+    assert identifier.calls == 3, "it must keep looking after the arrival frame"
+    assert len(calls) == 1, "only the frame that found a face writes"
+    assert calls[0][1] == 100, "and it updates the row written on arrival"
+
+
+def test_looking_stops_once_the_budget_runs_out():
+    """A person who never shows their face costs a fixed number of crops for the
+    whole visit, not one per frame for as long as they stand there."""
+    calls = []
+    identifier = FakeIdentifier([])
+    worker = _worker(identifier, lambda *args: calls.append(args) or True,
+                     face_attempts=3)
+    frame = np.zeros((100, 100, 3), dtype=np.uint8)
+
+    for _ in range(10):
+        worker._consider(frame)
+
+    assert identifier.calls == 3, "the budget was not respected"
+    assert len(calls) == 1, "exactly one write, recording that looking is over"
+    assert calls[0][3] is True, "and it is flagged as the final attempt"
+
+
+def test_nothing_is_written_while_there_is_still_budget_left():
+    """Otherwise a person standing still puts one row-update per frame into the
+    change feed, which is the exact noise collapse_repeats exists to prevent."""
+    calls = []
+    worker = _worker(FakeIdentifier([]), lambda *args: calls.append(args) or True,
+                     face_attempts=5)
+    frame = np.zeros((100, 100, 3), dtype=np.uint8)
+
+    worker._consider(frame)
+    worker._consider(frame)
+    assert calls == [], "wrote before it had finished looking"
+
+
+def test_a_resolved_person_is_not_looked_at_again():
+    identifier = FakeIdentifier([_face(), _face(), _face()])
+    worker = _worker(identifier, lambda *args: True)
+    frame = np.zeros((100, 100, 3), dtype=np.uint8)
+
+    for _ in range(5):
+        worker._consider(frame)
+
+    assert identifier.calls == 1, "kept paying for somebody already identified"
+
+
+def test_an_identifier_that_raises_does_not_end_the_camera_thread():
+    """Same rule as recording: watching the camera outlives any one frame."""
+    class Exploding:
+        def find_in_person(self, *args, **kwargs):
+            raise RuntimeError("model died")
+
+    logged = []
+    worker = _worker(Exploding(), lambda *args: True, log=logged.append)
+    worker._consider(np.zeros((100, 100, 3), dtype=np.uint8))
+
+    assert any("could not identify" in line for line in logged)
+
+
+def test_without_a_tracker_identification_still_gets_one_look():
+    """collapse_repeats off means no tracks, so there is nothing to retry
+    against. Silently doing nothing under a supported setting would be a trap."""
+    calls = []
+    identifier = FakeIdentifier([_face()])
+    worker = _worker(identifier, lambda *args: calls.append(args) or True,
+                     presence=None)
+    worker.presence = None
+    worker._consider(np.zeros((100, 100, 3), dtype=np.uint8))
+
+    assert len(calls) == 1
+    assert calls[0][3] is True, "one look, so it is always the final one"
+
+
+def test_identification_is_skipped_entirely_when_it_is_off():
+    """The cost of this feature to somebody not using it is one `if`."""
+    worker = _worker(None, None)
+    worker._consider(np.zeros((100, 100, 3), dtype=np.uint8))  # must not raise

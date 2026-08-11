@@ -168,6 +168,23 @@
     <div id="recent" class="recent"></div>
   </div>
 
+  <div class="card">
+    <h2>People</h2>
+    <div class="status-row">
+      <input type="text" id="person-name" placeholder="Name" maxlength="80">
+      <input type="hidden" id="person-id">
+      <button type="button" id="person-save">Add person</button>
+      <button type="button" id="person-cancel" hidden>Cancel</button>
+      <span class="meta" id="people-note"></span>
+    </div>
+    <div id="people-list" class="recent"></div>
+    <p class="meta" style="margin-top:.6rem">
+      Enrol a face by opening a detection below and choosing <em>Who is this?</em> —
+      the snapshot is from the camera that will have to recognise them, which a
+      photo from your phone is not. Deleting somebody deletes their face data.
+    </p>
+  </div>
+
   {# The camera check. Whether faces can be identified is a property of the
      camera, not of this add-on, and an empty result is not something anyone can
      debug — so the question gets a button and a plain-words answer. #}
@@ -200,6 +217,15 @@
   <div class="box">
     <canvas id="lb-canvas"></canvas>
     <div class="lbmeta" id="lb-meta"></div>
+    {# Enrolment lives here rather than on the People card because this is where
+       the face is: the snapshot on screen is the one being enrolled from. #}
+    <div class="lbmeta" id="lb-who" hidden>
+      <label for="lb-person">Who is this?</label>
+      <select id="lb-person"></select>
+      <input type="text" id="lb-newname" placeholder="or a new name" maxlength="80">
+      <button type="button" id="lb-enrol">Enrol this face</button>
+      <span class="meta" id="lb-who-note"></span>
+    </div>
   </div>
 </div>
 
@@ -316,17 +342,29 @@ async function loadDetections() {
   const hs = shotUrl(head);
   latest.innerHTML =
     (hs ? `<img class="thumb" data-id="${head.id}" src="${hs}" alt="">` : '') +
-    `<div><div class="what">${esc(head.label)}</div>` +
+    `<div><div class="what">${esc(head.person || head.label)}</div>` +
     `<div class="sub"><span class="conf">${Math.round(head.confidence * 100)}%</span>` +
-    `<span>${esc(head.camera)}</span><span>·</span><span>${ago(head.detected_at)}</span></div></div>`;
+    `<span>${esc(head.camera)}</span><span>·</span><span>${ago(head.detected_at)}</span>` +
+    (whoLabel(head) ? `<span>·</span><span>${esc(whoLabel(head))}</span>` : '') +
+    `</div></div>`;
 
   recent.innerHTML = rest.map(d => {
     const s = shotUrl(d);
     const img = s ? `<img data-id="${d.id}" src="${s}" alt="">`
                   : '<div class="noimg">no image</div>';
-    return `<div class="shot">${img}<div class="cap"><b>${esc(d.label)}</b>` +
+    return `<div class="shot">${img}<div class="cap"><b>${esc(d.person || d.label)}</b>` +
       `<span>${esc(d.camera)} · ${ago(d.detected_at)}</span></div></div>`;
   }).join('');
+}
+
+// The four face states read as four different things, and none of them is a
+// blank that could be mistaken for either of the others. NULL — nothing looked —
+// deliberately says nothing at all.
+function whoLabel(d) {
+  if (d.person) return null;                       // the name is already the title
+  if (d.face_state === 'unknown') return 'unrecognised';
+  if (d.face_state === 'no_face') return 'no face seen';
+  return null;
 }
 
 // Object filter, populated from what has actually been detected so it offers
@@ -381,9 +419,13 @@ function openLightbox(det) {
       ctx.strokeStyle = '#5ad19a';
       ctx.strokeRect(det.box_x, det.box_y, det.box_w, det.box_h);
     }
+    const who = det.person
+      ? ` · <b>${esc(det.person)}</b>${det.person_score ? ' ' + det.person_score : ''}`
+      : (whoLabel(det) ? ' · ' + whoLabel(det) : '');
     lbMeta.innerHTML = `<b style="text-transform:capitalize">${esc(det.label)}</b> ` +
       `<span>${esc(det.camera)} · ${Math.round(det.confidence * 100)}% · ` +
-      `${esc(det.detected_at.replace('T', ' '))}</span>`;
+      `${esc(det.detected_at.replace('T', ' '))}${who}</span>`;
+    showEnrolFor(det);
     lb.classList.add('open');
   };
   img.onerror = () => {};  // pruned between listing and click; just don't open
@@ -400,6 +442,143 @@ function onThumbClick(e) {
 document.getElementById('lb-close').addEventListener('click', closeLightbox);
 lb.addEventListener('click', e => { if (e.target === lb) closeLightbox(); });
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeLightbox(); });
+
+// --- People ------------------------------------------------------------------
+// One form doing both jobs, with a hidden id telling them apart — the same shape
+// the other add-ons here use for their editable lists.
+let peopleCache = [];
+const peopleList = document.getElementById('people-list');
+const peopleNote = document.getElementById('people-note');
+const personName = document.getElementById('person-name');
+const personId = document.getElementById('person-id');
+const personSave = document.getElementById('person-save');
+const personCancel = document.getElementById('person-cancel');
+
+function resetPersonForm() {
+  personId.value = '';
+  personName.value = '';
+  personSave.textContent = 'Add person';
+  personCancel.hidden = true;
+}
+
+async function loadPeople() {
+  try {
+    peopleCache = (await (await fetch('api/people')).json()).people || [];
+  } catch (err) { peopleNote.textContent = 'could not load people: ' + err; return; }
+
+  peopleList.innerHTML = peopleCache.map(p => {
+    // The smallest enrolled face is the number that predicts whether this will
+    // work at a distance, so it is on the card rather than buried.
+    const detail = p.prints
+      ? `${p.prints} face${p.prints === 1 ? '' : 's'}, smallest ${p.min_face_w || '?'} px`
+      : 'no faces enrolled yet';
+    return `<div class="shot"><div class="cap"><b>${esc(p.name)}</b>` +
+      `<span>${esc(detail)}</span>` +
+      `<span><a href="#" data-edit="${p.id}">rename</a> · ` +
+      `<a href="#" data-del="${p.id}">delete</a></span></div></div>`;
+  }).join('') || '<span class="empty">Nobody enrolled yet.</span>';
+
+  const options = peopleCache.map(p =>
+    `<option value="${p.id}">${esc(p.name)}</option>`).join('');
+  document.getElementById('lb-person').innerHTML =
+    '<option value="">— choose —</option>' + options;
+}
+
+personSave.addEventListener('click', async () => {
+  const name = personName.value.trim();
+  if (!name) { peopleNote.textContent = 'a name is required'; return; }
+  const id = personId.value;
+  try {
+    const res = await fetch(id ? 'api/people/' + id : 'api/people', {
+      method: id ? 'PUT' : 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name}),
+    });
+    const data = await res.json();
+    if (!res.ok) { peopleNote.textContent = data.error || 'failed'; return; }
+    peopleNote.textContent = '';
+    resetPersonForm();
+    loadPeople();
+  } catch (err) { peopleNote.textContent = 'request failed: ' + err; }
+});
+
+personCancel.addEventListener('click', resetPersonForm);
+
+peopleList.addEventListener('click', async e => {
+  const edit = e.target.closest('a[data-edit]');
+  const del = e.target.closest('a[data-del]');
+  if (!edit && !del) return;
+  e.preventDefault();
+
+  if (edit) {
+    const person = peopleCache.find(p => String(p.id) === edit.dataset.edit);
+    if (!person) return;
+    personId.value = person.id;
+    personName.value = person.name;
+    personSave.textContent = 'Save name';
+    personCancel.hidden = false;
+    personName.focus();
+    return;
+  }
+
+  const person = peopleCache.find(p => String(p.id) === del.dataset.del);
+  // Spelled out because it is irreversible and it is biometric data.
+  if (!confirm(`Delete ${person ? person.name : 'this person'} and their enrolled faces?`)) return;
+  try {
+    const data = await (await fetch('api/people/' + del.dataset.del, {method: 'DELETE'})).json();
+    peopleNote.textContent = data.prints_deleted
+      ? `${data.prints_deleted} face(s) deleted` : '';
+    loadPeople();
+  } catch (err) { peopleNote.textContent = 'request failed: ' + err; }
+});
+
+// --- "Who is this?", from the snapshot on screen ------------------------------
+let enrolTarget = null;
+const lbWho = document.getElementById('lb-who');
+const lbWhoNote = document.getElementById('lb-who-note');
+
+function showEnrolFor(det) {
+  // Only for people, and only when there is an image to enrol from.
+  enrolTarget = (det.label === 'person' && det.snapshot_id) ? det : null;
+  lbWho.hidden = !enrolTarget;
+  lbWhoNote.textContent = '';
+  document.getElementById('lb-newname').value = '';
+}
+
+document.getElementById('lb-enrol').addEventListener('click', async () => {
+  if (!enrolTarget) return;
+  const newName = document.getElementById('lb-newname').value.trim();
+  let id = document.getElementById('lb-person').value;
+
+  lbWhoNote.textContent = 'enrolling…';
+  try {
+    if (newName) {
+      const res = await fetch('api/people', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({name: newName}),
+      });
+      const data = await res.json();
+      if (!res.ok) { lbWhoNote.textContent = data.error || 'failed'; return; }
+      id = data.id;
+    }
+    if (!id) { lbWhoNote.textContent = 'choose a person, or type a new name'; return; }
+
+    const res = await fetch(`api/people/${id}/prints`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        snapshot_id: enrolTarget.snapshot_id,
+        detection_id: enrolTarget.id,
+      }),
+    });
+    const data = await res.json();
+    // The refusal is the useful part — "the largest face is 31 px wide" tells
+    // somebody to step closer, where a bare failure tells them nothing.
+    lbWhoNote.textContent = res.ok ? 'enrolled' : (data.error || 'failed');
+    if (res.ok) loadPeople();
+  } catch (err) { lbWhoNote.textContent = 'request failed: ' + err; }
+});
+
+loadPeople();
 
 // --- Can it identify people? -------------------------------------------------
 // The snapshot the add-on already took is the right thing to test: it is the

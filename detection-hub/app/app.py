@@ -23,7 +23,7 @@ import faces
 import hass
 import store
 
-APP_VERSION = "1.11.0-rc1"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.11.0"  # keep in sync with the "version" field in config.yaml
 
 OPTIONS_PATH = os.environ.get("DETECTION_HUB_OPTIONS_PATH", "/data/options.json")
 
@@ -405,7 +405,7 @@ def api_detect():
     # which is what keeps the try-it page from filling the database.
     camera = (request.args.get("camera") or "").strip()
     if camera and detections:
-        snapshot_id = record(get_db(), camera, detections, image, kind="api")
+        snapshot_id, _ = record(get_db(), camera, detections, image, kind="api")
         body["stored"] = {"camera": camera, "snapshot_id": snapshot_id}
 
     return jsonify(body)
@@ -431,7 +431,9 @@ def record(conn, camera, detections, image, kind="api"):
         snapshot_id = store.save_snapshot(conn, jpeg, image.shape[1], image.shape[0])
 
     store.upsert_camera(conn, camera, kind, last_detection_at=store.now())
-    store.record_detections(conn, camera, detections, snapshot_id=snapshot_id)
+    detection_ids = store.record_detections(
+        conn, camera, detections, snapshot_id=snapshot_id
+    )
     store.bump_camera_counters(conn, camera, frames_seen=1, frames_detected=1)
     conn.commit()
 
@@ -443,14 +445,74 @@ def record(conn, camera, detections, image, kind="api"):
                 # Worth one line, not a crash: the detection is already stored,
                 # and a camera must keep watching whether or not HA heard.
                 _log(f"could not fire event for {camera}/{det['label']}: {error}")
-    return snapshot_id
+    return snapshot_id, detection_ids
 
 
 def _on_camera_detections(camera, detections, frame):
-    """Called from a camera thread. Owns its own connection, by necessity."""
+    """Called from a camera thread. Owns its own connection, by necessity.
+
+    Returns the ids that were written, so the worker can tie each arrival to its
+    row and update it when a face turns up a few frames later.
+    """
     conn = store.connect(actor="camera")
     try:
-        record(conn, camera, detections, frame, kind="rtsp")
+        _, detection_ids = record(conn, camera, detections, frame, kind="rtsp")
+        return detection_ids
+    finally:
+        conn.close()
+
+
+def _on_face_candidate(camera, detection_id, found, final):
+    """Decide who a face belongs to, and write it down. Returns "done with this
+    person" — the worker stops spending attempts on a track once this is True.
+
+    Called from a camera thread, so it owns its connection like the recorder
+    above. Three outcomes reach the database and they are deliberately different
+    rows to read: a name, a face nobody knows, and a person whose face was never
+    visible. The fourth state — NULL — is what a detection keeps if this was
+    never called at all.
+    """
+    conn = store.connect(actor="camera")
+    try:
+        if found is None:
+            # Still looking; only the last attempt writes, and only to record
+            # that looking is over. Anything else would put one row-update per
+            # frame into the change feed for somebody standing still.
+            if not final:
+                return False
+            store.set_detection_identity(conn, detection_id, None, None, "no_face")
+            conn.commit()
+            return True
+
+        options = get_face_options()
+        gallery = store.face_prints(conn, model=faces.RECOGNISER_NAME)
+        match = faces.best_match(
+            found["embedding"], gallery, options["threshold"], options["margin"]
+        )
+        score = None if match["score"] is None else round(match["score"], 3)
+        state = "matched" if match["person_id"] else "unknown"
+        store.set_detection_identity(
+            conn, detection_id, match["person_id"], score, state
+        )
+        conn.commit()
+
+        ha = get_ha_config()
+        if ha["events"]:
+            name = None
+            if match["person_id"]:
+                row = conn.execute(
+                    "SELECT name FROM people WHERE id = ?", (match["person_id"],)
+                ).fetchone()
+                name = row["name"] if row else None
+            error = hass.fire_identified(camera, detection_id, name,
+                                         match["person_id"], score, state)
+            if error:
+                _log(f"could not fire identity event for {camera}: {error}")
+
+        # A face was seen and judged. Retrying an unknown would spend the whole
+        # budget re-deciding the same thing about the same person: the gallery
+        # has not changed between two frames a second apart.
+        return True
     finally:
         conn.close()
 
@@ -458,8 +520,13 @@ def _on_camera_detections(camera, detections, frame):
 def get_capture():
     global _capture
     if _capture is None:
+        # The identifier is handed over only when the operator asked for it. Off,
+        # the workers hold None and the face pass is one `if` per frame.
+        enabled = get_face_options()["enabled"]
         _capture = capture.CaptureManager(
-            get_detector(), _on_camera_detections, log=_log
+            get_detector(), _on_camera_detections, log=_log,
+            identifier=get_face_identifier() if enabled else None,
+            on_identity=_on_face_candidate if enabled else None,
         )
     return _capture
 
@@ -534,6 +601,164 @@ def api_faces_probe():
         "image": {"width": image.shape[1], "height": image.shape[0]},
         "faces": identifier.status(),
     })
+
+
+# --- people -------------------------------------------------------------------
+
+
+def _person_name_from_request():
+    """The name from a JSON body, or (None, why not)."""
+    data = request.get_json(force=True, silent=True) or {}
+    name = (data.get("name") or "").strip()
+    if not name:
+        return None, "name is required"
+    if len(name) > 80:
+        return None, "name is too long"
+    return name, None
+
+
+def _enrol(conn, person_id, image, source, snapshot_id=None, person_box=None):
+    """Turn an image into one stored print for a person.
+
+    Returns (print_id, error, status). The failures are the teaching part: "no
+    face" and "that face is 31 px" are completely different problems, and
+    somebody standing in front of a camera wondering why nothing happens
+    deserves to be told which one they have.
+    """
+    identifier = get_face_identifier()
+    if not identifier.available():
+        return None, identifier.error or "face models unavailable", 503
+
+    box = person_box or [0, 0, image.shape[1], image.shape[0]]
+    found = identifier.probe_person(image, box, get_face_options()["min_pixels"])
+    if not found or not found["face_box"]:
+        return None, "no face found in that image", 400
+    if not found["usable"]:
+        return None, found["reason"], 400
+
+    print_id = store.add_face_print(
+        conn, person_id,
+        faces.pack_embedding(found["embedding"]),
+        faces.RECOGNISER_NAME,
+        source,
+        crop_jpeg=detector.encode_jpeg(found["aligned"]),
+        source_snapshot_id=snapshot_id,
+        face_w=found["face_width"],
+        face_h=found["face_box"][3],
+        detect_score=found["detect_score"],
+    )
+    conn.commit()
+    return print_id, None, 201
+
+
+@app.route("/api/people")
+def api_people():
+    return jsonify({"people": store.people(get_db())})
+
+
+@app.route("/api/people", methods=["POST"])
+def api_add_person():
+    name, error = _person_name_from_request()
+    if error:
+        return jsonify({"error": error}), 400
+    person_id = store.add_person(get_db(), name)
+    if person_id is None:
+        return jsonify({"error": f"{name} is already enrolled"}), 409
+    get_db().commit()
+    return jsonify({"status": "created", "id": person_id, "name": name}), 201
+
+
+@app.route("/api/people/<int:person_id>", methods=["PUT"])
+def api_rename_person(person_id):
+    name, error = _person_name_from_request()
+    if error:
+        return jsonify({"error": error}), 400
+    if not store.rename_person(get_db(), person_id, name):
+        return jsonify({"error": "no such person"}), 404
+    get_db().commit()
+    return jsonify({"status": "renamed", "id": person_id, "name": name})
+
+
+@app.route("/api/people/<int:person_id>", methods=["DELETE"])
+def api_delete_person(person_id):
+    conn = get_db()
+    if not conn.execute("SELECT 1 FROM people WHERE id = ?", (person_id,)).fetchone():
+        return jsonify({"error": "no such person"}), 404
+    outcome = store.delete_person(conn, person_id)
+    conn.commit()
+    # Said plainly in the response because it is the promise being kept: the
+    # prints are gone from disk and from the database, and they were never in
+    # the change feed to begin with.
+    return jsonify({"status": outcome["person"], "prints_deleted": outcome["prints"]})
+
+
+@app.route("/api/people/<int:person_id>/prints")
+def api_person_prints(person_id):
+    return jsonify({"prints": store.person_prints(get_db(), person_id)})
+
+
+@app.route("/api/people/<int:person_id>/prints", methods=["POST"])
+def api_add_print(person_id):
+    """Enrol a face for this person, from a stored snapshot or from an upload.
+
+    A snapshot is the better source and the one the page uses: it is the real
+    camera, lens, angle and compression that matching will have to work against.
+    A phone photo enrols a face this camera will never see.
+    """
+    conn = get_db()
+    if not conn.execute("SELECT 1 FROM people WHERE id = ?", (person_id,)).fetchone():
+        return jsonify({"error": "no such person"}), 404
+
+    data = request.get_json(force=True, silent=True) or {}
+    snapshot_id = data.get("snapshot_id")
+    if snapshot_id:
+        stored = store.snapshot(conn, snapshot_id)
+        if not stored:
+            return jsonify({"error": "no such snapshot"}), 404
+        with open(stored["path"], "rb") as handle:
+            image, error = detector.decode_image(handle.read())
+        if error:
+            return jsonify({"error": error}), 400
+        # A detection narrows it to one person in a frame that may hold several.
+        person_box = None
+        if data.get("detection_id"):
+            row = conn.execute(
+                "SELECT box_x, box_y, box_w, box_h FROM detections WHERE id = ?",
+                (data["detection_id"],),
+            ).fetchone()
+            if row:
+                person_box = [row["box_x"], row["box_y"], row["box_w"], row["box_h"]]
+        print_id, error, status = _enrol(
+            conn, person_id, image, "snapshot", snapshot_id, person_box
+        )
+    else:
+        image, error = _image_from_request()
+        if error:
+            return jsonify({"error": error}), 400
+        print_id, error, status = _enrol(conn, person_id, image, "upload")
+
+    if error:
+        return jsonify({"error": error}), status
+    return jsonify({"status": "enrolled", "id": print_id}), 201
+
+
+@app.route("/api/people/<int:person_id>/prints/<int:print_id>", methods=["DELETE"])
+def api_delete_print(person_id, print_id):
+    conn = get_db()
+    if not store.delete_face_print(conn, print_id):
+        return jsonify({"error": "no such print"}), 404
+    conn.commit()
+    return jsonify({"status": "deleted"})
+
+
+@app.route("/api/faces/<int:print_id>")
+def api_face_crop(print_id):
+    """The aligned crop a print was made from — so a name can be audited against
+    the face that earns it. The embedding itself is never served."""
+    path = store.face_path(print_id, store.face_dir_for(get_db()))
+    if not os.path.exists(path):
+        return jsonify({"error": "no such face"}), 404
+    return send_file(path, mimetype="image/jpeg")
 
 
 @app.route("/api/export")
@@ -787,11 +1012,20 @@ def _publish(conn):
     metrics = get_capture().metrics()
     detector_status = get_detector().status()
 
+    face_options = get_face_options()
     if ha["sensors"]:
         midnight = datetime.now().strftime("%Y-%m-%dT00:00:00")
         errors = hass.publish_sensors(
             ha["prefix"], store.counts_since(conn, midnight), cameras, detector_status
         )
+        # Only when identification is on: two entities that would sit at "never"
+        # forever otherwise, which reads as broken rather than as switched off.
+        if face_options["enabled"]:
+            errors += hass.publish_people_sensors(
+                ha["prefix"],
+                store.person_counts_since(conn, midnight),
+                store.last_identified(conn),
+            )
         for error in errors:
             _log(f"could not publish sensor {error}")
 
@@ -802,8 +1036,14 @@ def _publish(conn):
     # this add-on cannot see, since the web UI answers either way.
     configured = len(get_cameras())
     online = metrics.get("cameras_ok", 0)
+    face_error = get_face_identifier().error if face_options["enabled"] else None
     if detector_status["error"]:
         ok, detail = False, f"detector unavailable: {detector_status['error']}"
+    elif face_error:
+        # Asked for and not working. /api/health stays 200 — object detection is
+        # unaffected, and a broken optional feature is not a dead add-on — but
+        # the watchdog should not report this as healthy either.
+        ok, detail = False, f"face identification unavailable: {face_error}"
     elif configured and online < configured:
         ok, detail = False, f"{online}/{configured} cameras streaming"
     elif configured:
@@ -857,12 +1097,29 @@ if __name__ == "__main__":
         _log(f"detector ready: {os.path.basename(status['model_path'])} "
              f"at {status['input_size']}x{status['input_size']}")
 
+    # Same reasoning as the detector, and one more: identification is optional,
+    # so "on but broken" has to be visible in the log rather than showing up as
+    # nobody ever being recognised.
+    face_options = get_face_options()
+    if face_options["enabled"]:
+        face_status = get_face_identifier().status()
+        if face_status["error"]:
+            _log(f"identification UNAVAILABLE: {face_status['error']}")
+        else:
+            _log(f"identifying people: {face_status['recogniser']}, faces from "
+                 f"{face_options['min_pixels']} px, threshold "
+                 f"{face_options['threshold']}, {face_options['attempts']} attempts")
+    else:
+        _log("identifying people: off")
+
     cameras = get_cameras()
     if cameras:
         get_capture().configure(
             cameras,
             confidence=get_confidence(),
             labels=get_labels(),
+            face_attempts=face_options["attempts"],
+            face_min_pixels=face_options["min_pixels"],
             **get_capture_options(),
         )
         _log(f"watching {len(cameras)} camera(s): {', '.join(c['id'] for c in cameras)}")
