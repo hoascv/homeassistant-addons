@@ -17,9 +17,11 @@ FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures")
 @pytest.fixture(autouse=True)
 def _reset_module_state(monkeypatch):
     """Every test starts as if the add-on just booted: no Supervisor token, so
-    local/dev mode, and no detector carried over from a previous test."""
+    local/dev mode, and no detector or face identifier carried over from a
+    previous test."""
     monkeypatch.setattr(hub, "SUPERVISOR_TOKEN", None)
     monkeypatch.setattr(hub, "_detector", None)
+    monkeypatch.setattr(hub, "_face_identifier", None)
 
 
 @pytest.fixture

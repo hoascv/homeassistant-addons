@@ -168,6 +168,22 @@
     <div id="recent" class="recent"></div>
   </div>
 
+  {# The camera check. Whether faces can be identified is a property of the
+     camera, not of this add-on, and an empty result is not something anyone can
+     debug — so the question gets a button and a plain-words answer. #}
+  <div class="card">
+    <h2>Can it identify people?</h2>
+    <div class="status-row">
+      <button type="button" id="face-check">Check the last person seen</button>
+      <button type="button" id="face-pick">Check an image&hellip;</button>
+      <input type="file" id="face-file" accept="image/*" hidden>
+      <span class="meta" id="face-note">Stand in front of the camera, wait for the
+        detection, then check. Nothing is stored.</span>
+    </div>
+    <div id="face-verdict" class="hero" hidden></div>
+    <pre id="face-detail" hidden></pre>
+  </div>
+
   <div class="card">
     <h2>Try it</h2>
     <div class="drop" id="drop">
@@ -384,6 +400,67 @@ function onThumbClick(e) {
 document.getElementById('lb-close').addEventListener('click', closeLightbox);
 lb.addEventListener('click', e => { if (e.target === lb) closeLightbox(); });
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeLightbox(); });
+
+// --- Can it identify people? -------------------------------------------------
+// The snapshot the add-on already took is the right thing to test: it is the
+// real camera, lens, angle and compression that identification would have to
+// work against. A phone photo would answer a question nobody asked.
+const faceNote = document.getElementById('face-note');
+const faceVerdict = document.getElementById('face-verdict');
+const faceDetail = document.getElementById('face-detail');
+const faceFile = document.getElementById('face-file');
+
+document.getElementById('face-check').addEventListener('click', checkLastPerson);
+document.getElementById('face-pick').addEventListener('click', () => faceFile.click());
+faceFile.addEventListener('change', () => {
+  if (faceFile.files.length) probe(faceFile.files[0]);
+});
+
+async function checkLastPerson() {
+  faceNote.textContent = 'finding the last person seen…';
+  let det;
+  try {
+    const data = await (await fetch('api/detections?label=person&limit=1')).json();
+    det = (data.detections || [])[0];
+  } catch (err) { faceNote.textContent = 'could not read detections: ' + err; return; }
+
+  if (!det) { faceNote.textContent = 'no person has been detected yet.'; return; }
+  if (!det.snapshot_id) {
+    faceNote.textContent = 'the last person was recorded without a snapshot, so there is nothing to check.';
+    return;
+  }
+  try {
+    const shot = await (await fetch('api/snapshots/' + det.snapshot_id)).blob();
+    await probe(shot, det);
+  } catch (err) { faceNote.textContent = 'could not read that snapshot: ' + err; }
+}
+
+async function probe(image, det) {
+  faceNote.textContent = 'looking for faces…';
+  faceVerdict.hidden = faceDetail.hidden = true;
+  const body = new FormData();
+  body.append('image', image, 'frame.jpg');
+  let data;
+  try {
+    data = await (await fetch('api/faces/probe', { method: 'POST', body })).json();
+  } catch (err) { faceNote.textContent = 'request failed: ' + err; return; }
+  if (data.error) { faceNote.textContent = data.error; return; }
+
+  faceNote.textContent = det ? 'from ' + esc(det.camera) + ', ' + ago(det.detected_at)
+                             : 'from the image you chose';
+  faceVerdict.hidden = false;
+  faceVerdict.textContent = data.verdict;
+  // The per-person numbers, because "34 px" is what someone moves the floor
+  // against, and the verdict alone does not say which person it measured.
+  if (data.people.length) {
+    faceDetail.hidden = false;
+    faceDetail.textContent = data.people.map((p, i) =>
+      `person ${i + 1}: box ${p.person_box[2]}x${p.person_height} px  →  `
+      + (p.face_found ? `face ${p.face_width} px (score ${p.detect_score})` : 'no face')
+      + (p.usable ? '  ✓ identifiable' : '  ✗ ' + (p.reason || 'unusable'))
+    ).join('\n');
+  }
+}
 
 // --- Try it ------------------------------------------------------------------
 const drop = document.getElementById('drop');

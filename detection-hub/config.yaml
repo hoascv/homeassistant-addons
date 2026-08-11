@@ -1,5 +1,5 @@
 name: "Detection Hub"
-version: "1.10.1"
+version: "1.11.0-rc1"
 slug: "detection-hub"
 description: "Object detection for Home Assistant — an image in, what's in it out"
 url: "https://github.com/hoascv/homeassistant-addons/tree/main/detection-hub"
@@ -85,6 +85,33 @@ options:
   # before a reappearance counts as new. While an object stays in view it is
   # logged once regardless of this; this only governs re-logging after it leaves.
   cooldown_seconds: 30
+  # Put names to the people it detects, by face. OFF by default and deliberately
+  # so: this processes biometric data, it costs CPU on top of detection, and on
+  # many cameras it cannot work at all — a face has to be tens of pixels wide,
+  # which a camera watching a driveway will never show you. Run the camera check
+  # on the page before turning it on; it answers in plain words.
+  # Enabling needs a restart (the models load at start). The numbers below are
+  # read on every match, so tuning them does not.
+  identify_people: false
+  # How wide a face must be before it is worth identifying. Below this the answer
+  # is "no usable face" rather than a guess computed from a handful of pixels.
+  # The camera check reports what your camera actually produces; set this from
+  # that measurement rather than from hope.
+  face_min_pixels: 60
+  # How similar two faces must be to count as the same person, 0-1. Higher is
+  # stricter. A wrong name is worse than no name, so this errs high: below it,
+  # the detection is recorded as an unrecognised face with its score, which is
+  # the number that tells you whether to move this.
+  face_match_threshold: 0.45
+  # How far ahead of the runner-up the best match must be. Two people scoring
+  # 0.47 and 0.46 is a coin flip, and a coin flip that prints somebody's name is
+  # worse than silence — so that case is recorded as unrecognised too.
+  face_margin: 0.05
+  # How many frames to keep looking for a face while a person is in view. A
+  # person is logged on arrival, which is often before they face the camera;
+  # this is the budget for the frames after it. Spent once per visit, not per
+  # frame, and it stops as soon as a face is found.
+  face_attempts: 5
   ha_sensors_enabled: true
   ha_events_enabled: true
   sensor_prefix: "detection_hub"
@@ -115,6 +142,11 @@ schema:
   motion_threshold: "float(0,1)"
   collapse_repeats: "bool"
   cooldown_seconds: "int(0,3600)"
+  identify_people: "bool"
+  face_min_pixels: "int(24,400)"
+  face_match_threshold: "float(0.20,0.90)"
+  face_margin: "float(0.0,0.50)"
+  face_attempts: "int(1,60)"
   ha_sensors_enabled: "bool"
   ha_events_enabled: "bool"
   sensor_prefix: "str"

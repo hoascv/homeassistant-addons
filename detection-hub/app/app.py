@@ -19,10 +19,11 @@ from flask import Flask, Response, g, jsonify, render_template, request, send_fi
 
 import capture
 import detector
+import faces
 import hass
 import store
 
-APP_VERSION = "1.10.1"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.11.0-rc1"  # keep in sync with the "version" field in config.yaml
 
 OPTIONS_PATH = os.environ.get("DETECTION_HUB_OPTIONS_PATH", "/data/options.json")
 
@@ -43,6 +44,8 @@ app.config["MAX_CONTENT_LENGTH"] = MAX_IMAGE_BYTES
 
 _detector = None
 _detector_lock = threading.Lock()
+_face_identifier = None
+_face_identifier_lock = threading.Lock()
 _capture = None
 
 # Per-camera online/offline memory, so a notification fires on the *transition*
@@ -175,6 +178,23 @@ def get_retention():
     }
 
 
+def get_face_options():
+    """Face identification settings, read fresh.
+
+    Fresh because the threshold is the number an operator actually tunes, and
+    making them restart the add-on to try 0.42 instead of 0.45 turns a two-minute
+    experiment into an afternoon. Whether the feature is *on* is a different
+    matter — the models load once at startup, so that one needs a restart.
+    """
+    return {
+        "enabled": bool(_read_options().get("identify_people", False)),
+        "min_pixels": _int_option("face_min_pixels", faces.MIN_FACE_PIXELS, 24, 400),
+        "threshold": _float_option("face_match_threshold", 0.45, 0.20, 0.90),
+        "margin": _float_option("face_margin", 0.05, 0.0, 0.50),
+        "attempts": _int_option("face_attempts", 5, 1, 60),
+    }
+
+
 # --- database -----------------------------------------------------------------
 
 
@@ -203,6 +223,17 @@ def get_detector():
             if _detector is None:
                 _detector = detector.Detector(model_path=get_model_path())
     return _detector
+
+
+def get_face_identifier():
+    """The face models, shared. Built even when `identify_people` is off, so the
+    probe endpoint can answer "would this work?" before anyone commits to it."""
+    global _face_identifier
+    if _face_identifier is None:
+        with _face_identifier_lock:
+            if _face_identifier is None:
+                _face_identifier = faces.FaceIdentifier()
+    return _face_identifier
 
 
 # --- access control -----------------------------------------------------------
@@ -315,9 +346,8 @@ def index():
     )
 
 
-@app.route("/api/detect", methods=["POST"])
-def api_detect():
-    """An image in, detections out. Stateless — nothing is stored.
+def _image_from_request():
+    """The posted image, however it arrived, as (image, error).
 
     Accepts either a multipart upload under `image` or the raw bytes as the
     body, because the two callers differ: a browser form sends multipart and
@@ -335,8 +365,13 @@ def api_detect():
         data = uploaded.read() if uploaded else b""
     else:
         data = request.get_data(parse_form_data=False)
+    return detector.decode_image(data)
 
-    image, error = detector.decode_image(data)
+
+@app.route("/api/detect", methods=["POST"])
+def api_detect():
+    """An image in, detections out. Stateless — nothing is stored."""
+    image, error = _image_from_request()
     if error:
         return jsonify({"error": error}), 400
 
@@ -430,6 +465,75 @@ def get_capture():
 
 
 # --- the change feed ----------------------------------------------------------
+
+
+@app.route("/api/faces/probe", methods=["POST"])
+def api_faces_probe():
+    """Can this camera identify anyone? An image in, an honest answer out.
+
+    Whether face identification works at all is a property of the camera, not of
+    this add-on: SFace needs a face of a certain pixel size, and a camera
+    watching a driveway will find people all day and never show a face bigger
+    than a thumbnail. That is not a failure anybody can debug from an empty
+    result, so it gets an instrument of its own — the same code path the live
+    identification uses, reporting what it saw and why it refused.
+
+    Stores nothing, exactly like /api/detect without `?camera=`.
+    """
+    image, error = _image_from_request()
+    if error:
+        return jsonify({"error": error}), 400
+
+    identifier = get_face_identifier()
+    if not identifier.available():
+        return jsonify({"error": identifier.error or "face models unavailable"}), 503
+
+    options = get_face_options()
+    detections, error = get_detector().detect(image, confidence=get_confidence(),
+                                              labels=["person"])
+    if error:
+        return jsonify({"error": error}), 503
+
+    people, usable = [], 0
+    for person in detections:
+        found = identifier.probe_person(image, person["box"], options["min_pixels"])
+        row = {
+            "person_box": person["box"],
+            "person_height": person["box"][3],
+            "confidence": person["confidence"],
+            "face_found": bool(found and found["face_box"]),
+            "face_width": (found or {}).get("face_width") or 0,
+            "face_box": (found or {}).get("face_box"),
+            "detect_score": (found or {}).get("detect_score"),
+            "usable": bool(found and found["usable"]),
+            "reason": (found or {}).get("reason"),
+        }
+        usable += row["usable"]
+        people.append(row)
+
+    # The verdict in words, because a table of pixel widths does not tell
+    # somebody whether to turn the feature on.
+    widest = max((row["face_width"] for row in people), default=0)
+    if not people:
+        verdict = "no people in this image, so there was nothing to identify"
+    elif usable:
+        verdict = f"{usable} of {len(people)} people show a face big enough to identify"
+    elif widest:
+        verdict = (f"largest face found: {widest} px. Identification needs "
+                   f"{options['min_pixels']}. This camera will not identify people "
+                   "at this distance.")
+    else:
+        verdict = (f"{len(people)} people found, no faces at all — too far away, "
+                   "facing away, or too dark")
+
+    return jsonify({
+        "verdict": verdict,
+        "people": people,
+        "usable": usable,
+        "min_pixels": options["min_pixels"],
+        "image": {"width": image.shape[1], "height": image.shape[0]},
+        "faces": identifier.status(),
+    })
 
 
 @app.route("/api/export")
@@ -590,6 +694,11 @@ def api_debug():
             "confidence": get_confidence(),
             "labels": get_labels(),
             "detector": get_detector().status(),
+            # Both the settings and the models, because "did my change take
+            # effect" splits two ways here: the threshold is read per match, the
+            # models are loaded at startup.
+            "face_options": get_face_options(),
+            "faces": get_face_identifier().status(),
         }
     )
 

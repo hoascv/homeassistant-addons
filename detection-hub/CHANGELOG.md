@@ -1,5 +1,34 @@
 # Changelog
 
+## 1.11.0-rc1
+
+Not the feature — the instrument that decides whether the feature is worth
+building. Identification itself does nothing yet; nothing is stored, no names
+exist, and `identify_people` has no effect beyond the settings being readable.
+
+- **"Can it identify people?" on the page.** Check the last person the camera
+  saw, or an image you supply, and get an answer in words: *"largest face found:
+  34 px. Identification needs 60. This camera will not identify people at this
+  distance."* Whether face recognition can work is a property of the **camera**,
+  not of this add-on, and an empty result is not something anyone can debug.
+- Also at `POST /api/faces/probe`, which stores nothing — same rule `/api/detect`
+  follows without `?camera=`.
+- **Two models bundled**, both run through the `cv2` already here, so no new
+  dependency and still no internet at any point: **YuNet** (MIT) finds faces,
+  **SFace** (Apache-2.0) turns one into a vector. The image grows ~39 MB.
+- YuNet **2023mar** rather than the newer 2026may, which needs OpenCV 5's ONNX
+  Runtime engine while requirements span `>=4.10,<6.0`. The int8 SFace would
+  have saved 28 MB and was rejected on measurement, not preference: it loads and
+  then fails inside `feature()` on OpenCV 5.
+- Measured on this host: YuNet 1.1 ms on a person crop, SFace 5.5 ms per face,
+  against the ~12 ms the detector already spends. Cost is not the constraint.
+- Settings exist so the floor can be moved while measuring: `identify_people`,
+  `face_min_pixels`, `face_match_threshold`, `face_margin`, `face_attempts`.
+  Off by default — processing biometric data should be a deliberate act.
+- On the frame this repository ships as a fixture, people 74–87 px tall produce
+  **no face at all**. That is the honest baseline and the reason this release is
+  a measurement rather than a feature.
+
 ## 1.10.1
 
 - Documentation fix. **"Why this model" still described Tiny as something you
