@@ -1,6 +1,18 @@
 # Changelog
 
-## 1.32.3
+## 1.33.0
+
+- **The challenges that owe you something today come first.** With several
+  running, the ones resting today used to sit wherever they were created, and the
+  card you actually opened the app to tick was the one you had to scroll for.
+  Order is now: due today and unfinished, then due today and done, then resting,
+  then not yet started. Stable within each group, so it does not reshuffle
+  between visits.
+- **A resting challenge folds its items away.** On a rest day the list is a wall
+  of things you are *not* being asked to do; it now collapses to
+  `3 items · nothing due today`, with the streak, the week dots and the next due
+  date still on show. It only folds — a bonus session on a rest day is still
+  worth ticking, so the items are one tap away, and unfolding survives the tick.
 
 - Dropped `build.yaml` and named the base image directly in the `Dockerfile`.
   Supervisor 2026.04.0 stopped passing `BUILD_FROM` and now warns the file is

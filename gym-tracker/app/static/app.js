@@ -620,6 +620,11 @@ function findChallengeItem(itemId) {
   return null;
 }
 
+// Which resting cards the reader has unfolded. Kept outside the render because
+// every tick re-renders the whole list: without this, ticking a bonus item on a
+// rest day would fold the list shut under your finger.
+const restExpanded = new Set();
+
 function renderChallenge(list) {
   const host = document.getElementById("challenge-cards");
   // A finished challenge drops off Home; its statistics stay on Trends.
@@ -659,13 +664,26 @@ function challengeCardHtml(ch) {
     ? `day ${ch.day_number} of ${ch.total_days}`
     : "";
   const empty = items ? "" : '<p class="empty-state">No items yet — add some to start ticking.</p>';
+  // On a rest day the list is a wall of things you are not being asked to do,
+  // and with several challenges resting at once it buries the ones you are. So
+  // it folds away — but only folds: a bonus session on a rest day is still worth
+  // ticking, and the toggle keeps that one tap away rather than removing it.
+  const live = (ch.items || []).length;   // the view sends active items only
+  const resting = ch.due_today === false && !ch.not_started && Boolean(items);
+  const list = `<ul class="challenge-list">${items}</ul>`;
+  const body = resting
+    ? `<details class="challenge-rest" data-challenge="${ch.id}"${restExpanded.has(ch.id) ? " open" : ""}>
+         <summary>${live} item${live === 1 ? "" : "s"} · nothing due today</summary>
+         ${list}
+       </details>`
+    : list;
   return `
-    <section class="card challenge-card" data-challenge="${ch.id}">
+    <section class="card challenge-card${resting ? " resting" : ""}" data-challenge="${ch.id}">
       <div class="card-head">
         <h2>${escapeHtml(ch.name)}</h2>
         <span class="pill pill-streak">🔥 ${ch.streak}</span>
       </div>
-      <ul class="challenge-list">${items}</ul>
+      ${body}
       ${empty}
       <div class="week-dots">${dots}</div>
       ${progress ? `<p class="challenge-progress">${progress}</p>` : ""}
@@ -676,6 +694,15 @@ function challengeCardHtml(ch) {
       </div>
     </section>`;
 }
+
+// Remember an unfolded rest-day list across the re-render that a tick causes.
+document.getElementById("challenge-cards").addEventListener("toggle", (e) => {
+  const details = e.target.closest("details.challenge-rest");
+  if (!details) return;
+  const id = Number(details.dataset.challenge);
+  if (details.open) restExpanded.add(id);
+  else restExpanded.delete(id);
+}, true);  // capture: `toggle` does not bubble
 
 document.getElementById("challenge-cards").addEventListener("click", (e) => {
   const el = e.target.closest(".challenge-item");

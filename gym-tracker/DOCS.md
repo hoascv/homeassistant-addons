@@ -117,11 +117,23 @@ challenge** creates one; **Edit challenge** renames it or changes its dates.
 
 A challenge also has a **schedule**: every day (the default), **every N days**,
 or **certain days of the week**. Days it isn't scheduled are **rest days** — the
-card still shows, marked *Rest day* with the next due date, and its items stay
-tickable, but nothing is owed. Rest days don't break your streak, don't trigger
-the reminder, and aren't counted in the statistics, so a Mon/Wed/Fri challenge
-kept perfectly reads 100%. Ticking on a rest day is recorded but doesn't change
-any of the numbers.
+card still shows, marked *Rest day* with the next due date, but nothing is owed.
+Rest days don't break your streak, don't trigger the reminder, and aren't counted
+in the statistics, so a Mon/Wed/Fri challenge kept perfectly reads 100%. Ticking
+on a rest day is recorded but doesn't change any of the numbers.
+
+**On a rest day the item list folds away**, down to a line like
+`3 items · nothing due today` — the streak, the week dots and the next due date
+stay visible. Tap that line to unfold it: a bonus session on a rest day is still
+worth ticking, so the items are hidden rather than taken away, and unfolding
+survives ticking one.
+
+**Home puts the challenges that owe you something first**: due today and
+unfinished, then due today and already done, then the resting ones, then any that
+haven't started yet. Within each group the order you created them in is kept, so
+the list doesn't rearrange itself between visits. Once you have a handful of
+challenges, most days most of them are resting, and this is what stops the one
+you came to tick sitting at the bottom.
 
 A challenge has a **start date** and an optional **end date**. With an end date
 it is time-boxed: the card shows *day 12 of 30*, and once the end date passes it

@@ -1185,3 +1185,70 @@ def test_challenges_that_ended_before_the_feature_are_not_all_celebrated_at_once
 
     view = next(c for c in client.get("/api/challenges").get_json() if c["id"] == cid)
     assert view["awaiting_celebration"] is False
+
+
+# --- What today asks of you comes first -------------------------------------
+
+
+def _resting_challenge(client, conn, name):
+    """A challenge running today but scheduled only for tomorrow."""
+    from datetime import date
+
+    today = date.today()
+    cid = _scheduled_challenge(
+        client, name, today.isoformat(),
+        schedule_kind="weekdays", schedule_weekdays=str((today.weekday() + 1) % 7),
+    )
+    _add_exercise_item(client, conn, cid, "squat")
+    return cid
+
+
+def _due_challenge(client, conn, name):
+    from datetime import date
+
+    cid = _scheduled_challenge(client, name, date.today().isoformat())
+    return cid, _add_exercise_item(client, conn, cid, "squat")
+
+
+def test_a_challenge_due_today_sorts_above_one_that_is_resting(client, conn):
+    """With several challenges and several resting on any given day, the card
+    you came to tick was the one you had to scroll for."""
+    resting = _resting_challenge(client, conn, "Resting")
+    due, _ = _due_challenge(client, conn, "Due")
+
+    order = [c["id"] for c in client.get("/api/challenges").get_json()]
+    assert order.index(due) < order.index(resting)
+
+
+def test_a_finished_challenge_for_today_sorts_below_an_unfinished_one(client, conn):
+    """Both are today's, so both stay above the resting ones — but the ticks
+    still outstanding are what the page is open for."""
+    done_id, done_item = _due_challenge(client, conn, "Already done")
+    todo_id, _ = _due_challenge(client, conn, "Still to do")
+    client.post("/api/challenge/toggle", json={"item_id": done_item})
+
+    order = [c["id"] for c in client.get("/api/challenges").get_json()]
+    assert order.index(todo_id) < order.index(done_id)
+
+
+def test_a_challenge_that_has_not_started_sorts_last(client, conn):
+    from datetime import date, timedelta
+
+    future = _scheduled_challenge(
+        client, "Next month", (date.today() + timedelta(days=30)).isoformat()
+    )
+    _add_exercise_item(client, conn, future, "squat")
+    resting = _resting_challenge(client, conn, "Resting")
+
+    order = [c["id"] for c in client.get("/api/challenges").get_json()]
+    assert order.index(resting) < order.index(future), "nothing can be done about a future one"
+
+
+def test_ordering_does_not_reshuffle_within_a_group(client, conn):
+    """Stable, so the order challenges were created in survives — a list that
+    rearranges itself between visits is harder to use, not easier."""
+    first, _ = _due_challenge(client, conn, "First")
+    second, _ = _due_challenge(client, conn, "Second")
+
+    order = [c["id"] for c in client.get("/api/challenges").get_json()]
+    assert order.index(first) < order.index(second)

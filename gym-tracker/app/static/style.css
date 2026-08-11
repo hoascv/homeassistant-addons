@@ -330,6 +330,19 @@ body {
 
 /* Challenge */
 .challenge-list { list-style: none; margin: 0; padding: 0; }
+/* A resting challenge folds its items away — see challengeCardHtml. The summary
+   is the disclosure, so it reads as something to tap rather than as a heading. */
+.challenge-rest > summary {
+  cursor: pointer; list-style: none;
+  font-size: 0.85rem; color: var(--text-muted);
+  padding: 0.35rem 0;
+}
+.challenge-rest > summary::-webkit-details-marker { display: none; }
+.challenge-rest > summary::before { content: "▸ "; }
+.challenge-rest[open] > summary::before { content: "▾ "; }
+/* Quieter than a card with work outstanding, without going so far that it looks
+   disabled — its ticks and its streak still matter. */
+.challenge-card.resting .card-head h2 { color: var(--text-muted); }
 .challenge-item {
   display: flex; align-items: center; gap: 0.65rem;
   padding: 0.5rem 0; border-bottom: 1px solid var(--border);

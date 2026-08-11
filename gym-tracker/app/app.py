@@ -19,7 +19,7 @@ from flask import Flask, Response, g, jsonify, render_template, request, send_fi
 
 import garmin_client
 
-APP_VERSION = "1.32.3"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.33.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("GYM_DB_PATH", "/data/gym.db")
 OPTIONS_PATH = os.environ.get("GYM_OPTIONS_PATH", "/data/options.json")
@@ -3034,10 +3034,35 @@ def _challenge_stats(conn, ch):
     }
 
 
+def _challenge_order(view):
+    """Sort key: what still needs doing today, first.
+
+    With one or two challenges the order never mattered. With several — and
+    several resting on any given day — the ones that owe you something get
+    pushed below the ones that do not, and the card you actually came to tick is
+    the one you have to scroll for.
+
+    Ordered by how much today asks of it:
+
+    0. due today, not finished  — the reason the page is open
+    1. due today, all ticked    — still today's, and the ticks are worth seeing
+    2. resting                  — running, but owes nothing until next due
+    3. not started, or over     — nothing to do about these at all
+
+    Stable within each group, so the order challenges were created in survives.
+    """
+    if view["finished"] or view["not_started"]:
+        return 3
+    if view["due_today"] is False:
+        return 2
+    return 1 if view["complete_today"] else 0
+
+
 @app.route("/api/challenges")
 def api_challenges():
     db = get_db()
-    return jsonify([_challenge_view(db, ch) for ch in _challenges(db)])
+    views = [_challenge_view(db, ch) for ch in _challenges(db)]
+    return jsonify(sorted(views, key=_challenge_order))
 
 
 @app.route("/api/challenges/stats")
