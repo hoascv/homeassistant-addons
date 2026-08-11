@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.12.0
+
+- **The version column says when that version was installed** — `2h ago` under
+  the number. Supervisor exposes no install date, so this is observed: the scan
+  that first sees a version different from the recorded one is the install.
+- **Restarts are now counted for the running version only.** They read
+  `4 restarts on 1.44.2` and reset on update. An unqualified count spanning
+  versions answers the wrong question: Detection Hub showed *13 restarts* beside
+  an hour of uptime, nearly all of them belonging to builds that are no longer
+  installed, when what the number is read for is whether this build is stable.
+- The update's own restart is not counted against the new version. Supervisor
+  restarts an add-on to install it — that is the install, not a fault of what
+  was installed.
+- A version change now also counts as a restart for the **uptime** clock. The
+  container is replaced, so its network counter resets, but a busy minute can
+  leave the new counter above the old one and hide the drop that would otherwise
+  be the only evidence.
+- Both ages carry the same `≥` as uptime when the watchdog did not observe the
+  event itself. Upgrading records every add-on's version for the first time, so
+  each row starts with a zeroed count and a `≥` on its version age.
+- New sensor attributes: `version_installed_at`, `version_age_seconds`,
+  `version_installed_known`. `restarts` keeps its name and changes meaning — an
+  alert on it now fires for a flapping build rather than a much-updated add-on.
+
 ## 1.11.0
 
 - Monitors the new **Detection Hub** add-on: probe, status, record counts and

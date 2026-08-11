@@ -188,6 +188,14 @@
         {% if a.installed %}
           {{ a.version }}
           {% if a.update_available %}<div class="upd">&uarr; {{ a.version_latest }}</div>{% endif %}
+          {# How long this version has been the installed one. "≥" for the same
+             reason uptime uses it: a version already in place when the watchdog
+             first recorded one has been there at least this long, not exactly. #}
+          {% if a.version_seconds is not none %}
+            <div class="detail" title="{% if a.version_known %}update observed by the watchdog{% else %}already installed when the watchdog first looked, so this is a lower bound{% endif %}">
+              {{ '' if a.version_known else '&ge;' | safe }}{{ uptime(a.version_seconds) }} ago
+            </div>
+          {% endif %}
         {% else %}&mdash;{% endif %}
       </td>
       <td>
@@ -195,9 +203,13 @@
           {# "≥" because Supervisor exposes no start time: an add-on already
              running when the watchdog first looked has an unknown true start. #}
           {{ '' if a.uptime_known else '&ge;' | safe }}{{ uptime(a.uptime_seconds) }}
+          {# Named with the version, because the count is scoped to it: an
+             unqualified "13 restarts" gets read as the add-on's whole history
+             when it now means the build currently installed. #}
           {% if a.restarts %}
             <div class="detail" title="{{ a.last_restart_reason or 'no reason recorded' }}">
               {{ a.restarts }} restart{{ '' if a.restarts == 1 else 's' }}
+              {% if a.version %}on {{ a.version }}{% endif %}
             </div>
           {% endif %}
         {% else %}&mdash;{% endif %}

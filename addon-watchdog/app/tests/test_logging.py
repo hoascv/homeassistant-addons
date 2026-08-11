@@ -150,6 +150,56 @@ def test_no_uptime_is_a_dash_not_a_zero():
     assert wd_app.uptime(None) == "—"
 
 
+# --- what the version column says ---------------------------------------------
+
+
+def _render(**row_values):
+    """The page with one add-on row on it. Built through watchdog._row so the
+    row has its full shape — a template reading a key the scan does not set is
+    exactly the mistake ROW_KEYS exists to prevent."""
+    import watchdog
+    wd_app._io = {"summary": None, "benchmark": None, "saturation": None,
+                  "error": None, "benchmark_error": None}
+    wd_app._snapshot = {
+        "generated": 1, "error": None, "unhealthy": 0, "updates": 0,
+        "addons": [watchdog._row(**row_values)],
+    }
+    return wd_app.app.test_client().get("/").get_data(as_text=True)
+
+
+def test_the_version_carries_how_long_it_has_been_installed():
+    html = _render(slug="detection-hub", name="Detection Hub", installed=True,
+                   state="started", status="ok", version="1.10.0",
+                   version_seconds=7200, version_known=True)
+    assert "1.10.0" in html
+    assert "2h ago" in html
+
+
+def test_an_install_the_watchdog_did_not_see_is_marked_as_a_lower_bound():
+    """Same discipline as uptime: a version already in place when the watchdog
+    first looked has been there at least this long, not exactly."""
+    html = _render(slug="gym-tracker", name="Gym Tracker", installed=True,
+                   state="started", status="ok", version="1.32.3",
+                   version_seconds=172800, version_known=False)
+    assert "&ge;2d ago" in html, "no ≥, so it claims an install time it never saw"
+
+
+def test_a_version_never_seen_shows_no_age_at_all():
+    html = _render(slug="pipeline-notebook", name="Pipeline Notebook", installed=True,
+                   state="started", status="running", version="1.0.2")
+    assert "1.0.2" in html
+    assert "ago" not in html, "invented an install date from a missing one"
+
+
+def test_the_restart_count_names_the_version_it_belongs_to():
+    """Unqualified, "4 restarts" reads as the add-on's whole history — which is
+    what it used to mean and no longer does."""
+    html = _render(slug="coop-tracker", name="Coop Tracker", installed=True,
+                   state="started", status="ok", version="1.44.2",
+                   uptime_seconds=3600, uptime_known=True, restarts=4)
+    assert "4 restarts" in html and "on 1.44.2" in html
+
+
 # --- the benchmark button -----------------------------------------------------
 
 

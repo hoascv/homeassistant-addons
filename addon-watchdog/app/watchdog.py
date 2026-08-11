@@ -107,6 +107,7 @@ ROW_KEYS = (
     "report_ok", "report_detail", "report_metrics", "report_age", "report_error",
     "uptime_seconds", "uptime_known", "restarts", "last_restart_at",
     "last_restart_reason", "supervisor_watchdog",
+    "version_at", "version_seconds", "version_known",
     "disk_read_bps", "disk_write_bps",
 )
 
@@ -269,8 +270,9 @@ def save_state(state):
         pass
 
 
-def track_uptime(state, slug, running, network_rx, now, blk_read=None, blk_write=None):
-    """Uptime and restart count for one add-on, from successive observations.
+def track_uptime(state, slug, running, network_rx, now, blk_read=None, blk_write=None,
+                 version=None):
+    """Uptime, installed version and restart count, from successive observations.
 
     Supervisor reports neither a container start time nor a restart counter, so
     both are derived here. Two things count as a restart:
@@ -284,17 +286,39 @@ def track_uptime(state, slug, running, network_rx, now, blk_read=None, blk_write
     Uptime is therefore "at least": measured from the first time this add-on saw
     it running, which is not the same as when it actually started. `uptime_known`
     says which it is, so the dashboard can avoid claiming more than it knows.
+
+    Restarts are counted *for the version now running*. A count that spans
+    versions answers a question nobody asked: an add-on updated seven times in
+    two days accumulates restarts that belong to builds no longer installed, and
+    "is this build stable" is what the number is read for. The version's own
+    install time is kept alongside it, since a small count means nothing without
+    knowing how long it has had to grow.
     """
     entry = state.setdefault(slug, {})
     was_running = entry.get("running", False)
     previous_rx = entry.get("network_rx")
+    previous_version = entry.get("version")
 
     first_look = not entry.get("seen_before", False)
+    # A version this add-on has not recorded before. Two cases, and they are not
+    # the same thing: an update that happened while it was watching, or the first
+    # scan to record any version at all — a state file written before this was
+    # tracked, or an add-on seen for the first time. Only the first is evidence
+    # about what the container did.
+    version_changed = version is not None and version != previous_version
+    version_observed = version_changed and previous_version is not None
+
     restarted = False
     if running and not was_running:
         restarted = not first_look
     elif running and was_running and network_rx is not None and previous_rx is not None:
         restarted = network_rx < previous_rx
+    # An update replaces the container, so it restarted whether or not the
+    # counters show it: rx resets to zero, but a busy minute can leave the new
+    # counter above the old one and hide the drop. The version moving is proof
+    # on its own, and it makes the uptime clock exact from here.
+    if version_observed:
+        restarted = True
 
     if running and first_look:
         # Already running when this add-on first looked, so its real start is
@@ -305,11 +329,20 @@ def track_uptime(state, slug, running, network_rx, now, blk_read=None, blk_write
     elif restarted or (running and not entry.get("started_at")):
         entry["started_at"] = now
         entry["uptime_assumed"] = False
-    if restarted:
+    if restarted and not version_changed:
         entry["restarts"] = entry.get("restarts", 0) + 1
         entry["last_restart_at"] = now
         # The reason is filled in separately, from the Supervisor log; clearing
         # it here stops a new restart inheriting the previous one's explanation.
+        entry["last_restart_reason"] = None
+    if version_changed:
+        # The restart the update itself caused is part of the install, not a
+        # fault of the new version, so the count starts at zero rather than one.
+        entry["version"] = version
+        entry["version_at"] = now
+        entry["version_assumed"] = not version_observed
+        entry["restarts"] = 0
+        entry["last_restart_at"] = None
         entry["last_restart_reason"] = None
     if not running:
         entry["started_at"] = None
@@ -343,6 +376,7 @@ def track_uptime(state, slug, running, network_rx, now, blk_read=None, blk_write
         entry["blk_write"] = blk_write
 
     started_at = entry.get("started_at")
+    version_at = entry.get("version_at")
     return {
         "disk_read_bps": read_bps,
         "disk_write_bps": write_bps,
@@ -351,6 +385,12 @@ def track_uptime(state, slug, running, network_rx, now, blk_read=None, blk_write
         "restarts": entry.get("restarts", 0),
         "last_restart_at": entry.get("last_restart_at"),
         "last_restart_reason": entry.get("last_restart_reason"),
+        "version_at": version_at,
+        "version_seconds": None if not version_at else max(0, int(now - version_at)),
+        # False means this version was already installed when the watchdog first
+        # recorded one, so its age is a lower bound — the same distinction
+        # `uptime_known` draws, and for the same reason.
+        "version_known": bool(version_at) and not entry.get("version_assumed", True),
     }
 
 
@@ -587,6 +627,7 @@ def collect(timeout=5, ignore_stopped=True, now=None, tokens=None):
         tracked = track_uptime(
             state_history, slug, state == "started", stats.get("network_rx"), now,
             blk_read=stats.get("blk_read"), blk_write=stats.get("blk_write"),
+            version=entry.get("version"),
         )
         if tracked["last_restart_at"] and reasons.get(slug):
             tracked["last_restart_reason"] = reasons[slug]
@@ -664,6 +705,12 @@ def publish(snapshot, prefix="addon_watchdog", ignore_stopped=True):
                 "addon_version": row.get("version"),
                 "latest_version": row.get("version_latest"),
                 "update_available": row.get("update_available"),
+                # When the running version arrived, and whether that was seen or
+                # is a lower bound — an automation reporting "updated 3 days ago"
+                # should not invent a date the watchdog never observed.
+                "version_installed_at": row.get("version_at"),
+                "version_age_seconds": row.get("version_seconds"),
+                "version_installed_known": row.get("version_known"),
                 "cpu_percent": row.get("cpu_percent"),
                 "memory_usage_mb": _mb(row.get("memory_usage")),
                 "probe": row.get("probe"),
@@ -672,6 +719,9 @@ def publish(snapshot, prefix="addon_watchdog", ignore_stopped=True):
                 # Says whether uptime is exact or a lower bound, so a template
                 # graphing it knows not to treat the first value as a start.
                 "uptime_known": row.get("uptime_known"),
+                # Restarts on the running version only — it resets on update, so
+                # an alert threshold here means "this build is flapping" rather
+                # than "this add-on has been updated a lot".
                 "restarts": row.get("restarts"),
                 "last_restart_at": row.get("last_restart_at"),
                 "last_restart_reason": row.get("last_restart_reason"),

@@ -137,12 +137,13 @@ Attributes land on that add-on's sensor flattened, so a template can read them:
 {{ not state_attr('sensor.addon_watchdog_pipeline_postgres', 'report_ok') }}
 ```
 
-## Uptime and restarts
+## Uptime, version age and restarts
 
-The dashboard shows how long each add-on has been up, and how many times it has
-restarted while the watchdog was watching. Supervisor exposes neither a
-container start time nor a restart counter, so both are derived here — which
-has two consequences worth understanding.
+The dashboard shows how long each add-on has been up, how long the installed
+version has been the installed one, and how many times that version has
+restarted. Supervisor exposes neither a container start time, an install date,
+nor a restart counter, so all three are derived here — which has consequences
+worth understanding.
 
 **Uptime is a lower bound until a restart is seen.** An add-on already running
 when the watchdog first looked has a real start time older than anything
@@ -150,14 +151,34 @@ observable, so it shows as **`≥3d`**. Once a restart is observed the clock
 becomes exact and the `≥` disappears. The `uptime_known` sensor attribute says
 which it is.
 
-**Restarts are detected two ways.** A transition into `started` is the obvious
-one. The other is the container's cumulative network counter going *backwards*
+**The version column carries when that version arrived** — `2h ago` under the
+number. The same `≥` rule applies for the same reason: a version already
+installed when the watchdog first recorded one has been there *at least* that
+long, and it stays marked that way until an update is observed. The
+`version_installed_at`, `version_age_seconds` and `version_installed_known`
+sensor attributes carry it.
+
+**Restarts are counted for the running version, not for all time.** The count
+resets on update and reads `4 restarts on 1.44.2`, because the question it
+answers is whether *this build* is stable — an add-on updated seven times in two
+days would otherwise show a count belonging mostly to builds no longer
+installed. The update's own restart is not counted: Supervisor restarts an
+add-on to install it, which is the install rather than a fault of what was
+installed.
+
+**Restarts are detected three ways.** A transition into `started` is the obvious
+one. The second is the container's cumulative network counter going *backwards*
 while it stayed `started` — those counters reset with the container, so a drop
 means it was replaced entirely between two scans. Without that, an add-on that
-died and came back inside one 60-second interval would be invisible.
+died and came back inside one 60-second interval would be invisible. The third
+is the version changing, which is proof of a restart the counters can hide: rx
+resets to zero on update, but a busy minute can leave the new counter above the
+old one and show no drop at all.
 
-Both are remembered in `/data/watchdog-state.json`, so they survive the
-watchdog's own restart.
+All of it is remembered in `/data/watchdog-state.json`, so it survives the
+watchdog's own restart. Upgrading to 1.12.0 records each add-on's version for
+the first time, so every row starts with a zeroed count and a `≥` on its version
+age — the watchdog cannot report installs that happened before it was watching.
 
 ## Why an add-on restarted
 

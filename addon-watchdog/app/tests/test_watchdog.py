@@ -192,6 +192,44 @@ def test_collect_counts_a_degraded_addon(monkeypatch):
     assert snapshot["unhealthy"] == 1
 
 
+def test_an_update_between_two_scans_reaches_the_row(monkeypatch, tmp_path):
+    """End to end: the version Supervisor reports is what the restart count and
+    the install age are keyed to, so a scan has to carry it into track_uptime."""
+    monkeypatch.setattr(watchdog, "STATE_FILE", str(tmp_path / "state.json"))
+    installed = {"slug": "x_detection_hub", "name": "Detection Hub",
+                 "state": "started", "version": "1.9.0", "version_latest": "1.10.0"}
+    monkeypatch.setattr(watchdog, "supervisor_addons", lambda: ([installed], None))
+    monkeypatch.setattr(
+        watchdog, "supervisor_addon_info",
+        lambda slug: ({"state": "started", "hostname": "x-detection-hub"}, None),
+    )
+    monkeypatch.setattr(watchdog, "supervisor_addon_stats", lambda slug: ({}, None))
+    monkeypatch.setattr(watchdog, "run_probe",
+                        lambda *a, **k: ProbeResult(True, "HTTP 200"))
+    monkeypatch.setattr(watchdog, "fetch_stats", lambda *a, **k: (None, None))
+
+    def row(snapshot):
+        return next(r for r in snapshot["addons"] if r["slug"] == "detection-hub")
+
+    first = row(watchdog.collect(now=1000))
+    assert first["version_known"] is False, "an install it never saw"
+
+    # Down and back on the same version: a restart that belongs to 1.9.0.
+    monkeypatch.setattr(watchdog, "supervisor_addon_info",
+                        lambda slug: ({"state": "stopped", "hostname": "h"}, None))
+    watchdog.collect(now=1060)
+    monkeypatch.setattr(watchdog, "supervisor_addon_info",
+                        lambda slug: ({"state": "started", "hostname": "h"}, None))
+    assert row(watchdog.collect(now=1120))["restarts"] == 1
+
+    installed["version"] = "1.10.0"
+    updated = row(watchdog.collect(now=1180))
+    assert updated["version"] == "1.10.0"
+    assert updated["restarts"] == 0, "1.9.0's restart followed the update across"
+    assert updated["version_seconds"] == 0
+    assert updated["version_known"] is True
+
+
 # --- record counts ------------------------------------------------------------
 
 
@@ -551,6 +589,92 @@ def test_a_new_restart_does_not_inherit_the_previous_reason():
     again = watchdog.track_uptime(state, "gym-tracker", True, 0, now + 40)
     assert again["restarts"] == 2
     assert again["last_restart_reason"] is None, "stale explanation carried forward"
+
+
+# --- restarts belong to a version ---------------------------------------------
+
+
+def test_an_update_resets_the_restart_count():
+    """The question the count answers is "is this build stable", so restarts
+    accumulated by the previous one are noise against the new one."""
+    state, now = {}, 1000
+    watchdog.track_uptime(state, "detection-hub", True, 10, now, version="1.9.0")
+    watchdog.track_uptime(state, "detection-hub", False, None, now + 60)
+    on_old = watchdog.track_uptime(state, "detection-hub", True, 0, now + 120, version="1.9.0")
+    assert on_old["restarts"] == 1
+
+    updated = watchdog.track_uptime(state, "detection-hub", True, 0, now + 180, version="1.10.0")
+    assert updated["restarts"] == 0, "carried the old build's restarts forward"
+    assert updated["version_at"] == now + 180
+    assert updated["version_known"] is True, "this update was actually observed"
+
+
+def test_the_updates_own_restart_is_not_counted():
+    """Supervisor restarts the add-on to install it. That is the install, not a
+    fault of the version being installed."""
+    state, now = {}, 1000
+    watchdog.track_uptime(state, "gym-tracker", True, 5_000_000, now, version="1.32.2")
+    after = watchdog.track_uptime(state, "gym-tracker", True, 900, now + 60, version="1.32.3")
+    assert after["restarts"] == 0
+    assert after["last_restart_at"] is None
+    assert after["uptime_seconds"] == 0, "the update restarted it, so the clock starts again"
+
+
+def test_an_update_restarts_the_clock_even_when_the_counters_hide_it():
+    """rx resets with the container, but a busy minute can leave the new counter
+    above the old one — the version moving is the proof the drop would have been."""
+    state, now = {}, 1000
+    watchdog.track_uptime(state, "gym-tracker", True, 100, now, version="1.32.2")
+    watchdog.track_uptime(state, "gym-tracker", True, 200, now + 60, version="1.32.2")
+    updated = watchdog.track_uptime(state, "gym-tracker", True, 9_999, now + 120,
+                                    version="1.32.3")
+    assert updated["uptime_seconds"] == 0
+    assert updated["uptime_known"] is True
+
+
+def test_the_first_version_ever_recorded_is_not_an_update():
+    """A state file written before versions were tracked, or a fresh install:
+    either way nothing restarted, and how long that version has been there is
+    older than anything observable."""
+    state, now = {}, 1000
+    first = watchdog.track_uptime(state, "gym-tracker", True, 10, now, version="1.32.3")
+    assert first["restarts"] == 0
+    assert first["version_known"] is False, "claimed to have seen an install it did not"
+    assert first["version_seconds"] == 0
+
+    later = watchdog.track_uptime(state, "gym-tracker", True, 20, now + 3600, version="1.32.3")
+    assert later["version_seconds"] == 3600
+    assert later["version_known"] is False, "still the same unobserved install"
+
+
+def test_a_reinstalled_version_still_counts_its_restarts():
+    """Only a *change* resets. Scanning the same version repeatedly must not keep
+    zeroing the count, or no restart would ever be visible."""
+    state, now = {}, 1000
+    watchdog.track_uptime(state, "coop-tracker", True, 10, now, version="1.44.2")
+    watchdog.track_uptime(state, "coop-tracker", False, None, now + 60, version="1.44.2")
+    back = watchdog.track_uptime(state, "coop-tracker", True, 0, now + 120, version="1.44.2")
+    assert back["restarts"] == 1
+    assert back["version_at"] == now, "the install time moved on an unchanged version"
+
+
+def test_an_addon_that_reports_no_version_is_not_treated_as_updated():
+    state, now = {}, 1000
+    watchdog.track_uptime(state, "pipeline-spark", True, 10, now, version="1.0.2")
+    watchdog.track_uptime(state, "pipeline-spark", False, None, now + 60)
+    same = watchdog.track_uptime(state, "pipeline-spark", True, 0, now + 120, version=None)
+    assert same["restarts"] == 1, "a missing version wiped the count"
+    assert same["version_at"] == now
+
+
+def test_version_age_is_absent_before_any_version_is_seen():
+    """Nothing here may invent a date: a row with no recorded version shows no
+    age rather than "0s ago"."""
+    state = {}
+    row = watchdog.track_uptime(state, "pipeline-notebook", True, 10, 1000)
+    assert row["version_at"] is None
+    assert row["version_seconds"] is None
+    assert row["version_known"] is False
 
 
 def test_state_survives_a_round_trip(tmp_path, monkeypatch):
