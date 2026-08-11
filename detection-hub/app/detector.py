@@ -31,7 +31,29 @@ except ImportError as exc:  # pragma: no cover - exercised by the import guard t
     np = None
 
 MODEL_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
-DEFAULT_MODEL = os.path.join(MODEL_DIR, "yolox_nano.onnx")
+
+# The bundled models, both YOLOX and both exported at INPUT_SIZE, so the
+# letterbox, the grid decode and the NMS below are identical for either — only
+# the weights differ. Measured on the same frame: nano 14 ms, tiny 51 ms, for
+# the same objects found on that scene. Nano is the default because 3.6x the
+# CPU should be a decision, not a surprise; tiny is there for the case nano is
+# expected to lose, which is small and distant objects.
+MODELS = {
+    "nano": os.path.join(MODEL_DIR, "yolox_nano.onnx"),
+    "tiny": os.path.join(MODEL_DIR, "yolox_tiny.onnx"),
+}
+DEFAULT_MODEL_NAME = "nano"
+DEFAULT_MODEL = MODELS[DEFAULT_MODEL_NAME]
+
+
+def model_for(name):
+    """A bundled model's path by name, falling back to the default.
+
+    An unrecognised name is the default rather than an error: this is fed from a
+    config option, and a typo should leave a working detector rather than an
+    add-on that will not detect anything.
+    """
+    return MODELS.get((name or "").strip().lower(), DEFAULT_MODEL)
 
 # The input side YOLOX was exported at. Changing it silently breaks `decode`,
 # which derives its grids from this — so it travels with the model, not as a
@@ -186,9 +208,20 @@ class Detector:
                 return None
         return self._net
 
+    @property
+    def model_name(self):
+        """The bundled model's short name, or "custom" for anything else — so
+        "which model is actually running" is answerable without comparing
+        paths."""
+        for name, path in MODELS.items():
+            if os.path.abspath(path) == os.path.abspath(self.model_path):
+                return name
+        return "custom"
+
     def status(self):
         return {
             "opencv_available": OPENCV_AVAILABLE,
+            "model": self.model_name,
             "model_path": self.model_path,
             "model_loaded": self._net is not None,
             "input_size": self.input_size,

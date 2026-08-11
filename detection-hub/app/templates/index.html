@@ -132,6 +132,7 @@
       {% else %}
         <span class="pill"><span class="dot good"></span> Detector ready</span>
       {% endif %}
+      <span class="pill">model {{ status.model }}</span>
       <span class="pill">{{ status.input_size }}&times;{{ status.input_size }}</span>
       <span class="pill">confidence {{ confidence }}</span>
       {% if status.last_latency_ms %}

@@ -290,7 +290,20 @@ path and any load error.
   sensors and in the log.
 - **camera_offline_seconds**: `120` (default). How long without a frame before a
   camera counts as offline. Covers a hung feed, not just a dropped connection.
-- **model_path**: empty uses the bundled YOLOX-Nano. Point it at another ONNX
+- **model**: `nano` (default) or `tiny`. Both are YOLOX at 416×416 and bundled
+  in the image, so switching changes nothing else and needs no internet — only a
+  restart, since the model is loaded once at start. Which model is running shows
+  on the page's status card and in `/api/debug`.
+
+  **Pick `tiny` only if objects are being missed at distance.** Measured on a
+  real driveway, 9 frames: both models found the near car every time (nano 0.88,
+  tiny 0.90), but a **second, further car** sat right on the 0.6 threshold for
+  nano — found in 2 frames at 0.60–0.64 — while tiny found it in 3 and scored it
+  as high as 0.86. That marginal case is the entire difference. The cost is
+  roughly **two to four times the CPU per analysed frame** (12 ms against 27 ms
+  on one machine, 14 against 51 on another), which motion gating keeps
+  affordable: nothing is spent while the scene is still.
+- **model_path**: overrides `model` entirely. Empty uses the bundled choice. Point it at another ONNX
   file to swap models; it must be a YOLOX export at the same input size, and the
   add-on refuses one whose output shape disagrees rather than producing boxes in
   the wrong places.

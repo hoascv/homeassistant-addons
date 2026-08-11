@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.10.0
+
+- **The detection model is selectable.** A new `model` option takes `nano` (the
+  default, unchanged) or `tiny` — the larger YOLOX network, now bundled in the
+  image. Both are 416×416 and emit the same tensor shape, so the letterbox, the
+  grid decode and the NMS are identical: only the weights differ.
+- **Measured on the real camera before shipping, rather than assumed.** Over 9
+  driveway frames both models found the near car every time (nano 0.88, tiny
+  0.90), but the *second, more distant* car sat on the 0.6 threshold for nano —
+  2 frames at 0.60–0.64 — where tiny found it in 3 and scored up to 0.86. That
+  marginal case is the whole benefit, and it costs 2–4× the CPU per analysed
+  frame. Nano remains the default because that trade should be a decision.
+- `model_path` still overrides `model`, and an unrecognised model name falls
+  back to the default rather than leaving the add-on unable to detect anything.
+- The running model is reported on the status card and in `/api/debug`, so
+  "did my change take effect" is answerable — it needs a restart, like every
+  option the detector and cameras read at startup.
+- The image grows ~20 MB for the bundled model. Vendored rather than downloaded
+  at build time, so the add-on still needs no internet at any point.
+
 ## 1.9.0
 
 - **Filter detections by object type.** An Object dropdown on the page shows only

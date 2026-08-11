@@ -22,7 +22,7 @@ import detector
 import hass
 import store
 
-APP_VERSION = "1.9.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.10.0"  # keep in sync with the "version" field in config.yaml
 
 OPTIONS_PATH = os.environ.get("DETECTION_HUB_OPTIONS_PATH", "/data/options.json")
 
@@ -114,7 +114,19 @@ def get_labels():
 
 
 def get_model_path():
-    return (_read_options().get("model_path") or "").strip() or None
+    """Which model file to load, resolved from the two options that name one.
+
+    `model_path` wins when set: an explicit path is a more specific instruction
+    than a named choice, and it remains the escape hatch for a model neither
+    bundled option covers. Otherwise `model` picks a bundled one by name, and an
+    unrecognised name falls back to the default rather than leaving the add-on
+    unable to detect anything.
+    """
+    options = _read_options()
+    explicit = (options.get("model_path") or "").strip()
+    if explicit:
+        return explicit
+    return detector.model_for(options.get("model"))
 
 
 def _int_option(name, default, low, high):

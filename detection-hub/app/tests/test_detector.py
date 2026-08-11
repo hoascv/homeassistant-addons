@@ -239,3 +239,63 @@ def test_a_real_jpeg_round_trips():
     assert encoded[:2] == b"\xff\xd8", "should be a JPEG"
     again, error = detector.decode_image(encoded)
     assert error is None and again.shape == image.shape
+
+
+# --- choosing a model ---------------------------------------------------------
+
+
+def test_both_bundled_models_are_present():
+    """The whole feature is the file being there; a missing one would surface
+    only as a broken detector on someone's host."""
+    for name, path in detector.MODELS.items():
+        assert os.path.exists(path), f"{name} is not bundled at {path}"
+
+
+def test_model_for_resolves_the_bundled_names():
+    assert detector.model_for("nano").endswith("yolox_nano.onnx")
+    assert detector.model_for("tiny").endswith("yolox_tiny.onnx")
+
+
+def test_model_for_is_forgiving_about_case_and_space():
+    assert detector.model_for("  TINY ") == detector.MODELS["tiny"]
+
+
+def test_an_unknown_model_name_falls_back_to_the_default():
+    """This comes from a config option; a typo should leave a working detector,
+    not an add-on that detects nothing."""
+    assert detector.model_for("yolov99") == detector.DEFAULT_MODEL
+    assert detector.model_for(None) == detector.DEFAULT_MODEL
+    assert detector.model_for("") == detector.DEFAULT_MODEL
+
+
+def test_the_running_model_is_named_in_status():
+    assert detector.Detector().status()["model"] == "nano"
+    assert detector.Detector(model_path=detector.MODELS["tiny"]).status()["model"] == "tiny"
+
+
+def test_a_model_outside_the_bundle_reports_as_custom(tmp_path):
+    det = detector.Detector(model_path=str(tmp_path / "mine.onnx"))
+    assert det.status()["model"] == "custom"
+
+
+def test_tiny_loads_and_detects_the_same_scene():
+    """The bundled file has to actually work — a 20 MB blob that fails to load
+    would otherwise be discovered by whoever switched to it."""
+    det = detector.Detector(model_path=detector.MODELS["tiny"])
+    detections, error = det.detect(cv2.imread(STREET), confidence=0.6)
+
+    assert error is None
+    found = [d["label"] for d in detections]
+    assert found.count("person") >= 2, f"tiny found {found}"
+    assert {"car", "truck"} & set(found), f"tiny found no vehicle: {found}"
+
+
+def test_both_models_share_the_decode():
+    """They are both YOLOX at the same input size, which is why switching needs
+    no other change. If a future model breaks that, this fails rather than the
+    boxes quietly landing in the wrong places."""
+    for path in detector.MODELS.values():
+        det = detector.Detector(model_path=path)
+        assert det.status()["input_size"] == detector.INPUT_SIZE
+        detections, error = det.detect(cv2.imread(STREET), confidence=0.6)
+        assert error is None and detections

@@ -1,5 +1,5 @@
 name: "Detection Hub"
-version: "1.9.0"
+version: "1.10.0"
 slug: "detection-hub"
 description: "Object detection for Home Assistant — an image in, what's in it out"
 url: "https://github.com/hoascv/homeassistant-addons/tree/main/detection-hub"
@@ -48,8 +48,17 @@ options:
   # Empty means all 80 COCO classes. A camera almost always wants a handful —
   # the rest are noise that bury the ones you automate on.
   labels: "person, car, truck, bicycle, motorcycle, dog, cat, bird"
-  # Empty uses the bundled YOLOX-Nano. Point at another ONNX to swap models;
-  # it must be a YOLOX export at the same input size.
+  # Which bundled detector to use.
+  #   nano - the default. ~14 ms a frame, and what every other default here was
+  #          tuned against.
+  #   tiny - the larger network: ~3.6x the CPU, and worth it only if small or
+  #          distant objects are being missed. Both are YOLOX at 416x416, so
+  #          nothing else changes when you switch.
+  # A restart is needed either way; the model is loaded once at start.
+  model: "nano"
+  # An escape hatch that overrides `model`: point at your own ONNX. It must be a
+  # YOLOX export at the same input size, or the add-on refuses it rather than
+  # producing boxes in the wrong places.
   model_path: ""
   # One camera per line, `name = url`. A textarea in the Supervisor UI, not
   # nested YAML: a typo in `name = url` is recoverable, a typo in nested YAML
@@ -99,6 +108,7 @@ schema:
   restrict_to_user_ids: "str?"
   confidence: "float(0.05,0.99)"
   labels: "str?"
+  model: "list(nano|tiny)"
   model_path: "str?"
   cameras: "str?"
   max_fps: "float(0,30)"
