@@ -1,2 +1,7 @@
 -r requirements.txt
 pytest>=7.4,<9
+# One test parses every sibling config.yaml to catch an add-on that was added to
+# the repository and never given a probe. Dev-only: nothing in the add-on itself
+# reads YAML, and it was missing here until the tests first ran outside a
+# machine that happened to have PyYAML installed.
+pyyaml>=6.0,<7
