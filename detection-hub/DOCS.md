@@ -363,19 +363,26 @@ API token auth: ON — api_token is set (32 characters). The published port acce
 
 ## Why this model
 
-**YOLOX-Nano**, 3.6 MB, Apache-2.0.
+**YOLOX**, Apache-2.0. Nano (3.6 MB) is the default; Tiny (20 MB) is bundled
+beside it and chosen with the `model` option above.
 
 The obvious choices are YOLOv5 and YOLOv8, and both are Ultralytics **AGPL-3.0**
 — the wrong licence to vendor into a public repository. YOLOX is Apache-2.0 and
 performs comparably at this size.
 
-Nano over the larger YOLOX-Tiny after measuring both on the same frame: Nano
-returned the same people and vehicles in **14 ms** against Tiny's **51 ms**, at a
-fifth of the file size. For a detector that will eventually run against a live
-camera, 3.6× faster for no loss that mattered was not a close decision. You can
-still swap Tiny in via `model_path` if your scene needs the accuracy.
+Nano is the default on speed. Measured on one frame at the outset, it returned
+the same people and vehicles in **14 ms** against Tiny's **51 ms**, at a fifth
+of the file size — which read at the time as faster for no loss that mattered.
+Nine live driveway frames later showed what a single frame could not: a second,
+more distant car that sat right on the confidence threshold for Nano and well
+above it for Tiny. That is a real difference, and it is why Tiny is now bundled
+and selectable by name rather than something you have to source and mount
+yourself. It is still not the default, because the cost is two to four times the
+CPU per analysed frame and most scenes never present that marginal object — see
+the `model` option for the numbers.
 
-The model is baked into the image, so the add-on needs no internet at any point.
+Both models are baked into the image, so the add-on needs no internet at any
+point.
 
 ## Notes
 

@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.10.1
+
+- Documentation fix. **"Why this model" still described Tiny as something you
+  supply yourself** via `model_path`, and called the difference between the two
+  "no loss that mattered" — both written before 1.10.0 bundled Tiny and measured
+  a difference that does matter at distance. The section now says what the nine
+  live frames showed and points at the `model` option, instead of contradicting
+  it eighty lines further down.
+
 ## 1.10.0
 
 - **The detection model is selectable.** A new `model` option takes `nano` (the
