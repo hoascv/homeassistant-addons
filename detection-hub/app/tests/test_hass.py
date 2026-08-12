@@ -85,7 +85,18 @@ def test_the_event_payload_is_flat_and_complete(fake_ha):
         "confidence": 0.91,
         "box": [10, 20, 30, 40],
         "snapshot_id": 7,
+        # Null when no named area claimed it, and present either way: an
+        # automation template reading trigger.event.data.zone should get a
+        # falsy value rather than an error on cameras with no areas drawn.
+        "zone": None,
     }
+
+
+def test_the_event_names_the_area_when_there_was_one(fake_ha):
+    """The reason areas have names: "a person on the Porch" is an automation,
+    "a person on the drive camera" is a camera."""
+    hass.fire_event("drive", {**DETECTION, "zone": "Porch"}, snapshot_id=7)
+    assert fake_ha[0]["body"]["zone"] == "Porch"
 
 
 def test_the_supervisor_token_is_sent(fake_ha):

@@ -68,43 +68,78 @@ likely causes — a rejected password, a wrong path, an unreachable camera —
 rather than only echoing ffmpeg's raw error (on some cameras a bad password
 even shows as a `406`, which reads like a protocol fault and is not).
 
-## Where to look — zones
+## Where to look — areas
 
 A camera pointed at a driveway usually sees the street too, and a car parked
-across the road is not an event. **Draw the area that counts** on the page, under
-*Where to look*: pick the camera, press **Draw an area…**, and click along the
-edge of the driveway on a recent frame from that camera. Three points minimum;
-the shape can be any polygon, including a concave one around a flower bed.
+across the road is not an event. Each camera can be given **named areas** — the
+page's *Where to look* card — and every detection records which area it was in.
 
-**Choose which objects it applies to.** Vehicles are ticked by default and
-`person` is not, which is usually what you want: a car in the street is traffic,
-a person in the street may be the reason you have a camera at all. Anything the
-zone doesn't name carries on being reported from anywhere in frame.
+An area is three things: a **shape**, a **name**, and the **object types** it
+applies to. It is one of two kinds:
 
-**An object is judged by the bottom of its box**, not its middle — where it meets
+- **only counts here** (include) — those objects are recorded only inside this
+  shape.
+- **never counts here** (ignore) — those objects are never recorded inside it,
+  whatever else says.
+
+**Ignore wins.** That is what lets a large include area have a hole cut in it —
+"the whole drive except the corner of pavement" — without drawing a concave
+outline around the exclusion by hand.
+
+**A label no area mentions is unrestricted.** Areas are a statement about the
+labels they name, so a camera with a car area still reports people from anywhere
+in view. To restrict everything, leave the object types unticked — an empty list
+means every type.
+
+### Drawing one
+
+Pick the camera, press **Add an area…**, and click along the edge on a recent
+frame from that camera. Three points minimum, any polygon. Areas already on that
+camera are drawn faintly so a new one can be placed beside them. Give it a name —
+that name is what a detection and a Home Assistant event will say — choose the
+kind and the object types, and save. It takes effect immediately, no restart.
+
+**An object is judged by the bottom of its box**, not its middle: where it meets
 the ground. A van across the road has a box whose centre floats over your
-driveway boundary while its wheels are plainly in the street, and the centre test
-would let it through.
+driveway boundary while its wheels are plainly in the street.
 
-Anything outside is **dropped before it is recorded**: no row, no snapshot, no
-event, nothing in the lakehouse. That is deliberate — filtering it out of the
-page later would still pay for all four.
+**Coordinates are relative to the frame**, so switching a camera between its
+substream and its main stream does not move a shape. Moving the camera does
+invalidate it, but that invalidates the drawing anyway.
+
+### What it changes
+
+Anything an area excludes is **dropped before it is recorded** — no row, no
+snapshot, no event, nothing in the lakehouse. What is kept carries the area's
+name, on the detection, in `/api/detections`, in the change feed, and in the
+`detection_hub_detection` event:
+
+```yaml
+automation:
+  - alias: "Somebody on the porch"
+    trigger:
+      - platform: event
+        event_type: detection_hub_detection
+        event_data:
+          zone: Porch
+          label: person
+```
+
+Deleting an area does not rewrite history: detections keep the name they were
+recorded with, because what area something was in is a fact about the shape as it
+was drawn then.
 
 Two things worth knowing:
 
-- **The detector still runs on the whole frame.** It has to, because the zone is
-  per-label and a person in the street still counts. So a zone saves you rows,
-  snapshots and events, not the forward pass. If you want the CPU back too,
-  applying the zone to *every* label would let the motion gate ignore that area
-  entirely — ask for it and it can be built.
-- **Coordinates are relative to the frame**, so switching a camera between its
-  substream and its main stream does not move the shape. Moving the camera does
-  invalidate it, but that invalidates the drawing anyway.
+- **The detector still runs on the whole frame.** It has to, because areas are
+  per-label and a person in the street still counts. Areas save you rows,
+  snapshots and events, not the forward pass.
+- **A shape that will not parse is treated as no shape**, and everything is
+  recorded. A camera that silently records nothing is a worse failure than one
+  that records too much; `/api/zones` marks such a row `usable: false`.
 
-Redraw or clear it at any time; the camera threads pick it up immediately, no
-restart. `GET /api/cameras` reports each camera's zone, and the per-camera status
-counts what it dropped — if `frames_filtered` is climbing while nothing is being
-recorded, the shape is in the wrong place.
+The area list shows how many detections each camera has dropped — if that climbs
+while nothing is being recorded, a shape is in the wrong place.
 
 ## Identifying people
 
@@ -411,6 +446,18 @@ Images are capped at 20 MB.
 - **`GET /api/snapshots/<id>`** — the stored JPEG for a detection. `404` once
   the image has been pruned, or after a restored backup — see **Storage**.
 - **`GET /api/cameras`** — every source that has reported, and its last state.
+
+### Areas
+
+- **`GET /api/zones`**, optionally `?camera=`, lists every area with its shape,
+  kind and object types. `usable: false` marks a stored shape that will not parse
+  and is therefore not in force.
+- **`POST /api/zones`** `{"camera": "drive", "name": "Driveway", "kind":
+  "include", "points": [[0.1, 0.9], ...], "labels": ["car"]}` — `409` if that
+  camera already has an area with that name.
+- **`PUT /api/zones/<id>`** changes any subset: renaming does not mean resending
+  the polygon.
+- **`DELETE /api/zones/<id>`** — past detections keep the name they recorded.
 
 ### People and faces
 

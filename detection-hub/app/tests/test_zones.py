@@ -51,246 +51,309 @@ def test_a_box_is_judged_where_it_meets_the_ground():
 def test_a_zero_sized_frame_is_not_a_division_error():
     assert zones.ground_point([0, 0, 10, 10], 0, 0) is None
 
-
-# --- what a zone allows -------------------------------------------------------
-
-
-def _det(label="car", box=(400, 400, 200, 400)):
-    return {"label": label, "confidence": 0.9, "box": list(box)}
+# --- the rules ----------------------------------------------------------------
 
 
-def test_no_zone_allows_everything():
-    assert zones.allows(None, "car", [0, 0, 10, 10], 100, 100) is True
+def _zone(name="Driveway", kind=zones.INCLUDE, points=None, labels=("car",)):
+    return {
+        "id": 1, "camera": "drive", "name": name, "kind": kind,
+        "points": points or DRIVEWAY, "labels": labels,
+    }
 
 
-def test_a_car_in_the_driveway_is_kept_and_one_in_the_street_is_not():
-    zone = {"points": DRIVEWAY, "labels": ("car",)}
-    # Wheels at (0.5, 0.95): inside the wedge.
-    assert zones.allows(zone, "car", [400, 500, 200, 450], 1000, 1000) is True
-    # Wheels at (0.5, 0.3): up in the street.
-    assert zones.allows(zone, "car", [400, 100, 200, 200], 1000, 1000) is False
+# Wheels at (0.5, 0.95) — inside the driveway wedge.
+IN_DRIVE = [400, 500, 200, 450]
+# Wheels at (0.5, 0.3) — up in the street.
+IN_STREET = [400, 100, 200, 200]
 
 
-def test_a_label_the_zone_does_not_name_is_unaffected():
-    """The point of naming labels: cars are restricted to the driveway, people
-    still count anywhere — including walking up the street, which is exactly what
-    a camera is for."""
-    zone = {"points": DRIVEWAY, "labels": ("car", "truck")}
-    street_box = [400, 100, 200, 200]
-    assert zones.allows(zone, "car", street_box, 1000, 1000) is False
-    assert zones.allows(zone, "person", street_box, 1000, 1000) is True
+def test_an_include_area_keeps_what_is_inside_and_drops_what_is_not():
+    zone_list = [_zone()]
+    assert zones.evaluate(zone_list, "car", IN_DRIVE, 1000, 1000) == (True, "Driveway")
+    assert zones.evaluate(zone_list, "car", IN_STREET, 1000, 1000) == (False, None)
 
 
-def test_a_zone_with_no_labels_applies_to_everything():
-    zone = {"points": DRIVEWAY, "labels": ()}
-    street_box = [400, 100, 200, 200]
-    assert zones.allows(zone, "person", street_box, 1000, 1000) is False
+def test_a_label_no_area_mentions_is_unrestricted():
+    """Areas are a statement about the labels they name. A camera with a car zone
+    still reports people from anywhere — including the street, which is exactly
+    what a camera is for."""
+    zone_list = [_zone(labels=("car", "truck"))]
+    assert zones.evaluate(zone_list, "person", IN_STREET, 1000, 1000) == (True, None)
 
 
-def test_filtering_keeps_order_and_drops_only_what_is_outside():
-    zone = {"points": DRIVEWAY, "labels": ("car",)}
-    detections = [
-        _det("car", (400, 100, 200, 200)),    # street
-        _det("person", (400, 100, 100, 200)),  # street, but not a car
-        _det("car", (400, 500, 200, 450)),    # driveway
+def test_an_area_with_no_labels_covers_every_object():
+    zone_list = [_zone(labels=())]
+    assert zones.evaluate(zone_list, "person", IN_STREET, 1000, 1000) == (False, None)
+    assert zones.evaluate(zone_list, "person", IN_DRIVE, 1000, 1000) == (True, "Driveway")
+
+
+def test_an_ignore_area_beats_an_include_one():
+    """The reason ignore exists: a hole in a larger shape, without having to draw
+    a concave outline around it by hand."""
+    whole_frame = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]
+    corner = [(0.3, 0.8), (0.7, 0.8), (0.7, 1.0), (0.3, 1.0)]
+    zone_list = [
+        _zone("Everywhere", zones.INCLUDE, whole_frame),
+        _zone("Pavement", zones.IGNORE, corner),
     ]
-    kept = zones.filter_detections(zone, detections, 1000, 1000)
-    assert [d["label"] for d in kept] == ["person", "car"]
-    assert kept[1]["box"] == [400, 500, 200, 450]
+    # (0.5, 0.95) is inside both — ignore wins.
+    assert zones.evaluate(zone_list, "car", IN_DRIVE, 1000, 1000) == (False, None)
+    # (0.5, 0.3) is inside the include shape only.
+    assert zones.evaluate(zone_list, "car", IN_STREET, 1000, 1000) == (True, "Everywhere")
 
 
-# --- storage form -------------------------------------------------------------
+def test_an_ignore_area_works_without_any_include_area():
+    """"Never over the neighbour's window" is a complete instruction on its own."""
+    zone_list = [_zone("Neighbour", zones.IGNORE, DRIVEWAY)]
+    assert zones.evaluate(zone_list, "car", IN_DRIVE, 1000, 1000) == (False, None)
+    assert zones.evaluate(zone_list, "car", IN_STREET, 1000, 1000) == (True, None)
 
 
-def test_a_zone_survives_the_round_trip():
-    stored = zones.dump(DRIVEWAY, ["car", "TRUCK "])
-    parsed = zones.parse(stored)
-    assert parsed["points"] == [(round(x, 4), round(y, 4)) for x, y in DRIVEWAY]
-    assert parsed["labels"] == ("car", "truck"), "labels are normalised on the way in"
+def test_the_first_matching_include_area_names_the_detection():
+    porch = [(0.0, 0.0), (0.4, 0.0), (0.4, 0.4), (0.0, 0.4)]
+    zone_list = [_zone("Porch", points=porch), _zone("Driveway")]
+    assert zones.evaluate(zone_list, "car", IN_DRIVE, 1000, 1000) == (True, "Driveway")
 
 
-def test_a_mangled_zone_is_no_zone_rather_than_a_crash():
-    """Read in a camera thread on every frame. It fails open — everything is
-    recorded — because a camera that silently records nothing is worse than one
-    that records too much."""
-    for bad in ("", None, "not json", "[]", '{"points": "nope"}',
-                '{"points": [[0, 0], [1, 1]]}',          # two points is not a shape
-                '{"points": [[0, 0], [1, 1], ["a", 0]]}'):
+def test_an_ignore_area_for_another_label_does_not_touch_this_one():
+    zone_list = [_zone("Bins", zones.IGNORE, DRIVEWAY, labels=("person",))]
+    assert zones.evaluate(zone_list, "car", IN_DRIVE, 1000, 1000) == (True, None)
+    assert zones.evaluate(zone_list, "person", IN_DRIVE, 1000, 1000) == (False, None)
+
+
+def test_no_areas_at_all_keeps_everything_unnamed():
+    assert zones.evaluate([], "car", IN_STREET, 1000, 1000) == (True, None)
+
+
+def test_filtering_stamps_the_area_onto_what_it_keeps():
+    """The stamp is what reaches the database and the event, so an automation can
+    fire on "a person in the Porch" rather than on a whole camera."""
+    zone_list = [_zone()]
+    detections = [
+        {"label": "car", "confidence": 0.9, "box": list(IN_STREET)},
+        {"label": "person", "confidence": 0.9, "box": list(IN_STREET)},
+        {"label": "car", "confidence": 0.9, "box": list(IN_DRIVE)},
+    ]
+    kept = zones.filter_detections(zone_list, detections, 1000, 1000)
+    assert [(d["label"], d["zone"]) for d in kept] == [
+        ("person", None), ("car", "Driveway"),
+    ]
+
+
+# --- parsing stored rows ------------------------------------------------------
+
+
+def _row(**over):
+    row = {"id": 3, "camera": "drive", "name": "Driveway", "kind": "include",
+           "points": zones.dump_points(DRIVEWAY), "labels": '["car", "TRUCK"]'}
+    row.update(over)
+    return row
+
+
+def test_a_stored_row_parses_into_something_the_matcher_can_use():
+    zone = zones.parse(_row())
+    assert zone["name"] == "Driveway"
+    assert zone["kind"] == zones.INCLUDE
+    assert zone["labels"] == ("car", "truck"), "labels are normalised on the way in"
+    assert len(zone["points"]) == 4
+
+
+def test_a_mangled_row_is_no_zone_rather_than_a_crash():
+    """Read in a camera thread on every detection. It fails open — everything is
+    recorded — because a camera that silently records nothing is worse."""
+    for bad in ({}, _row(points="not json"), _row(points="[]"),
+                _row(points='[[0, 0], [1, 1]]'), _row(points='[["a", 0], [1, 1], [0, 1]]')):
         assert zones.parse(bad) is None
 
 
+def test_an_unknown_kind_is_treated_as_include():
+    """A row that says something this version does not understand must not
+    quietly become an ignore area and hide everything."""
+    assert zones.parse(_row(kind="banish"))["kind"] == zones.INCLUDE
+
+
+def test_rows_are_grouped_by_camera():
+    grouped = zones.parse_all([_row(), _row(id=4, camera="porch", name="Step")])
+    assert set(grouped) == {"drive", "porch"}
+    assert grouped["porch"][0]["name"] == "Step"
+
+
 def test_coordinates_outside_the_frame_are_clamped_not_rejected():
-    """A drag that ends a few pixels off the edge of the canvas is a normal way
-    to draw a shape that reaches the edge, not a mistake to refuse."""
-    parsed = zones.parse('{"points": [[-0.2, 0.5], [1.4, 0.5], [0.5, 1.2]]}')
-    assert parsed["points"] == [(0.0, 0.5), (1.0, 0.5), (0.5, 1.0)]
+    points = zones.parse_points('[[-0.2, 0.5], [1.4, 0.5], [0.5, 1.2]]')
+    assert points == [(0.0, 0.5), (1.0, 0.5), (0.5, 1.0)]
 
 
-# --- through the camera path and the API --------------------------------------
+# --- storage and migration ----------------------------------------------------
 
 
-def test_a_street_car_never_reaches_the_recorder(monkeypatch):
-    """The point of filtering here rather than on the page: no track, no row, no
-    snapshot, no event — not a filtered view of things already paid for."""
-    import numpy as np
+def test_a_camera_can_have_several_named_areas(db_path):
+    import store
 
-    import capture
-
-    recorded = []
-
-    class Detector:
-        last_latency_ms = 5.0
-
-        def detect(self, frame, confidence=0.6, labels=None):
-            return ([
-                {"label": "car", "confidence": 0.9, "box": [400, 100, 200, 200]},   # street
-                {"label": "car", "confidence": 0.9, "box": [400, 500, 200, 450]},   # driveway
-                {"label": "person", "confidence": 0.9, "box": [400, 100, 100, 200]},  # street
-            ], None)
-
-    worker = capture.CameraWorker(
-        "drive", "rtsp://x", Detector(),
-        lambda camera, dets, frame: recorded.append(dets) or [1] * len(dets),
-        motion_threshold=0,
-        zone=zones.dump(DRIVEWAY, ["car"]),
-    )
-    worker._consider(np.zeros((1000, 1000, 3), dtype=np.uint8))
-
-    assert len(recorded) == 1
-    kept = [(d["label"], d["box"][1]) for d in recorded[0]]
-    assert ("car", 100) not in kept, "the street car was recorded"
-    assert ("car", 500) in kept, "the driveway car was dropped"
-    assert ("person", 100) in kept, "a person in the street is still news"
-    assert worker.frames_filtered == 1
-    assert worker.status()["zone_active"] is True
+    conn = store.connect(db_path, actor="user")
+    try:
+        store.add_zone(conn, "drive", "Driveway", "include",
+                       zones.dump_points(DRIVEWAY), zones.dump_labels(["car"]))
+        store.add_zone(conn, "drive", "Pavement", "ignore",
+                       zones.dump_points(DRIVEWAY), zones.dump_labels([]))
+        conn.commit()
+        rows = store.zones(conn, "drive")
+        assert [r["name"] for r in rows] == ["Driveway", "Pavement"]
+        assert [r["kind"] for r in rows] == ["include", "ignore"]
+    finally:
+        conn.close()
 
 
-def test_a_camera_with_no_zone_records_everything(monkeypatch):
-    import numpy as np
+def test_two_areas_on_one_camera_cannot_share_a_name(db_path):
+    """The name is how a detection refers to an area; two of them would make a
+    row ambiguous about where it happened."""
+    import store
 
-    import capture
-
-    recorded = []
-
-    class Detector:
-        last_latency_ms = 5.0
-
-        def detect(self, frame, confidence=0.6, labels=None):
-            return ([{"label": "car", "confidence": 0.9, "box": [400, 100, 200, 200]}], None)
-
-    worker = capture.CameraWorker(
-        "drive", "rtsp://x", Detector(),
-        lambda camera, dets, frame: recorded.append(dets) or [1],
-        motion_threshold=0,
-    )
-    worker._consider(np.zeros((1000, 1000, 3), dtype=np.uint8))
-    assert len(recorded[0]) == 1
-    assert worker.frames_filtered == 0
+    conn = store.connect(db_path, actor="user")
+    try:
+        assert store.add_zone(conn, "drive", "Gate", "include",
+                              zones.dump_points(DRIVEWAY), "[]") is not None
+        assert store.add_zone(conn, "drive", "Gate", "include",
+                              zones.dump_points(DRIVEWAY), "[]") is None
+        # But two cameras may each have a Gate — they are different gates.
+        assert store.add_zone(conn, "porch", "Gate", "include",
+                              zones.dump_points(DRIVEWAY), "[]") is not None
+    finally:
+        conn.close()
 
 
-def test_a_zone_can_be_drawn_cleared_and_read_back(client, db_path):
-    saved = client.put("/api/cameras/drive/zone",
-                       json={"points": DRIVEWAY, "labels": ["car", "truck"]})
-    assert saved.status_code == 200, saved.get_json()
+def test_a_1_13_camera_zone_becomes_a_named_area(tmp_path):
+    """The shape somebody had already drawn has to survive the upgrade, named
+    after the camera — which is almost always the area it watches."""
+    import json
 
+    import store
+
+    path = str(tmp_path / "old.db")
+    store.init_db(path)
+    conn = store.connect(path, actor="user")
+    try:
+        conn.execute("INSERT INTO cameras (id, kind) VALUES ('Driveway', 'rtsp')")
+        conn.execute(
+            "UPDATE cameras SET zone = ? WHERE id = 'Driveway'",
+            (json.dumps({"points": [list(p) for p in DRIVEWAY], "labels": ["car"]}),),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    store.init_db(path)          # the upgrade
+    conn = store.connect(path, actor="user")
+    try:
+        rows = store.zones(conn, "Driveway")
+        assert len(rows) == 1
+        assert rows[0]["name"] == "Driveway"
+        assert rows[0]["kind"] == "include"
+        assert zones.parse(rows[0])["labels"] == ("car",)
+        # Cleared as it goes, so an area somebody later deletes stays deleted
+        # rather than coming back on the next boot.
+        assert conn.execute("SELECT zone FROM cameras").fetchone()[0] is None
+    finally:
+        conn.close()
+
+    store.init_db(path)          # and again, to prove it does not duplicate
+    conn = store.connect(path, actor="user")
+    try:
+        assert len(store.zones(conn, "Driveway")) == 1
+    finally:
+        conn.close()
+
+
+def test_a_detection_records_the_area_it_was_in(db_path):
+    import store
+
+    conn = store.connect(db_path, actor="user")
+    try:
+        store.record_detections(conn, "drive", [
+            {"label": "car", "confidence": 0.9, "box": [1, 2, 3, 4], "zone": "Driveway"},
+            {"label": "person", "confidence": 0.9, "box": [1, 2, 3, 4]},
+        ])
+        conn.commit()
+        rows = {r["label"]: r["zone"] for r in store.recent_detections(conn)}
+        assert rows["car"] == "Driveway"
+        assert rows["person"] is None, "no area claimed it, and that is not a blank name"
+    finally:
+        conn.close()
+
+
+# --- the API ------------------------------------------------------------------
+
+
+def _post_zone(client, **over):
+    body = {"camera": "drive", "name": "Driveway", "kind": "include",
+            "points": [list(p) for p in DRIVEWAY], "labels": ["car"]}
+    body.update(over)
+    return client.post("/api/zones", json=body)
+
+
+def test_an_area_can_be_added_listed_edited_and_removed(client, db_path):
+    created = _post_zone(client)
+    assert created.status_code == 201, created.get_json()
+    zone_id = created.get_json()["id"]
+
+    listed = client.get("/api/zones").get_json()["zones"]
+    assert [z["name"] for z in listed] == ["Driveway"]
+    assert listed[0]["labels"] == ["car"]
+    assert listed[0]["usable"] is True
+
+    renamed = client.put(f"/api/zones/{zone_id}", json={"name": "Front drive"})
+    assert renamed.status_code == 200
+    assert client.get("/api/zones").get_json()["zones"][0]["name"] == "Front drive"
+
+    assert client.delete(f"/api/zones/{zone_id}").status_code == 200
+    assert client.get("/api/zones").get_json()["zones"] == []
+
+
+def test_areas_can_be_listed_for_one_camera(client, db_path):
+    _post_zone(client)
+    _post_zone(client, camera="porch", name="Step")
+    assert len(client.get("/api/zones?camera=porch").get_json()["zones"]) == 1
+
+
+def test_the_refusals_say_what_is_wrong(client, db_path):
+    assert "name" in _post_zone(client, name="  ").get_json()["error"]
+    assert "three points" in _post_zone(client, points=[[0, 0], [1, 1]]).get_json()["error"]
+    assert "kind" in _post_zone(client, kind="banish").get_json()["error"]
+    assert "lorry" in _post_zone(client, labels=["lorry"]).get_json()["error"]
+    assert "camera" in _post_zone(client, camera="").get_json()["error"]
+
+
+def test_a_duplicate_name_on_one_camera_is_a_conflict(client, db_path):
+    _post_zone(client)
+    assert _post_zone(client).status_code == 409
+
+
+def test_editing_can_change_one_thing_without_resending_the_shape(client, db_path):
+    """A rename should not require the caller to send back a polygon it never
+    touched."""
+    zone_id = _post_zone(client).get_json()["id"]
+    assert client.put(f"/api/zones/{zone_id}", json={"kind": "ignore"}).status_code == 200
+    zone = client.get("/api/zones").get_json()["zones"][0]
+    assert zone["kind"] == "ignore"
+    assert len(zone["points"]) == 4, "the shape survived an edit that did not mention it"
+
+
+def test_areas_are_reported_per_camera(client, db_path):
+    _post_zone(client)
+    _post_zone(client, name="Pavement", kind="ignore", labels=[])
     camera = next(c for c in client.get("/api/cameras").get_json()["cameras"]
                   if c["id"] == "drive")
-    assert len(camera["zone"]["points"]) == 4
-    assert camera["zone"]["labels"] == ["car", "truck"]
-
-    cleared = client.delete("/api/cameras/drive/zone")
-    assert cleared.status_code == 200
-    camera = next(c for c in client.get("/api/cameras").get_json()["cameras"]
-                  if c["id"] == "drive")
-    assert camera["zone"] is None
+    assert [z["name"] for z in camera["zones"]] == ["Driveway", "Pavement"]
 
 
-def test_a_shape_that_is_not_a_shape_is_refused(client, db_path):
-    assert client.put("/api/cameras/drive/zone", json={"points": []}).status_code == 400
-    assert client.put("/api/cameras/drive/zone",
-                      json={"points": [[0, 0], [1, 1]]}).status_code == 400
-    assert client.put("/api/cameras/drive/zone",
-                      json={"points": [["a", 0], [1, 1], [0, 1]]}).status_code == 400
+def test_managing_areas_is_behind_the_access_gate(direct_client, db_path):
+    assert direct_client.get("/api/zones").status_code == 401
+    assert direct_client.post("/api/zones", json={}).status_code == 401
+    assert direct_client.delete("/api/zones/1").status_code == 401
 
 
-def test_a_label_the_detector_does_not_know_is_refused(client, db_path):
-    """It would restrict nothing and look exactly like the zone being ignored."""
-    refused = client.put("/api/cameras/drive/zone",
-                         json={"points": DRIVEWAY, "labels": ["lorry"]})
-    assert refused.status_code == 400
-    assert "lorry" in refused.get_json()["error"]
-
-
-def test_drawing_a_zone_is_behind_the_access_gate(direct_client, db_path):
-    assert direct_client.put("/api/cameras/drive/zone",
-                             json={"points": DRIVEWAY}).status_code == 401
-    assert direct_client.delete("/api/cameras/drive/zone").status_code == 401
-
-
-def test_the_page_offers_the_editor(client, db_path):
+def test_the_page_offers_the_area_editor(client, db_path):
     html = client.get("/").get_data(as_text=True)
     assert "Where to look" in html
-    assert "api/cameras/" in html
-    assert 'fetch("/api/cameras' not in html, "absolute URL would break ingress"
-
-
-def test_a_saved_zone_is_still_reported_while_the_camera_is_running(client, db_path,
-                                                                    monkeypatch):
-    """The bug this pins: the thread's own status carried a `zone` flag, and the
-    live state is merged *over* the stored row — so a running camera replaced its
-    saved shape with a boolean, the parse failed, and the page said "nothing set"
-    about a zone that was in force the whole time."""
-    import app as hub
-
-    client.put("/api/cameras/drive/zone", json={"points": DRIVEWAY, "labels": ["car"]})
-
-    # A real worker's status, not a hand-written one: the collision was between
-    # two keys that nobody was comparing side by side, so the test has to use
-    # whatever the worker actually reports rather than a copy of it.
-    import capture
-
-    worker = capture.CameraWorker("drive", "rtsp://x", None, lambda *a: None,
-                                  zone=zones.dump(DRIVEWAY, ["car"]))
-
-    class RunningCapture:
-        def status(self):
-            return [worker.status()]
-
-        def metrics(self):
-            return {}
-
-    monkeypatch.setattr(hub, "get_capture", lambda: RunningCapture())
-    camera = next(c for c in client.get("/api/cameras").get_json()["cameras"]
-                  if c["id"] == "drive")
-
-    assert camera["zone"] is not None, "a live camera hid its own zone"
-    assert len(camera["zone"]["points"]) == 4
-    assert camera["zone"]["labels"] == ["car"]
-
-
-def test_the_page_can_show_what_a_zone_has_dropped(client, db_path, monkeypatch):
-    """"An area is set", "an area is set in the wrong place" and "a quiet
-    driveway" look identical without this number."""
-    import app as hub
-    import capture
-
-    client.put("/api/cameras/drive/zone", json={"points": DRIVEWAY, "labels": ["car"]})
-
-    worker = capture.CameraWorker("drive", "rtsp://x", None, lambda *a: None,
-                                  zone=zones.dump(DRIVEWAY, ["car"]))
-    worker.frames_filtered = 7
-
-    class RunningCapture:
-        def status(self):
-            return [worker.status()]
-
-        def metrics(self):
-            return {}
-
-    monkeypatch.setattr(hub, "get_capture", lambda: RunningCapture())
-    camera = next(c for c in client.get("/api/cameras").get_json()["cameras"]
-                  if c["id"] == "drive")
-
-    assert camera["frames_filtered"] == 7
-    assert camera["zone_active"] is True
-    assert "dropped outside it" in client.get("/").get_data(as_text=True)
+    assert "only count here" in html and "never count here" in html
+    assert "api/zones" in html
+    assert 'fetch("/api/zones' not in html, "absolute URL would break ingress"

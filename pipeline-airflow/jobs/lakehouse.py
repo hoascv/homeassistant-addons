@@ -63,12 +63,15 @@ SCHEMAS = {
             "id long, camera string, label string, confidence double, "
             "box_x long, box_y long, box_w long, box_h long, "
             "detected_at string, snapshot_id long, "
-            "person_id long, person_score double, face_state string"
+            "person_id long, person_score double, face_state string, "
+            # Which named area of the camera it was in, from 1.15.0. Null when
+            # no area claimed it — either none apply to that label, or the
+            # camera has none drawn.
+            "zone string"
         ),
-        # `zone` is the JSON shape a camera only records inside, added in 1.13.0
-        # and null on cameras that report their whole frame. Kept as a string:
-        # it is configuration a reader may want to see beside the counts, not
-        # something to query into.
+        # `zone` held a camera's single shape in 1.13.x. Areas became rows of
+        # their own in Detection Hub 1.15.0 and this is always null now; kept so
+        # a table written by the older version still reads.
         "cameras": (
             "id string, kind string, enabled long, state string, detail string, "
             "last_frame_at string, last_detection_at string, "

@@ -24,6 +24,7 @@ construction rather than by remembering to filter a blob.
 """
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 from datetime import datetime, timedelta
@@ -178,6 +179,12 @@ def init_db(path=None):
         # 'matched' means person_id is somebody. Collapsing these would leave a
         # reader unable to tell a stranger from a camera that cannot see faces.
         ("face_state", "TEXT"),
+        # Which named area it was in, from 1.15.0. The name rather than a zone
+        # id: a detection's area is a historical fact about a shape as it was
+        # drawn then, and it should stay readable after that zone is renamed or
+        # deleted. Null means no area claimed it — either none apply to that
+        # label, or the camera has none at all.
+        ("zone", "TEXT"),
     ):
         if column not in detection_columns:
             conn.execute(f"ALTER TABLE detections ADD COLUMN {column} {declaration}")
@@ -260,13 +267,39 @@ def init_db(path=None):
         """
     )
 
-    # The area of the frame that counts, drawn on the page and stored as JSON:
-    # relative points plus the labels it restricts. Null on every camera until
-    # somebody draws one, which means "record everything" — the behaviour every
-    # camera had before 1.13.0.
+    # Held a camera's single area in 1.13.x. Zones became named rows of their own
+    # in 1.15.0 — see _migrate_camera_zones — and this is left in place, always
+    # null, because dropping a column means rebuilding the table and the column
+    # costs nothing where it is.
     camera_columns = {row[1] for row in conn.execute("PRAGMA table_info(cameras)")}
     if "zone" not in camera_columns:
         conn.execute("ALTER TABLE cameras ADD COLUMN zone TEXT")
+
+    # Named areas of a camera's view. Several per camera, each either an area a
+    # label only counts inside (include) or one it never counts inside (ignore).
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS zones (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            camera TEXT NOT NULL,
+            name TEXT NOT NULL,
+            kind TEXT NOT NULL DEFAULT 'include',
+            -- Relative points, 0..1 of the frame, so a camera switched between
+            -- its substream and main stream does not move the shape.
+            points TEXT NOT NULL,
+            -- JSON list; empty means every object type.
+            labels TEXT NOT NULL DEFAULT '[]',
+            created_at TEXT NOT NULL,
+            updated_at TEXT
+        )
+        """
+    )
+    # Unique per camera, not globally: two cameras can both have a "Gate", and a
+    # name is how a person refers to an area when reading a detection.
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_zones_camera_name ON zones(camera, name)"
+    )
+    _migrate_camera_zones(conn)
 
     conn.execute(
         """
@@ -287,6 +320,39 @@ def init_db(path=None):
     install_change_triggers(conn)
     conn.commit()
     conn.close()
+
+
+def _migrate_camera_zones(conn):
+    """Move a 1.13.x single camera zone into the zones table.
+
+    Named after the camera, because a camera is almost always named for the area
+    it watches — "Driveway" watching the driveway — and a name that can be
+    corrected in two clicks beats inventing "Area 1".
+
+    The source column is cleared as it goes, which is what makes this idempotent
+    in the way that matters: a zone somebody later deletes must stay deleted, and
+    it would come back on the next boot if the old value were left sitting there.
+    """
+    rows = conn.execute(
+        "SELECT id, zone FROM cameras WHERE zone IS NOT NULL AND zone != ''"
+    ).fetchall()
+    moved = 0
+    for row in rows:
+        try:
+            legacy = json.loads(row["zone"])
+            points = legacy.get("points")
+            labels = legacy.get("labels") or []
+        except (TypeError, ValueError, AttributeError):
+            points, labels = None, []
+        if points:
+            conn.execute(
+                "INSERT OR IGNORE INTO zones (camera, name, kind, points, labels,"
+                " created_at) VALUES (?, ?, 'include', ?, ?, ?)",
+                (row["id"], row["id"], json.dumps(points), json.dumps(labels), now()),
+            )
+            moved += 1
+        conn.execute("UPDATE cameras SET zone = NULL WHERE id = ?", (row["id"],))
+    return moved
 
 
 def _migrate_snapshots_to_files(conn, db_path):
@@ -435,7 +501,8 @@ def record_detections(conn, camera, detections, snapshot_id=None, at=None):
     for det in detections:
         cur = conn.execute(
             "INSERT INTO detections (camera, label, confidence, box_x, box_y, box_w,"
-            " box_h, detected_at, snapshot_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " box_h, detected_at, snapshot_id, zone)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 camera,
                 det["label"],
@@ -443,6 +510,9 @@ def record_detections(conn, camera, detections, snapshot_id=None, at=None):
                 det["box"][0], det["box"][1], det["box"][2], det["box"][3],
                 stamp,
                 snapshot_id,
+                # Stamped by the zone filter in the camera path. Absent for an
+                # image posted to the API, which has no camera to have areas.
+                det.get("zone"),
             ),
         )
         ids.append(cur.lastrowid)
@@ -468,25 +538,53 @@ def upsert_camera(conn, camera_id, kind, **fields):
         )
 
 
-def set_camera_zone(conn, camera_id, zone_json):
-    """Store (or clear, with None) a camera's zone.
-
-    Upserts, because a zone can be drawn for a camera that has not reported yet —
-    a stream that is still connecting should not stop somebody setting it up.
-    """
+def add_zone(conn, camera, name, kind, points_json, labels_json):
+    """A named area for a camera, or None if that camera already has one by that
+    name. None rather than an exception: the caller is an HTTP route turning it
+    into a 409, and a duplicate name is somebody typing, not a fault."""
+    # Upserted because an area can be drawn for a camera that has not reported
+    # yet — a stream still connecting should not block setting it up.
     conn.execute(
         "INSERT INTO cameras (id, kind) VALUES (?, 'rtsp') ON CONFLICT(id) DO NOTHING",
-        (camera_id,),
+        (camera,),
     )
-    conn.execute("UPDATE cameras SET zone = ? WHERE id = ?", (zone_json, camera_id))
+    try:
+        cur = conn.execute(
+            "INSERT INTO zones (camera, name, kind, points, labels, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?)",
+            (camera, name, kind, points_json, labels_json, now()),
+        )
+    except sqlite3.IntegrityError:
+        return None
+    return cur.lastrowid
 
 
-def camera_zones(conn):
-    """Every camera's stored zone, by camera id. What the capture threads load."""
-    return {
-        row["id"]: row["zone"]
-        for row in conn.execute("SELECT id, zone FROM cameras WHERE zone IS NOT NULL")
-    }
+def update_zone(conn, zone_id, **fields):
+    """Change a zone's name, kind, shape or labels. Only what is passed."""
+    if not fields:
+        return False
+    fields["updated_at"] = now()
+    assignments = ", ".join(f"{key} = ?" for key in fields)
+    try:
+        cur = conn.execute(
+            f"UPDATE zones SET {assignments} WHERE id = ?", (*fields.values(), zone_id)
+        )
+    except sqlite3.IntegrityError:
+        return None       # the new name is taken on that camera
+    return cur.rowcount > 0
+
+
+def delete_zone(conn, zone_id):
+    return conn.execute("DELETE FROM zones WHERE id = ?", (zone_id,)).rowcount > 0
+
+
+def zones(conn, camera=None):
+    """Stored areas, newest last. Rows, not parsed — `zones.parse` owns that."""
+    if camera:
+        return conn.execute(
+            "SELECT * FROM zones WHERE camera = ? ORDER BY id", (camera,)
+        ).fetchall()
+    return conn.execute("SELECT * FROM zones ORDER BY camera, id").fetchall()
 
 
 def bump_camera_counters(conn, camera_id, frames_seen=0, frames_detected=0):

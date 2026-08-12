@@ -204,16 +204,23 @@
     <h2>Where to look</h2>
     <div class="status-row">
       <select id="zone-camera"></select>
-      <button type="button" id="zone-draw">Draw an area&hellip;</button>
-      <button type="button" id="zone-clear">Use the whole frame</button>
-      <span class="meta" id="zone-note">Nothing set — every camera reports what it
-        sees anywhere in frame.</span>
+      <button type="button" id="zone-draw">Add an area&hellip;</button>
+      <span class="meta" id="zone-note"></span>
     </div>
+    <div id="zone-list" class="recent"></div>
     <div id="zone-editor" hidden>
-      <p class="meta">Click along the edge of the area that counts — the driveway,
-        not the street. Three points minimum. An object counts when the
-        <em>bottom</em> of its box is inside: a car is where its wheels are.</p>
+      <p class="meta">Click along the edge of the area — three points minimum. An
+        object counts where the <em>bottom</em> of its box is: a car is where its
+        wheels are, not where its roof is.</p>
       <canvas id="zone-canvas" style="max-width:100%; cursor:crosshair; border-radius:8px"></canvas>
+      <div class="status-row" style="margin-top:.6rem">
+        <input type="text" id="zone-name" placeholder="Name — e.g. Driveway" maxlength="60">
+        <select id="zone-kind">
+          <option value="include">only count here</option>
+          <option value="ignore">never count here</option>
+        </select>
+        <input type="hidden" id="zone-id">
+      </div>
       <div class="status-row" style="margin-top:.6rem">
         <span class="meta">Applies to:</span>
         <span id="zone-labels"></span>
@@ -638,11 +645,12 @@ document.getElementById('lb-enrol').addEventListener('click', async () => {
 
 loadPeople();
 
-// --- Where to look: drawing a zone -------------------------------------------
+// --- Where to look: named areas ---------------------------------------------
 // Points are kept relative (0..1) from the first moment, never as canvas pixels:
 // the canvas is whatever size the browser gave it, the frame is whatever the
 // camera sends, and only the relative pair means the same thing to both.
 let zoneCameras = [];
+let zoneList = [];
 let zonePoints = [];
 let zoneImage = null;
 const zoneCanvas = document.getElementById("zone-canvas");
@@ -650,53 +658,65 @@ const zoneEditor = document.getElementById("zone-editor");
 const zoneNote = document.getElementById("zone-note");
 const zoneEditorNote = document.getElementById("zone-editor-note");
 const zoneCameraSelect = document.getElementById("zone-camera");
-// The labels worth restricting to an area. Vehicles by default: a car in the
-// street is traffic, a person in the street may be the reason you have a camera.
-const ZONE_LABELS = ["car", "truck", "bus", "motorcycle", "bicycle", "person"];
+const zoneListEl = document.getElementById("zone-list");
+// The labels worth restricting to an area. Vehicles ticked by default: a car in
+// the street is traffic, a person in the street may be why the camera is there.
+const ZONE_LABELS = ["car", "truck", "bus", "motorcycle", "bicycle", "person", "dog", "cat"];
 const ZONE_DEFAULT = ["car", "truck", "bus", "motorcycle"];
 
 async function loadZones() {
   try {
-    const data = await (await fetch("api/cameras")).json();
-    zoneCameras = data.cameras || [];
-  } catch (err) { zoneNote.textContent = "could not load cameras: " + err; return; }
+    const cams = await (await fetch("api/cameras")).json();
+    zoneCameras = cams.cameras || [];
+    zoneList = (await (await fetch("api/zones")).json()).zones || [];
+  } catch (err) { zoneNote.textContent = "could not load areas: " + err; return; }
 
+  const chosen = zoneCameraSelect.value;
   zoneCameraSelect.innerHTML = zoneCameras
     .map((c) => `<option value="${esc(c.id)}">${esc(c.id)}</option>`).join("");
-  const withZone = zoneCameras.filter((c) => c.zone);
-  // The dropped count is the evidence the shape is doing something. Without it
-  // "an area is set" and "an area is set in the wrong place" look identical, and
-  // both look identical to a quiet driveway.
-  zoneNote.textContent = withZone.length
-    ? withZone.map((c) => {
-        const what = c.zone.labels && c.zone.labels.length
-          ? c.zone.labels.join(", ") : "everything";
-        const dropped = c.frames_filtered
-          ? ` · ${c.frames_filtered} dropped outside it` : " · nothing dropped yet";
-        return `${c.id}: ${c.zone.points.length}-point area for ${what}${dropped}`;
-      }).join(" — ")
-    : "Nothing set — every camera reports what it sees anywhere in frame.";
+  if (chosen) zoneCameraSelect.value = chosen;
+
+  const dropped = {};
+  for (const c of zoneCameras) dropped[c.id] = c.frames_filtered || 0;
+
+  zoneNote.textContent = zoneList.length
+    ? `${zoneList.length} area${zoneList.length === 1 ? "" : "s"}`
+    : "No areas — every camera reports what it sees anywhere in frame.";
+
+  zoneListEl.innerHTML = zoneList.map((z) => {
+    const what = z.labels.length ? z.labels.join(", ") : "everything";
+    const rule = z.kind === "ignore" ? "never counts" : "only counts here";
+    // The dropped count is per camera, not per area: the worker counts what it
+    // refused, and which shape refused it is not worth the bookkeeping.
+    const drops = dropped[z.camera] ? ` · ${dropped[z.camera]} dropped on this camera` : "";
+    return `<div class="shot"><div class="cap">
+      <b>${esc(z.camera)} · ${esc(z.name)}</b>
+      <span>${esc(rule)}: ${esc(what)}${esc(drops)}</span>
+      <span><a href="#" data-zone-edit="${z.id}">edit</a> ·
+            <a href="#" data-zone-del="${z.id}">delete</a></span>
+    </div></div>`;
+  }).join("");
 
   document.getElementById("zone-labels").innerHTML = ZONE_LABELS.map((l) =>
     `<label class="meta" style="margin-right:.6rem">
-       <input type="checkbox" value="${l}" ${ZONE_DEFAULT.includes(l) ? "checked" : ""}> ${l}
+       <input type="checkbox" value="${l}"> ${l}
      </label>`).join("");
 }
 
-function currentZoneCamera() {
-  return zoneCameras.find((c) => c.id === zoneCameraSelect.value) || null;
+function setZoneLabels(labels) {
+  for (const box of document.querySelectorAll("#zone-labels input")) {
+    box.checked = labels.includes(box.value);
+  }
 }
 
-document.getElementById("zone-draw").addEventListener("click", async () => {
-  const camera = currentZoneCamera();
-  if (!camera) { zoneNote.textContent = "no cameras have reported yet"; return; }
+async function openZoneEditor(existing) {
+  const cameraId = existing ? existing.camera : zoneCameraSelect.value;
+  if (!cameraId) { zoneNote.textContent = "no cameras have reported yet"; return; }
 
-  // The most recent snapshot from *this* camera: the real framing, so the shape
-  // is drawn against what the detector will actually see.
   zoneEditorNote.textContent = "loading a recent frame…";
   let det;
   try {
-    const data = await (await fetch(`api/detections?camera=${encodeURIComponent(camera.id)}&limit=1`)).json();
+    const data = await (await fetch(`api/detections?camera=${encodeURIComponent(cameraId)}&limit=1`)).json();
     det = (data.detections || [])[0];
   } catch (err) { zoneEditorNote.textContent = "could not load a frame: " + err; return; }
   if (!det || !det.snapshot_id) {
@@ -709,15 +729,40 @@ document.getElementById("zone-draw").addEventListener("click", async () => {
   zoneImage.onload = () => {
     zoneCanvas.width = zoneImage.naturalWidth;
     zoneCanvas.height = zoneImage.naturalHeight;
-    // Start from the existing shape, so "nearly right" is editable rather than
-    // something to redraw from scratch.
-    zonePoints = camera.zone ? camera.zone.points.map(([x, y]) => [x, y]) : [];
+    // Editing starts from the existing shape, so "nearly right" is adjustable
+    // rather than something to draw again from scratch.
+    zonePoints = existing ? existing.points.map(([x, y]) => [x, y]) : [];
+    document.getElementById("zone-id").value = existing ? existing.id : "";
+    document.getElementById("zone-name").value = existing ? existing.name : "";
+    document.getElementById("zone-kind").value = existing ? existing.kind : "include";
+    setZoneLabels(existing ? existing.labels : ZONE_DEFAULT);
     zoneEditor.hidden = false;
     zoneEditorNote.textContent = "";
     drawZone();
   };
   zoneImage.onerror = () => { zoneEditorNote.textContent = "that snapshot has been pruned"; };
   zoneImage.src = "api/snapshots/" + det.snapshot_id;
+}
+
+document.getElementById("zone-draw").addEventListener("click", () => openZoneEditor(null));
+
+zoneListEl.addEventListener("click", async (e) => {
+  const edit = e.target.closest("a[data-zone-edit]");
+  const del = e.target.closest("a[data-zone-del]");
+  if (!edit && !del) return;
+  e.preventDefault();
+
+  if (edit) {
+    const zone = zoneList.find((z) => String(z.id) === edit.dataset.zoneEdit);
+    if (zone) openZoneEditor(zone);
+    return;
+  }
+  const zone = zoneList.find((z) => String(z.id) === del.dataset.zoneDel);
+  if (!confirm(`Delete the ${zone ? zone.name : "this"} area? Past detections keep the name.`)) return;
+  try {
+    await fetch("api/zones/" + del.dataset.zoneDel, {method: "DELETE"});
+    loadZones();
+  } catch (err) { zoneNote.textContent = "request failed: " + err; }
 });
 
 zoneCanvas.addEventListener("click", (e) => {
@@ -732,28 +777,45 @@ zoneCanvas.addEventListener("click", (e) => {
 function drawZone() {
   const ctx = zoneCanvas.getContext("2d");
   ctx.drawImage(zoneImage, 0, 0);
-  if (!zonePoints.length) return;
-  const px = zonePoints.map(([x, y]) => [x * zoneCanvas.width, y * zoneCanvas.height]);
-
-  ctx.beginPath();
-  ctx.moveTo(px[0][0], px[0][1]);
-  for (const [x, y] of px.slice(1)) ctx.lineTo(x, y);
-  ctx.closePath();
-  ctx.fillStyle = "rgba(90, 209, 154, 0.25)";
-  ctx.fill();
-  ctx.lineWidth = Math.max(2, zoneCanvas.width / 400);
-  ctx.strokeStyle = "#5ad19a";
-  ctx.stroke();
-  for (const [x, y] of px) {
-    ctx.beginPath();
-    ctx.arc(x, y, ctx.lineWidth * 2, 0, Math.PI * 2);
-    ctx.fillStyle = "#5ad19a";
-    ctx.fill();
+  // The areas already on this camera, faintly, so a new one can be drawn to fit
+  // beside them rather than overlapping by accident.
+  const cameraId = document.getElementById("zone-id").value
+    ? (zoneList.find((z) => String(z.id) === document.getElementById("zone-id").value) || {}).camera
+    : zoneCameraSelect.value;
+  const editingId = document.getElementById("zone-id").value;
+  for (const other of zoneList) {
+    if (other.camera !== cameraId || String(other.id) === editingId) continue;
+    strokeShape(ctx, other.points, "rgba(255,255,255,0.35)", null);
   }
+  const ignoring = document.getElementById("zone-kind").value === "ignore";
+  strokeShape(ctx, zonePoints, ignoring ? "#e56a6a" : "#5ad19a",
+              ignoring ? "rgba(229,106,106,0.25)" : "rgba(90,209,154,0.25)");
+
   zoneEditorNote.textContent = zonePoints.length < 3
     ? `${zonePoints.length} of 3 points` : `${zonePoints.length} points`;
 }
 
+function strokeShape(ctx, points, stroke, fill) {
+  if (!points.length) return;
+  const px = points.map(([x, y]) => [x * zoneCanvas.width, y * zoneCanvas.height]);
+  ctx.beginPath();
+  ctx.moveTo(px[0][0], px[0][1]);
+  for (const [x, y] of px.slice(1)) ctx.lineTo(x, y);
+  ctx.closePath();
+  if (fill) { ctx.fillStyle = fill; ctx.fill(); }
+  ctx.lineWidth = Math.max(2, zoneCanvas.width / 400);
+  ctx.strokeStyle = stroke;
+  ctx.stroke();
+  if (!fill) return;
+  for (const [x, y] of px) {
+    ctx.beginPath();
+    ctx.arc(x, y, ctx.lineWidth * 2, 0, Math.PI * 2);
+    ctx.fillStyle = stroke;
+    ctx.fill();
+  }
+}
+
+document.getElementById("zone-kind").addEventListener("change", drawZone);
 document.getElementById("zone-undo").addEventListener("click", () => {
   zonePoints.pop();
   drawZone();
@@ -764,15 +826,20 @@ document.getElementById("zone-cancel").addEventListener("click", () => {
 });
 
 document.getElementById("zone-save").addEventListener("click", async () => {
-  const camera = currentZoneCamera();
-  if (!camera) return;
   if (zonePoints.length < 3) { zoneEditorNote.textContent = "at least three points"; return; }
-  const labels = [...document.querySelectorAll("#zone-labels input:checked")].map((i) => i.value);
-
+  const id = document.getElementById("zone-id").value;
+  const body = {
+    camera: id ? undefined : zoneCameraSelect.value,
+    name: document.getElementById("zone-name").value.trim(),
+    kind: document.getElementById("zone-kind").value,
+    points: zonePoints,
+    labels: [...document.querySelectorAll("#zone-labels input:checked")].map((i) => i.value),
+  };
   try {
-    const res = await fetch(`api/cameras/${encodeURIComponent(camera.id)}/zone`, {
-      method: "PUT", headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({points: zonePoints, labels}),
+    const res = await fetch(id ? "api/zones/" + id : "api/zones", {
+      method: id ? "PUT" : "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(body),
     });
     const data = await res.json();
     if (!res.ok) { zoneEditorNote.textContent = data.error || "failed"; return; }
@@ -780,15 +847,6 @@ document.getElementById("zone-save").addEventListener("click", async () => {
     zonePoints = [];
     loadZones();
   } catch (err) { zoneEditorNote.textContent = "request failed: " + err; }
-});
-
-document.getElementById("zone-clear").addEventListener("click", async () => {
-  const camera = currentZoneCamera();
-  if (!camera || !confirm(`Report everything ${camera.id} sees, anywhere in frame?`)) return;
-  try {
-    await fetch(`api/cameras/${encodeURIComponent(camera.id)}/zone`, {method: "DELETE"});
-    loadZones();
-  } catch (err) { zoneNote.textContent = "request failed: " + err; }
 });
 
 loadZones();

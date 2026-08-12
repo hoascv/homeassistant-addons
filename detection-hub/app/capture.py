@@ -259,6 +259,8 @@ class CameraWorker(threading.Thread):
         face_min_pixels=60,
         zone=None,
     ):
+        # `zone` is this camera's stored area rows, not a single shape: a camera
+        # can have several, and they are evaluated together — see zones.evaluate.
         super().__init__(name=f"camera-{camera_id}", daemon=True)
         self.camera_id = camera_id
         self.url = url
@@ -286,9 +288,9 @@ class CameraWorker(threading.Thread):
         self.face_attempts = max(1, int(face_attempts))
         self.face_min_pixels = int(face_min_pixels)
         # Parsed once here rather than per frame: this is read on every detection
-        # in a hot loop, and a zone only changes when somebody redraws it — which
+        # in a hot loop, and areas only change when somebody edits them — which
         # reconfigures the workers anyway.
-        self.zone = zones.parse(zone)
+        self.zones = [z for z in (zones.parse(row) for row in zone or []) if z]
 
         # NOT `_stop`: threading.Thread._stop() is an internal method that
         # join() calls, and shadowing it with an Event makes every join raise
@@ -397,9 +399,9 @@ class CameraWorker(threading.Thread):
         # a driveway camera, and dropping it here means no track, no row, no
         # snapshot and no event — rather than filtering it out of the page later
         # and still paying for all four.
-        if self.zone:
+        if self.zones:
             height, width = frame.shape[:2]
-            kept = zones.filter_detections(self.zone, detections, width, height)
+            kept = zones.filter_detections(self.zones, detections, width, height)
             self.frames_filtered += len(detections) - len(kept)
             detections = kept
 
@@ -514,7 +516,8 @@ class CameraWorker(threading.Thread):
             # and a thread's view is merged over the database row — so a boolean
             # here replaced the saved shape, the parse failed, and the page
             # reported "nothing set" about a zone that was in force all along.
-            "zone_active": bool(self.zone),
+            "zone_active": bool(self.zones),
+            "zones": len(self.zones),
             "last_frame_at": self.last_frame_at,
             "last_detection_at": self.last_detection_at,
         }

@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.14.0
+
+- Keeps up with **Detection Hub 1.15.0**, where a camera's areas became named
+  rows: `detections` gains `zone`, the name of the area a detection was in. Null
+  when no area claimed it — either none apply to that label, or the camera has
+  none drawn.
+- `cameras.zone` stays in the schema and is always null from 1.15.0 onward, so a
+  table written by an older version still reads.
+
+
 ## 2.13.0
 
 - Keeps up with **Detection Hub 1.13.0**, whose cameras can now be given a zone —

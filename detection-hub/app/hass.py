@@ -83,6 +83,10 @@ def fire_event(camera, detection, snapshot_id=None, event_type=EVENT_TYPE):
             "confidence": detection["confidence"],
             "box": detection["box"],
             "snapshot_id": snapshot_id,
+            # Which named area it was in, or null. This is what lets an
+            # automation fire on "a person on the Porch" rather than on a whole
+            # camera — the reason zones carry names at all.
+            "zone": detection.get("zone"),
         },
     )[1]
 

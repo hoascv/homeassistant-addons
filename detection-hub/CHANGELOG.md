@@ -1,5 +1,35 @@
 # Changelog
 
+## 1.15.0
+
+- **Areas are named things now, and a camera can have several.** Driveway, Porch,
+  Gate — each with its own shape, its own object types, and a name that every
+  detection inside it records. Built for having more than one camera: the old
+  model was one anonymous shape per camera, which does not survive a second
+  camera or a second area.
+- **Two kinds: "only counts here" and "never counts here".** Ignore beats
+  include, so a large area can have a hole cut in it — the whole drive except
+  that corner of pavement — without drawing a concave outline by hand. An ignore
+  area on its own is a complete instruction too: *never over the neighbour's
+  window*.
+- **The name travels.** It is on the detection row, in `/api/detections`, in the
+  change feed, and in the `detection_hub_detection` event — so an automation can
+  fire on `zone: Porch` rather than on a whole camera. Null when no area claimed
+  it, present either way, so a template never errors.
+- **Your existing shape is migrated**, named after its camera, and the old column
+  is cleared as it goes — so an area you later delete stays deleted instead of
+  coming back on the next boot.
+- Deleting an area does not rewrite history: past detections keep the name they
+  were recorded with, because where something was is a fact about the shape as it
+  was drawn then.
+- Editing changes only what you send — renaming an area does not mean resending
+  its polygon — and the editor draws the camera's other areas faintly so a new
+  one can be placed beside them.
+- New `/api/zones` (list, add, edit, delete). The 1.13 `/api/cameras/<id>/zone`
+  is gone, replaced by it. Needs `pipeline-airflow` 2.14.0 for the `zone` column
+  on detections.
+
+
 ## 1.14.0
 
 - **The zone card says what it has dropped**: `Driveway: 5-point area for car,

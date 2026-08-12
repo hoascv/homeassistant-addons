@@ -24,7 +24,7 @@ import hass
 import store
 import zones
 
-APP_VERSION = "1.14.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.15.0"  # keep in sync with the "version" field in config.yaml
 
 OPTIONS_PATH = os.environ.get("DETECTION_HUB_OPTIONS_PATH", "/data/options.json")
 
@@ -769,54 +769,136 @@ def api_face_crop(print_id):
     return send_file(path, mimetype="image/jpeg")
 
 
-@app.route("/api/cameras/<camera_id>/zone", methods=["PUT", "DELETE"])
-def api_camera_zone(camera_id):
-    """Draw, or clear, the part of a camera's frame that counts.
+def _zone_fields_from_request(partial=False):
+    """Validate a zone body. Returns (fields, error).
 
-    Coordinates arrive relative (0..1), because that is what the page draws in
-    and what survives a camera being switched to a different stream resolution.
-    Takes effect on the next configure — the workers hold their zone parsed, so
-    this restarts them rather than making every frame re-read the database.
+    Every refusal names what is wrong with it, because these arrive from a canvas
+    somebody has just drawn on and "invalid" would send them back to guess.
     """
-    conn = get_db()
-    if request.method == "DELETE":
-        store.set_camera_zone(conn, camera_id, None)
-        conn.commit()
-        _reconfigure_cameras()
-        return jsonify({"status": "cleared"})
-
     data = request.get_json(force=True, silent=True) or {}
-    points = data.get("points")
-    if not isinstance(points, list) or len(points) < 3:
-        return jsonify({"error": "a zone needs at least three points"}), 400
+    fields = {}
 
-    labels = data.get("labels") or []
-    if not isinstance(labels, list):
-        return jsonify({"error": "labels must be a list"}), 400
-    # Unknown labels would silently restrict nothing, which looks like the zone
-    # being ignored. Say so instead.
-    unknown = [l for l in labels if str(l).strip().lower() not in detector.COCO_LABELS]
-    if unknown:
-        return jsonify({"error": f"not object types this detects: {', '.join(unknown)}"}), 400
+    if "name" in data or not partial:
+        name = (data.get("name") or "").strip()
+        if not name:
+            return None, "a name is required — it is what a detection will say"
+        if len(name) > 60:
+            return None, "that name is too long"
+        fields["name"] = name
 
-    try:
-        stored = zones.dump(points, labels)
-    except (TypeError, ValueError):
-        return jsonify({"error": "points must be pairs of numbers"}), 400
-    if zones.parse(stored) is None:
-        return jsonify({"error": "that is not a usable shape"}), 400
+    if "kind" in data or not partial:
+        kind = (data.get("kind") or zones.INCLUDE).strip().lower()
+        if kind not in zones.KINDS:
+            return None, f"kind must be {' or '.join(zones.KINDS)}"
+        fields["kind"] = kind
 
-    store.set_camera_zone(conn, camera_id, stored)
+    if "points" in data or not partial:
+        points = zones.parse_points(data.get("points"))
+        if points is None:
+            return None, "an area needs at least three points, each a pair of numbers"
+        fields["points"] = zones.dump_points(points)
+
+    if "labels" in data or not partial:
+        labels = data.get("labels") or []
+        if not isinstance(labels, list):
+            return None, "labels must be a list"
+        # An unknown label would restrict nothing and look exactly like the area
+        # being ignored, which is a miserable thing to debug.
+        unknown = [l for l in labels if str(l).strip().lower() not in detector.COCO_LABELS]
+        if unknown:
+            return None, f"not object types this detects: {', '.join(map(str, unknown))}"
+        fields["labels"] = zones.dump_labels(labels)
+
+    return fields, None
+
+
+def _zone_view(row):
+    parsed = zones.parse(row)
+    return {
+        "id": row["id"],
+        "camera": row["camera"],
+        "name": row["name"],
+        "kind": row["kind"],
+        "labels": list(parsed["labels"]) if parsed else [],
+        "points": [list(p) for p in parsed["points"]] if parsed else [],
+        # A shape that will not parse is not in force either, and saying so beats
+        # showing it as though it were.
+        "usable": parsed is not None,
+    }
+
+
+@app.route("/api/zones")
+def api_zones():
+    camera = (request.args.get("camera") or "").strip()
+    return jsonify({"zones": [_zone_view(r) for r in store.zones(get_db(), camera or None)]})
+
+
+@app.route("/api/zones", methods=["POST"])
+def api_add_zone():
+    data = request.get_json(force=True, silent=True) or {}
+    camera = (data.get("camera") or "").strip()
+    if not camera:
+        return jsonify({"error": "which camera?"}), 400
+
+    fields, error = _zone_fields_from_request()
+    if error:
+        return jsonify({"error": error}), 400
+
+    conn = get_db()
+    zone_id = store.add_zone(conn, camera, fields["name"], fields["kind"],
+                             fields["points"], fields["labels"])
+    if zone_id is None:
+        return jsonify({"error": f"{camera} already has an area called {fields['name']}"}), 409
     conn.commit()
     _reconfigure_cameras()
-    return jsonify({"status": "saved", "zone": json.loads(stored)})
+    return jsonify({"status": "created", "id": zone_id}), 201
+
+
+@app.route("/api/zones/<int:zone_id>", methods=["PUT"])
+def api_update_zone(zone_id):
+    fields, error = _zone_fields_from_request(partial=True)
+    if error:
+        return jsonify({"error": error}), 400
+    if not fields:
+        return jsonify({"error": "nothing to change"}), 400
+
+    conn = get_db()
+    changed = store.update_zone(conn, zone_id, **fields)
+    if changed is None:
+        return jsonify({"error": "that camera already has an area with that name"}), 409
+    if not changed:
+        return jsonify({"error": "no such area"}), 404
+    conn.commit()
+    _reconfigure_cameras()
+    return jsonify({"status": "saved"})
+
+
+@app.route("/api/zones/<int:zone_id>", methods=["DELETE"])
+def api_delete_zone(zone_id):
+    conn = get_db()
+    if not store.delete_zone(conn, zone_id):
+        return jsonify({"error": "no such area"}), 404
+    conn.commit()
+    _reconfigure_cameras()
+    # Detections keep the name they were recorded with: what area something was
+    # in is a fact about a shape as it was then, and deleting the shape does not
+    # unmake it.
+    return jsonify({"status": "deleted"})
+
+
+def _zones_by_camera(conn):
+    """Stored areas grouped by camera, as the workers want them."""
+    grouped = {}
+    for row in store.zones(conn):
+        grouped.setdefault(row["camera"], []).append(row)
+    return grouped
 
 
 def _startup_zones():
-    """The stored zones, read once at boot for the initial configure."""
+    """The stored areas, read once at boot for the initial configure."""
     conn = store.connect(actor="user")
     try:
-        return store.camera_zones(conn)
+        return _zones_by_camera(conn)
     finally:
         conn.close()
 
@@ -834,7 +916,7 @@ def _reconfigure_cameras():
     face_options = get_face_options()
     conn = store.connect(actor="user")
     try:
-        camera_zones = store.camera_zones(conn)
+        camera_zones = _zones_by_camera(conn)
     finally:
         conn.close()
     get_capture().configure(
@@ -1033,19 +1115,13 @@ def _camera_rows():
     rows = []
     conn = store.connect(actor="automation")
     try:
+        by_camera = _zones_by_camera(conn)
         for stored in store.cameras(conn):
-            # Parsed from the stored row *before* the live state is merged in.
-            # The merge lets a thread's view win, which is right for liveness and
-            # was wrong for this: a key of the same name in the status dict
-            # silently replaced the saved shape. Reading it first means only the
-            # database can answer what the zone is.
-            parsed = zones.parse(stored.get("zone"))
             row = {**stored, **live.get(stored["id"], {"alive": False})}
-            row["zone"] = (
-                {"points": [list(p) for p in parsed["points"]],
-                 "labels": list(parsed["labels"])}
-                if parsed else None
-            )
+            # The areas come from the database, never from the thread's view of
+            # itself: a key of the same name in the status dict once replaced the
+            # stored shape and made a live camera report "no zone" (1.13.1).
+            row["zones"] = [_zone_view(z) for z in by_camera.get(stored["id"], [])]
             rows.append(row)
         for camera_id, status in live.items():
             if not any(r["id"] == camera_id for r in rows):
