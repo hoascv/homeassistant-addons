@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.13.1
+
+- Fix a saved zone reporting as **"Nothing set"** on the page. The camera thread's
+  status carried a `zone` flag of its own, and live thread state is merged over
+  the stored row — so a running camera replaced its own saved shape with a
+  boolean, which then failed to parse and read as no zone at all. The shape was
+  stored correctly and was being enforced the whole time; only the page's account
+  of it was wrong.
+- The stored shape is now read before the merge, so only the database can answer
+  what a zone is, and the thread's flag is named `zone_active` so the two cannot
+  collide again.
+
 ## 1.13.0
 
 - **Tell it where to look.** A camera on a driveway sees the street too, and a

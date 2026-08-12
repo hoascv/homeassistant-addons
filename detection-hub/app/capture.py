@@ -510,7 +510,11 @@ class CameraWorker(threading.Thread):
             "frames_considered": self.frames_considered,
             "frames_detected": self.frames_detected,
             "frames_filtered": self.frames_filtered,
-            "zone": bool(self.zone),
+            # NOT "zone": the stored column of that name holds the shape itself,
+            # and a thread's view is merged over the database row — so a boolean
+            # here replaced the saved shape, the parse failed, and the page
+            # reported "nothing set" about a zone that was in force all along.
+            "zone_active": bool(self.zone),
             "last_frame_at": self.last_frame_at,
             "last_detection_at": self.last_detection_at,
         }

@@ -162,7 +162,7 @@ def test_a_street_car_never_reaches_the_recorder(monkeypatch):
     assert ("car", 500) in kept, "the driveway car was dropped"
     assert ("person", 100) in kept, "a person in the street is still news"
     assert worker.frames_filtered == 1
-    assert worker.status()["zone"] is True
+    assert worker.status()["zone_active"] is True
 
 
 def test_a_camera_with_no_zone_records_everything(monkeypatch):
@@ -232,3 +232,37 @@ def test_the_page_offers_the_editor(client, db_path):
     assert "Where to look" in html
     assert "api/cameras/" in html
     assert 'fetch("/api/cameras' not in html, "absolute URL would break ingress"
+
+
+def test_a_saved_zone_is_still_reported_while_the_camera_is_running(client, db_path,
+                                                                    monkeypatch):
+    """The bug this pins: the thread's own status carried a `zone` flag, and the
+    live state is merged *over* the stored row — so a running camera replaced its
+    saved shape with a boolean, the parse failed, and the page said "nothing set"
+    about a zone that was in force the whole time."""
+    import app as hub
+
+    client.put("/api/cameras/drive/zone", json={"points": DRIVEWAY, "labels": ["car"]})
+
+    # A real worker's status, not a hand-written one: the collision was between
+    # two keys that nobody was comparing side by side, so the test has to use
+    # whatever the worker actually reports rather than a copy of it.
+    import capture
+
+    worker = capture.CameraWorker("drive", "rtsp://x", None, lambda *a: None,
+                                  zone=zones.dump(DRIVEWAY, ["car"]))
+
+    class RunningCapture:
+        def status(self):
+            return [worker.status()]
+
+        def metrics(self):
+            return {}
+
+    monkeypatch.setattr(hub, "get_capture", lambda: RunningCapture())
+    camera = next(c for c in client.get("/api/cameras").get_json()["cameras"]
+                  if c["id"] == "drive")
+
+    assert camera["zone"] is not None, "a live camera hid its own zone"
+    assert len(camera["zone"]["points"]) == 4
+    assert camera["zone"]["labels"] == ["car"]

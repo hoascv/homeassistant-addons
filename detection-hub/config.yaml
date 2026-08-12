@@ -1,5 +1,5 @@
 name: "Detection Hub"
-version: "1.13.0"
+version: "1.13.1"
 slug: "detection-hub"
 description: "Object detection for Home Assistant — an image in, what's in it out"
 url: "https://github.com/hoascv/homeassistant-addons/tree/main/detection-hub"

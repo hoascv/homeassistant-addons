@@ -24,7 +24,7 @@ import hass
 import store
 import zones
 
-APP_VERSION = "1.13.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.13.1"  # keep in sync with the "version" field in config.yaml
 
 OPTIONS_PATH = os.environ.get("DETECTION_HUB_OPTIONS_PATH", "/data/options.json")
 
@@ -1034,10 +1034,13 @@ def _camera_rows():
     conn = store.connect(actor="automation")
     try:
         for stored in store.cameras(conn):
+            # Parsed from the stored row *before* the live state is merged in.
+            # The merge lets a thread's view win, which is right for liveness and
+            # was wrong for this: a key of the same name in the status dict
+            # silently replaced the saved shape. Reading it first means only the
+            # database can answer what the zone is.
+            parsed = zones.parse(stored.get("zone"))
             row = {**stored, **live.get(stored["id"], {"alive": False})}
-            # Parsed, not raw JSON: the page draws it, and a shape that failed to
-            # parse is not in force either — so what is reported is what applies.
-            parsed = zones.parse(row.get("zone"))
             row["zone"] = (
                 {"points": [list(p) for p in parsed["points"]],
                  "labels": list(parsed["labels"])}
