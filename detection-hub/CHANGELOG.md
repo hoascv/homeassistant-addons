@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.12.0
+
+- **An unrecognised face now shows what it scored**, against the bar it missed:
+  `unrecognised · 0.41 (needs 0.45)`. The score was already being recorded — it
+  is the one number the whole threshold-tuning loop runs on — but reading it
+  meant leaving the page for the API. The strip of recent detections carries the
+  bare score too, so a run of visits can be scanned at a glance.
+- **The status card says whether identification is on**, with the threshold and
+  the size floor in force. Until now the only way to tell a restart had taken
+  effect was to wait for somebody to be recognised.
+
 ## 1.11.0
 
 - **It can put a name to the people it sees.** Enrol somebody by opening a

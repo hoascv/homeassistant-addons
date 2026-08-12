@@ -138,6 +138,18 @@
       {% if status.last_latency_ms %}
       <span class="pill">{{ status.last_latency_ms }} ms</span>
       {% endif %}
+      {# Whether identification is on is otherwise invisible until somebody is
+         recognised, which is a long time to wonder. #}
+      {% if not face_options.enabled %}
+        <span class="pill">faces off</span>
+      {% elif face_status and face_status.error %}
+        <span class="pill"><span class="dot bad"></span> faces unavailable</span>
+        <span class="meta">{{ face_status.error }}</span>
+      {% else %}
+        <span class="pill"><span class="dot good"></span> faces ready</span>
+        <span class="pill">match {{ face_options.threshold }}</span>
+        <span class="pill">from {{ face_options.min_pixels }} px</span>
+      {% endif %}
     </div>
     <div class="labels" style="margin-top:.85rem">
       <span class="meta" style="color:var(--muted);font-size:.8rem;align-self:center;margin-right:.15rem">
@@ -352,17 +364,33 @@ async function loadDetections() {
     const s = shotUrl(d);
     const img = s ? `<img data-id="${d.id}" src="${s}" alt="">`
                   : '<div class="noimg">no image</div>';
+    // The bare score in the strip, so a run of visits can be scanned for what
+    // they scored without opening each one. The full "needs 0.45" reading is in
+    // the hero and the lightbox, where there is room for it.
+    const score = (d.face_state === 'unknown' && d.person_score) ? ` · ${d.person_score}` : '';
     return `<div class="shot">${img}<div class="cap"><b>${esc(d.person || d.label)}</b>` +
-      `<span>${esc(d.camera)} · ${ago(d.detected_at)}</span></div></div>`;
+      `<span>${esc(d.camera)} · ${ago(d.detected_at)}${score}</span></div></div>`;
   }).join('');
 }
+
+// What the match threshold was when this page was rendered. Changing it takes
+// effect on the next match without a restart, so a reload is what re-syncs this.
+const FACE_THRESHOLD = {{ face_options.threshold }};
 
 // The four face states read as four different things, and none of them is a
 // blank that could be mistaken for either of the others. NULL — nothing looked —
 // deliberately says nothing at all.
 function whoLabel(d) {
   if (d.person) return null;                       // the name is already the title
-  if (d.face_state === 'unknown') return 'unrecognised';
+  if (d.face_state === 'unknown') {
+    // With the score, because that is the number the threshold is tuned
+    // against: "0.41, needs 0.45" says enrol another print or move the bar a
+    // little, where a bare "unrecognised" says only that something did not
+    // happen. Both numbers, since the bar can be changed between visits.
+    return d.person_score
+      ? `unrecognised · ${d.person_score} (needs ${FACE_THRESHOLD})`
+      : 'unrecognised';
+  }
   if (d.face_state === 'no_face') return 'no face seen';
   return null;
 }

@@ -329,3 +329,30 @@ def test_the_size_floor_is_what_refuses_a_small_face():
     whole_frame = [0, 0, image.shape[1], image.shape[0]]
     assert identifier.probe_person(image, whole_frame, min_pixels=width + 10)["usable"] is False
     assert identifier.probe_person(image, whole_frame, min_pixels=1)["usable"] is True
+
+
+# --- reading a score off the page ---------------------------------------------
+
+
+def test_the_page_carries_the_threshold_a_score_is_judged_against(client, db_path,
+                                                                  set_options):
+    """An unrecognised face is only actionable next to the bar it missed. Without
+    the threshold on the page, tuning it means going to the API for the number."""
+    set_options(identify_people=True, face_match_threshold=0.52)
+    html = client.get("/").get_data(as_text=True)
+
+    assert "const FACE_THRESHOLD = 0.52" in html
+    assert "needs ${FACE_THRESHOLD}" in html
+    assert "unrecognised" in html
+
+
+def test_the_status_card_says_whether_identification_is_on(client, db_path, set_options):
+    """Otherwise it is invisible until somebody is recognised, which is a long
+    time to wonder whether the restart took."""
+    set_options()
+    assert "faces off" in client.get("/").get_data(as_text=True)
+
+    set_options(identify_people=True, face_match_threshold=0.5, face_min_pixels=55)
+    html = client.get("/").get_data(as_text=True)
+    assert "faces ready" in html
+    assert "match 0.5" in html and "from 55 px" in html

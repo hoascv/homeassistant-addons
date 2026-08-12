@@ -23,7 +23,7 @@ import faces
 import hass
 import store
 
-APP_VERSION = "1.11.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.12.0"  # keep in sync with the "version" field in config.yaml
 
 OPTIONS_PATH = os.environ.get("DETECTION_HUB_OPTIONS_PATH", "/data/options.json")
 
@@ -336,6 +336,7 @@ def _api_access_summary():
 @app.route("/")
 def index():
     det = get_detector()
+    face_options = get_face_options()
     return render_template(
         "index.html",
         app_version=APP_VERSION,
@@ -343,6 +344,12 @@ def index():
         confidence=get_confidence(),
         labels=get_labels() or list(detector.COCO_LABELS),
         label_filter_active=get_labels() is not None,
+        # The threshold travels to the page so an unrecognised face can be shown
+        # against the bar it failed to clear. "0.41, needs 0.45" is a decision;
+        # "unrecognised" on its own sends somebody to the API to find the number
+        # that the whole tuning loop runs on.
+        face_options=face_options,
+        face_status=get_face_identifier().status() if face_options["enabled"] else None,
     )
 
 
