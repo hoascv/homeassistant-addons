@@ -68,6 +68,44 @@ likely causes — a rejected password, a wrong path, an unreachable camera —
 rather than only echoing ffmpeg's raw error (on some cameras a bad password
 even shows as a `406`, which reads like a protocol fault and is not).
 
+## Where to look — zones
+
+A camera pointed at a driveway usually sees the street too, and a car parked
+across the road is not an event. **Draw the area that counts** on the page, under
+*Where to look*: pick the camera, press **Draw an area…**, and click along the
+edge of the driveway on a recent frame from that camera. Three points minimum;
+the shape can be any polygon, including a concave one around a flower bed.
+
+**Choose which objects it applies to.** Vehicles are ticked by default and
+`person` is not, which is usually what you want: a car in the street is traffic,
+a person in the street may be the reason you have a camera at all. Anything the
+zone doesn't name carries on being reported from anywhere in frame.
+
+**An object is judged by the bottom of its box**, not its middle — where it meets
+the ground. A van across the road has a box whose centre floats over your
+driveway boundary while its wheels are plainly in the street, and the centre test
+would let it through.
+
+Anything outside is **dropped before it is recorded**: no row, no snapshot, no
+event, nothing in the lakehouse. That is deliberate — filtering it out of the
+page later would still pay for all four.
+
+Two things worth knowing:
+
+- **The detector still runs on the whole frame.** It has to, because the zone is
+  per-label and a person in the street still counts. So a zone saves you rows,
+  snapshots and events, not the forward pass. If you want the CPU back too,
+  applying the zone to *every* label would let the motion gate ignore that area
+  entirely — ask for it and it can be built.
+- **Coordinates are relative to the frame**, so switching a camera between its
+  substream and its main stream does not move the shape. Moving the camera does
+  invalidate it, but that invalidates the drawing anyway.
+
+Redraw or clear it at any time; the camera threads pick it up immediately, no
+restart. `GET /api/cameras` reports each camera's zone, and the per-camera status
+counts what it dropped — if `frames_filtered` is climbing while nothing is being
+recorded, the shape is in the wrong place.
+
 ## Identifying people
 
 Detection answers *something is there*. Identification answers *who*, by

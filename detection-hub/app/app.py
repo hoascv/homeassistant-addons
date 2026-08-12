@@ -22,8 +22,9 @@ import detector
 import faces
 import hass
 import store
+import zones
 
-APP_VERSION = "1.12.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.13.0"  # keep in sync with the "version" field in config.yaml
 
 OPTIONS_PATH = os.environ.get("DETECTION_HUB_OPTIONS_PATH", "/data/options.json")
 
@@ -768,6 +769,85 @@ def api_face_crop(print_id):
     return send_file(path, mimetype="image/jpeg")
 
 
+@app.route("/api/cameras/<camera_id>/zone", methods=["PUT", "DELETE"])
+def api_camera_zone(camera_id):
+    """Draw, or clear, the part of a camera's frame that counts.
+
+    Coordinates arrive relative (0..1), because that is what the page draws in
+    and what survives a camera being switched to a different stream resolution.
+    Takes effect on the next configure — the workers hold their zone parsed, so
+    this restarts them rather than making every frame re-read the database.
+    """
+    conn = get_db()
+    if request.method == "DELETE":
+        store.set_camera_zone(conn, camera_id, None)
+        conn.commit()
+        _reconfigure_cameras()
+        return jsonify({"status": "cleared"})
+
+    data = request.get_json(force=True, silent=True) or {}
+    points = data.get("points")
+    if not isinstance(points, list) or len(points) < 3:
+        return jsonify({"error": "a zone needs at least three points"}), 400
+
+    labels = data.get("labels") or []
+    if not isinstance(labels, list):
+        return jsonify({"error": "labels must be a list"}), 400
+    # Unknown labels would silently restrict nothing, which looks like the zone
+    # being ignored. Say so instead.
+    unknown = [l for l in labels if str(l).strip().lower() not in detector.COCO_LABELS]
+    if unknown:
+        return jsonify({"error": f"not object types this detects: {', '.join(unknown)}"}), 400
+
+    try:
+        stored = zones.dump(points, labels)
+    except (TypeError, ValueError):
+        return jsonify({"error": "points must be pairs of numbers"}), 400
+    if zones.parse(stored) is None:
+        return jsonify({"error": "that is not a usable shape"}), 400
+
+    store.set_camera_zone(conn, camera_id, stored)
+    conn.commit()
+    _reconfigure_cameras()
+    return jsonify({"status": "saved", "zone": json.loads(stored)})
+
+
+def _startup_zones():
+    """The stored zones, read once at boot for the initial configure."""
+    conn = store.connect(actor="user")
+    try:
+        return store.camera_zones(conn)
+    finally:
+        conn.close()
+
+
+def _reconfigure_cameras():
+    """Restart the camera threads so a redrawn zone takes effect now.
+
+    A zone that needed an add-on restart would be drawn, saved, and then appear
+    not to work — the worst possible feedback while somebody is trying to get the
+    shape right.
+    """
+    cameras = get_cameras()
+    if not cameras:
+        return
+    face_options = get_face_options()
+    conn = store.connect(actor="user")
+    try:
+        camera_zones = store.camera_zones(conn)
+    finally:
+        conn.close()
+    get_capture().configure(
+        cameras,
+        confidence=get_confidence(),
+        labels=get_labels(),
+        zones=camera_zones,
+        face_attempts=face_options["attempts"],
+        face_min_pixels=face_options["min_pixels"],
+        **get_capture_options(),
+    )
+
+
 @app.route("/api/export")
 def api_export():
     """Full snapshot of every tracked table, plus the seq it corresponds to."""
@@ -954,7 +1034,16 @@ def _camera_rows():
     conn = store.connect(actor="automation")
     try:
         for stored in store.cameras(conn):
-            rows.append({**stored, **live.get(stored["id"], {"alive": False})})
+            row = {**stored, **live.get(stored["id"], {"alive": False})}
+            # Parsed, not raw JSON: the page draws it, and a shape that failed to
+            # parse is not in force either — so what is reported is what applies.
+            parsed = zones.parse(row.get("zone"))
+            row["zone"] = (
+                {"points": [list(p) for p in parsed["points"]],
+                 "labels": list(parsed["labels"])}
+                if parsed else None
+            )
+            rows.append(row)
         for camera_id, status in live.items():
             if not any(r["id"] == camera_id for r in rows):
                 rows.append(status)
@@ -1127,6 +1216,7 @@ if __name__ == "__main__":
             labels=get_labels(),
             face_attempts=face_options["attempts"],
             face_min_pixels=face_options["min_pixels"],
+            zones=_startup_zones(),
             **get_capture_options(),
         )
         _log(f"watching {len(cameras)} camera(s): {', '.join(c['id'] for c in cameras)}")

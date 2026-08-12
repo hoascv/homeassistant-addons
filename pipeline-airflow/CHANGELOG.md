@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.13.0
+
+- Keeps up with **Detection Hub 1.13.0**, whose cameras can now be given a zone —
+  the part of the frame that counts. `cameras` gains the `zone` column, kept as
+  the JSON string it is stored as: configuration a reader may want beside the
+  counts, not something to query into.
+- Worth knowing when reading detection counts across that change: a camera with a
+  zone stops recording what falls outside it, so a drop in rows on a given
+  camera may be a shape being drawn rather than a quiet week.
+
 ## 2.12.0
 
 - Keeps up with **Detection Hub 1.11.0**, which can now identify people:

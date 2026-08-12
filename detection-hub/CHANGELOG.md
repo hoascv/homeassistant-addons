@@ -1,5 +1,34 @@
 # Changelog
 
+## 1.13.0
+
+- **Tell it where to look.** A camera on a driveway sees the street too, and a
+  car parked across the road is not an event. Draw the area that counts on a real
+  frame from that camera — *Where to look* on the page — and anything outside it
+  is dropped **before** it is recorded: no row, no snapshot, no event, nothing in
+  the lakehouse.
+- **Per object type.** Vehicles are restricted by default and people are not,
+  which is usually the point: a car in the street is traffic, a person in the
+  street may be why the camera is there. Anything the zone doesn't name carries
+  on being reported from anywhere in frame.
+- **Judged by the bottom of the box**, where an object meets the ground. A van
+  across the road has a box whose centre floats over the driveway while its
+  wheels are plainly in the street — the centre test would let it through.
+- Coordinates are stored relative to the frame, so switching a camera between its
+  substream and main stream does not move the shape. Redrawing takes effect
+  immediately; a zone that needed a restart would look like a zone that did not
+  work.
+- A mangled shape is treated as no shape and everything is recorded. A camera
+  that silently records *nothing* is a worse failure than one that records too
+  much.
+- The per-camera status counts what it dropped, so a shape in the wrong place
+  shows up as `frames_filtered` climbing while nothing is recorded — otherwise
+  indistinguishable from a quiet driveway.
+- Note the detector still runs on the whole frame: the zone is per-label, so a
+  person in the street still has to be found. This saves rows, snapshots and
+  events, not the forward pass. Needs `pipeline-airflow` 2.13.0 for the `zone`
+  column.
+
 ## 1.12.0
 
 - **An unrecognised face now shows what it scored**, against the bar it missed:

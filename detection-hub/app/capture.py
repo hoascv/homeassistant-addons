@@ -25,6 +25,7 @@ import time
 from datetime import datetime
 
 import detector
+import zones
 
 # Force TCP for RTSP. The default lets ffmpeg negotiate UDP, which over wifi
 # drops packets and yields torn frames that read as motion — the gate then wakes
@@ -256,6 +257,7 @@ class CameraWorker(threading.Thread):
         on_identity=None,
         face_attempts=5,
         face_min_pixels=60,
+        zone=None,
     ):
         super().__init__(name=f"camera-{camera_id}", daemon=True)
         self.camera_id = camera_id
@@ -283,6 +285,10 @@ class CameraWorker(threading.Thread):
         self.on_identity = on_identity
         self.face_attempts = max(1, int(face_attempts))
         self.face_min_pixels = int(face_min_pixels)
+        # Parsed once here rather than per frame: this is read on every detection
+        # in a hot loop, and a zone only changes when somebody redraws it — which
+        # reconfigures the workers anyway.
+        self.zone = zones.parse(zone)
 
         # NOT `_stop`: threading.Thread._stop() is an internal method that
         # join() calls, and shadowing it with an Event makes every join raise
@@ -294,6 +300,10 @@ class CameraWorker(threading.Thread):
         self.frames_seen = 0
         self.frames_considered = 0
         self.frames_detected = 0
+        # Detections dropped for being outside the zone. Worth counting: a zone
+        # drawn slightly wrong shows up as this climbing while frames_detected
+        # stays at zero, which is otherwise indistinguishable from a quiet drive.
+        self.frames_filtered = 0
         self.last_frame_at = None
         self.last_detection_at = None
 
@@ -382,6 +392,16 @@ class CameraWorker(threading.Thread):
             self.state = "error"
             self.detail = error
             return
+
+        # Before anything else sees them. A car in the street is not an event on
+        # a driveway camera, and dropping it here means no track, no row, no
+        # snapshot and no event — rather than filtering it out of the page later
+        # and still paying for all four.
+        if self.zone:
+            height, width = frame.shape[:2]
+            kept = zones.filter_detections(self.zone, detections, width, height)
+            self.frames_filtered += len(detections) - len(kept)
+            detections = kept
 
         # With a tracker, only genuine arrivals get through; without one, every
         # detection does. The tracker is fed the whole frame's set either way so
@@ -489,6 +509,8 @@ class CameraWorker(threading.Thread):
             "frames_seen": self.frames_seen,
             "frames_considered": self.frames_considered,
             "frames_detected": self.frames_detected,
+            "frames_filtered": self.frames_filtered,
+            "zone": bool(self.zone),
             "last_frame_at": self.last_frame_at,
             "last_detection_at": self.last_detection_at,
         }
@@ -515,11 +537,17 @@ class CaptureManager:
         self._lock = threading.Lock()
 
     def configure(self, cameras, **options):
-        """(re)start workers for `cameras`, a list of {"id", "url"} dicts."""
+        """(re)start workers for `cameras`, a list of {"id", "url"} dicts.
+
+        `zones` maps camera id to a stored zone. Passed in rather than read here
+        because this module owns no database connection — the same division that
+        keeps sqlite's thread affinity somebody else's problem.
+        """
         with self._lock:
             self._stop_all()
             absent_seconds = options.pop("cooldown_seconds", 30)
             collapse = options.pop("collapse_repeats", True)
+            camera_zones = options.pop("zones", None) or {}
             # One tracker shared across the cameras, keyed by camera inside, so a
             # car on the drive and a car in the street are tracked apart. None
             # when the operator has turned collapsing off.
@@ -536,6 +564,7 @@ class CaptureManager:
                     log=self.log,
                     identifier=self.identifier,
                     on_identity=self.on_identity,
+                    zone=camera_zones.get(camera["id"]),
                     **options,
                 )
                 self.workers[camera["id"]] = worker

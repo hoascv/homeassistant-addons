@@ -260,6 +260,14 @@ def init_db(path=None):
         """
     )
 
+    # The area of the frame that counts, drawn on the page and stored as JSON:
+    # relative points plus the labels it restricts. Null on every camera until
+    # somebody draws one, which means "record everything" — the behaviour every
+    # camera had before 1.13.0.
+    camera_columns = {row[1] for row in conn.execute("PRAGMA table_info(cameras)")}
+    if "zone" not in camera_columns:
+        conn.execute("ALTER TABLE cameras ADD COLUMN zone TEXT")
+
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS change_log (
@@ -458,6 +466,27 @@ def upsert_camera(conn, camera_id, kind, **fields):
             f"UPDATE cameras SET {assignments} WHERE id = ?",
             (*fields.values(), camera_id),
         )
+
+
+def set_camera_zone(conn, camera_id, zone_json):
+    """Store (or clear, with None) a camera's zone.
+
+    Upserts, because a zone can be drawn for a camera that has not reported yet —
+    a stream that is still connecting should not stop somebody setting it up.
+    """
+    conn.execute(
+        "INSERT INTO cameras (id, kind) VALUES (?, 'rtsp') ON CONFLICT(id) DO NOTHING",
+        (camera_id,),
+    )
+    conn.execute("UPDATE cameras SET zone = ? WHERE id = ?", (zone_json, camera_id))
+
+
+def camera_zones(conn):
+    """Every camera's stored zone, by camera id. What the capture threads load."""
+    return {
+        row["id"]: row["zone"]
+        for row in conn.execute("SELECT id, zone FROM cameras WHERE zone IS NOT NULL")
+    }
 
 
 def bump_camera_counters(conn, camera_id, frames_seen=0, frames_detected=0):
