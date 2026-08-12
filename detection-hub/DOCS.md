@@ -141,6 +141,15 @@ Two things worth knowing:
 The area list shows how many detections each camera has dropped — if that climbs
 while nothing is being recorded, a shape is in the wrong place.
 
+### Checking a shape against a real detection
+
+Open any detection on the page. Its camera's areas are drawn on the frame —
+green for *only counts here*, red dashed for *never counts here* — and a yellow
+dot marks the point that decided: the bottom centre of the box. If a car you
+expected to be ignored was recorded, this is where you see why, on the frame it
+happened in. The line under the image names both the camera and the area, as
+`camera driveway · in Driveway`; no `in …` means no area claimed it.
+
 ## Identifying people
 
 Detection answers *something is there*. Identification answers *who*, by

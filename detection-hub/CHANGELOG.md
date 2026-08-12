@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.16.0
+
+- **Areas are drawn on the detection itself.** Open any snapshot and this
+  camera's areas are outlined on the frame — green for *only counts here*, red
+  dashed for *never counts here* — with a yellow dot on the point that actually
+  decides: the bottom centre of the box, where the object meets the ground.
+  "Why was that car recorded?" is only answerable next to the shape that let it
+  through.
+- **The area is named on the detection**, in the strip and in the expanded view,
+  which now reads `camera driveway · in Driveway`. Before this the line said
+  `Car driveway`, where `driveway` was the *camera* — easy to read as the area
+  and impossible to tell apart from a detection no area claimed.
+
+
 ## 1.15.0
 
 - **Areas are named things now, and a camera can have several.** Driveway, Porch,

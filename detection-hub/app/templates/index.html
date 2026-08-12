@@ -405,8 +405,9 @@ async function loadDetections() {
     // they scored without opening each one. The full "needs 0.45" reading is in
     // the hero and the lightbox, where there is room for it.
     const score = (d.face_state === 'unknown' && d.person_score) ? ` · ${d.person_score}` : '';
+    const where = d.zone ? ` · ${esc(d.zone)}` : '';
     return `<div class="shot">${img}<div class="cap"><b>${esc(d.person || d.label)}</b>` +
-      `<span>${esc(d.camera)} · ${ago(d.detected_at)}${score}</span></div></div>`;
+      `<span>${esc(d.camera)}${where} · ${ago(d.detected_at)}${score}</span></div></div>`;
   }).join('');
 }
 
@@ -477,18 +478,53 @@ function openLightbox(det) {
     lbCanvas.height = img.naturalHeight;
     const ctx = lbCanvas.getContext('2d');
     ctx.drawImage(img, 0, 0);
+    const stroke = Math.max(2, img.naturalWidth / 300);
+
+    // This camera's areas, on the frame itself. "Why was that car recorded?" is
+    // only answerable next to the shape that let it through — describing the
+    // area in a list somewhere else asks the reader to hold two pictures in
+    // their head and compare them.
+    for (const zone of (zoneList || []).filter((z) => z.camera === det.camera)) {
+      const ignoring = zone.kind === 'ignore';
+      const colour = ignoring ? '#e56a6a' : '#5ad19a';
+      const px = zone.points.map(([x, y]) => [x * lbCanvas.width, y * lbCanvas.height]);
+      if (px.length < 3) continue;
+      ctx.beginPath();
+      ctx.moveTo(px[0][0], px[0][1]);
+      for (const [x, y] of px.slice(1)) ctx.lineTo(x, y);
+      ctx.closePath();
+      ctx.fillStyle = ignoring ? 'rgba(229,106,106,0.18)' : 'rgba(90,209,154,0.14)';
+      ctx.fill();
+      ctx.setLineDash([stroke * 3, stroke * 2]);
+      ctx.lineWidth = stroke;
+      ctx.strokeStyle = colour;
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = colour;
+      ctx.font = `${Math.max(12, img.naturalWidth / 45)}px system-ui, sans-serif`;
+      ctx.fillText(zone.name, px[0][0] + stroke, px[0][1] - stroke);
+    }
+
     // The box is in the captured frame's pixels — the same space as this image —
-    // so it is drawn without scaling.
+    // so it is drawn without scaling. The dot is the point that actually decides
+    // which area it is in: the bottom centre, where the object meets the ground.
     if (Number.isFinite(det.box_x)) {
-      ctx.lineWidth = Math.max(2, img.naturalWidth / 300);
+      ctx.lineWidth = stroke;
       ctx.strokeStyle = '#5ad19a';
       ctx.strokeRect(det.box_x, det.box_y, det.box_w, det.box_h);
+      ctx.beginPath();
+      ctx.arc(det.box_x + det.box_w / 2, det.box_y + det.box_h, stroke * 2.5, 0, Math.PI * 2);
+      ctx.fillStyle = '#ffd166';
+      ctx.fill();
     }
     const who = det.person
       ? ` · <b>${esc(det.person)}</b>${det.person_score ? ' ' + det.person_score : ''}`
       : (whoLabel(det) ? ' · ' + whoLabel(det) : '');
+    // The area is named explicitly as "in <name>", because the camera name sat
+    // in this line already and the two were easy to read as one thing.
+    const where = det.zone ? ` · in ${esc(det.zone)}` : '';
     lbMeta.innerHTML = `<b style="text-transform:capitalize">${esc(det.label)}</b> ` +
-      `<span>${esc(det.camera)} · ${Math.round(det.confidence * 100)}% · ` +
+      `<span>camera ${esc(det.camera)}${where} · ${Math.round(det.confidence * 100)}% · ` +
       `${esc(det.detected_at.replace('T', ' '))}${who}</span>`;
     showEnrolFor(det);
     lb.classList.add('open');

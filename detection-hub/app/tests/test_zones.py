@@ -357,3 +357,11 @@ def test_the_page_offers_the_area_editor(client, db_path):
     assert "only count here" in html and "never count here" in html
     assert "api/zones" in html
     assert 'fetch("/api/zones' not in html, "absolute URL would break ingress"
+
+
+def test_the_page_draws_areas_on_a_detection(client, db_path):
+    """"Why was that car recorded?" is only answerable next to the shape that
+    let it through, on the same frame."""
+    html = client.get("/").get_data(as_text=True)
+    assert "z.camera === det.camera" in html, "areas are not drawn on the snapshot"
+    assert "in ${esc(det.zone)}" in html, "the area is not named on a detection"
