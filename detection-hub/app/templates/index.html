@@ -664,9 +664,17 @@ async function loadZones() {
   zoneCameraSelect.innerHTML = zoneCameras
     .map((c) => `<option value="${esc(c.id)}">${esc(c.id)}</option>`).join("");
   const withZone = zoneCameras.filter((c) => c.zone);
+  // The dropped count is the evidence the shape is doing something. Without it
+  // "an area is set" and "an area is set in the wrong place" look identical, and
+  // both look identical to a quiet driveway.
   zoneNote.textContent = withZone.length
-    ? withZone.map((c) => `${c.id}: ${c.zone.points.length}-point area`
-        + (c.zone.labels && c.zone.labels.length ? ` for ${c.zone.labels.join(", ")}` : "")).join(" · ")
+    ? withZone.map((c) => {
+        const what = c.zone.labels && c.zone.labels.length
+          ? c.zone.labels.join(", ") : "everything";
+        const dropped = c.frames_filtered
+          ? ` · ${c.frames_filtered} dropped outside it` : " · nothing dropped yet";
+        return `${c.id}: ${c.zone.points.length}-point area for ${what}${dropped}`;
+      }).join(" — ")
     : "Nothing set — every camera reports what it sees anywhere in frame.";
 
   document.getElementById("zone-labels").innerHTML = ZONE_LABELS.map((l) =>

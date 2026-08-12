@@ -266,3 +266,31 @@ def test_a_saved_zone_is_still_reported_while_the_camera_is_running(client, db_p
     assert camera["zone"] is not None, "a live camera hid its own zone"
     assert len(camera["zone"]["points"]) == 4
     assert camera["zone"]["labels"] == ["car"]
+
+
+def test_the_page_can_show_what_a_zone_has_dropped(client, db_path, monkeypatch):
+    """"An area is set", "an area is set in the wrong place" and "a quiet
+    driveway" look identical without this number."""
+    import app as hub
+    import capture
+
+    client.put("/api/cameras/drive/zone", json={"points": DRIVEWAY, "labels": ["car"]})
+
+    worker = capture.CameraWorker("drive", "rtsp://x", None, lambda *a: None,
+                                  zone=zones.dump(DRIVEWAY, ["car"]))
+    worker.frames_filtered = 7
+
+    class RunningCapture:
+        def status(self):
+            return [worker.status()]
+
+        def metrics(self):
+            return {}
+
+    monkeypatch.setattr(hub, "get_capture", lambda: RunningCapture())
+    camera = next(c for c in client.get("/api/cameras").get_json()["cameras"]
+                  if c["id"] == "drive")
+
+    assert camera["frames_filtered"] == 7
+    assert camera["zone_active"] is True
+    assert "dropped outside it" in client.get("/").get_data(as_text=True)

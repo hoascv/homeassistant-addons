@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.14.0
+
+- **The zone card says what it has dropped**: `Driveway: 5-point area for car,
+  truck — 12 dropped outside it`. A shape that is set, a shape that is set in the
+  wrong place, and a genuinely quiet driveway all looked the same before this;
+  the count is the difference between them.
+- A camera with an area but nothing dropped yet says so, rather than showing
+  nothing — waiting is a state too.
+
 ## 1.13.1
 
 - Fix a saved zone reporting as **"Nothing set"** on the page. The camera thread's

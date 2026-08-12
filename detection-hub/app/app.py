@@ -24,7 +24,7 @@ import hass
 import store
 import zones
 
-APP_VERSION = "1.13.1"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.14.0"  # keep in sync with the "version" field in config.yaml
 
 OPTIONS_PATH = os.environ.get("DETECTION_HUB_OPTIONS_PATH", "/data/options.json")
 
