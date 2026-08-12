@@ -365,3 +365,27 @@ def test_the_page_draws_areas_on_a_detection(client, db_path):
     html = client.get("/").get_data(as_text=True)
     assert "z.camera === det.camera" in html, "areas are not drawn on the snapshot"
     assert "in ${esc(det.zone)}" in html, "the area is not named on a detection"
+
+
+def test_the_editor_plots_where_recent_detections_stood(client, db_path):
+    """Placing an edge by eye discovers a misplaced boundary one missed
+    detection at a time. The dots put every recent position on the frame at
+    once, and fill in the ones the shape would act on."""
+    html = client.get("/").get_data(as_text=True)
+    assert "loadZoneDots" in html
+    assert "pointInShape" in html, "the preview must apply the same rule as the add-on"
+    assert "recent detections" in html
+
+
+def test_the_area_list_rows_are_clickable(client, db_path):
+    """They were built from the thumbnail caption style, which carries
+    pointer-events: none so it cannot swallow the click that opens an image —
+    which made every edit and delete link on this page dead, and gave the rows
+    no height either since there is no thumbnail under them."""
+    html = client.get("/").get_data(as_text=True)
+    assert 'id="zone-list" class="rows"' in html
+    assert 'id="people-list" class="rows"' in html
+    # The rows themselves must not be built from .shot/.cap any more.
+    assert 'data-zone-edit' in html
+    editor_row = html[html.index("data-zone-edit") - 400:html.index("data-zone-edit")]
+    assert 'class="cap"' not in editor_row, "an area row is still an image caption"

@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.17.0
+
+- **The editor plots where recent detections actually stood.** Every ground point
+  from the last 200 detections of the object types an area covers, on the frame,
+  as you drag its edge: filled where the shape would act on them, hollow where it
+  would not, with a running count — *"5 points · 3 of 27 recent detections
+  kept"*. Placing a boundary by eye finds a misplaced one detection at a time;
+  three street cars in a row landed within 0.08 of the edge that way.
+- The preview applies the same ray casting the add-on does, so what the dots say
+  and what the camera thread will do cannot drift apart.
+- **Editable lists are clickable again.** The people and areas lists were built
+  from the detection thumbnail's caption style, which carries
+  `pointer-events: none` so it never swallows the click that opens an image —
+  making every *edit*, *rename* and *delete* link on the page dead, and leaving
+  the rows with no height since there is no thumbnail beneath them. They have
+  their own list style now.
+
+
 ## 1.16.0
 
 - **Areas are drawn on the detection itself.** Open any snapshot and this

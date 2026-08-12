@@ -141,6 +141,15 @@ Two things worth knowing:
 The area list shows how many detections each camera has dropped — if that climbs
 while nothing is being recorded, a shape is in the wrong place.
 
+### Placing an edge against real traffic
+
+While you draw or edit an area, the editor plots the **ground point of every
+recent detection** of the object types it covers — filled where this shape would
+act on them, hollow where it would not, with a count underneath. Drag the edge
+and watch which side the real cars fall on. This is worth more than it sounds:
+by eye, a boundary that is slightly wrong is discovered one missed detection at a
+time, days apart.
+
 ### Checking a shape against a real detection
 
 Open any detection on the page. Its camera's areas are drawn on the frame —

@@ -90,6 +90,19 @@
     .shot .cap span { display: block; color: #c3c8cf; font-size: .7rem; }
     .empty { color: var(--muted); padding: .5rem 0; }
 
+    /* Editable lists: people, areas. Deliberately NOT .shot/.cap — that caption
+       is an overlay on a thumbnail and carries pointer-events: none so it does
+       not swallow the click that opens the image. Links inside it are therefore
+       dead, and with no image to overlay the row has no height at all. */
+    .rows { display: flex; flex-direction: column; gap: .45rem; margin-top: .9rem; }
+    .row { display: flex; flex-wrap: wrap; align-items: baseline; gap: .5rem;
+           background: var(--card-2); border: 1px solid var(--line);
+           border-radius: 10px; padding: .5rem .75rem; font-size: .85rem; }
+    .row .sub { color: var(--muted); font-size: .78rem; }
+    .row .acts { margin-left: auto; display: flex; gap: .7rem; }
+    .row a { color: var(--accent); text-decoration: none; font-size: .8rem; }
+    .row a:hover { text-decoration: underline; }
+
     /* Try it */
     .drop { border: 1.5px dashed #333a44; border-radius: 11px; padding: 1.6rem 1rem;
             text-align: center; color: var(--muted); cursor: pointer; transition: .12s; }
@@ -189,7 +202,7 @@
       <button type="button" id="person-cancel" hidden>Cancel</button>
       <span class="meta" id="people-note"></span>
     </div>
-    <div id="people-list" class="recent"></div>
+    <div id="people-list" class="rows"></div>
     <p class="meta" style="margin-top:.6rem">
       Enrol a face by opening a detection below and choosing <em>Who is this?</em> —
       the snapshot is from the camera that will have to recognise them, which a
@@ -207,7 +220,7 @@
       <button type="button" id="zone-draw">Add an area&hellip;</button>
       <span class="meta" id="zone-note"></span>
     </div>
-    <div id="zone-list" class="recent"></div>
+    <div id="zone-list" class="rows"></div>
     <div id="zone-editor" hidden>
       <p class="meta">Click along the edge of the area — three points minimum. An
         object counts where the <em>bottom</em> of its box is: a car is where its
@@ -573,10 +586,10 @@ async function loadPeople() {
     const detail = p.prints
       ? `${p.prints} face${p.prints === 1 ? '' : 's'}, smallest ${p.min_face_w || '?'} px`
       : 'no faces enrolled yet';
-    return `<div class="shot"><div class="cap"><b>${esc(p.name)}</b>` +
-      `<span>${esc(detail)}</span>` +
-      `<span><a href="#" data-edit="${p.id}">rename</a> · ` +
-      `<a href="#" data-del="${p.id}">delete</a></span></div></div>`;
+    return `<div class="row"><b>${esc(p.name)}</b>` +
+      `<span class="sub">${esc(detail)}</span>` +
+      `<span class="acts"><a href="#" data-edit="${p.id}">rename</a>` +
+      `<a href="#" data-del="${p.id}">delete</a></span></div>`;
   }).join('') || '<span class="empty">Nobody enrolled yet.</span>';
 
   const options = peopleCache.map(p =>
@@ -689,6 +702,11 @@ let zoneCameras = [];
 let zoneList = [];
 let zonePoints = [];
 let zoneImage = null;
+// Where recent detections actually stood, as relative ground points. Drawn on
+// the editor so an edge is placed against real positions rather than by eye:
+// three street cars in a row landed within 0.08 of the boundary vertically, and
+// each one was discovered a missed detection at a time.
+let zoneDots = [];
 const zoneCanvas = document.getElementById("zone-canvas");
 const zoneEditor = document.getElementById("zone-editor");
 const zoneNote = document.getElementById("zone-note");
@@ -725,12 +743,12 @@ async function loadZones() {
     // The dropped count is per camera, not per area: the worker counts what it
     // refused, and which shape refused it is not worth the bookkeeping.
     const drops = dropped[z.camera] ? ` · ${dropped[z.camera]} dropped on this camera` : "";
-    return `<div class="shot"><div class="cap">
+    return `<div class="row">
       <b>${esc(z.camera)} · ${esc(z.name)}</b>
-      <span>${esc(rule)}: ${esc(what)}${esc(drops)}</span>
-      <span><a href="#" data-zone-edit="${z.id}">edit</a> ·
+      <span class="sub">${esc(rule)}: ${esc(what)}${esc(drops)}</span>
+      <span class="acts"><a href="#" data-zone-edit="${z.id}">edit</a>
             <a href="#" data-zone-del="${z.id}">delete</a></span>
-    </div></div>`;
+    </div>`;
   }).join("");
 
   document.getElementById("zone-labels").innerHTML = ZONE_LABELS.map((l) =>
@@ -775,9 +793,40 @@ async function openZoneEditor(existing) {
     zoneEditor.hidden = false;
     zoneEditorNote.textContent = "";
     drawZone();
+    loadZoneDots(cameraId).then(drawZone);
   };
   zoneImage.onerror = () => { zoneEditorNote.textContent = "that snapshot has been pruned"; };
   zoneImage.src = "api/snapshots/" + det.snapshot_id;
+}
+
+async function loadZoneDots(cameraId) {
+  // Boxes are in frame pixels and the canvas is the frame, so dividing by the
+  // canvas size gives the same relative point the matcher computes. A camera
+  // switched to a different resolution mid-history would misplace its older
+  // dots; the shapes themselves are unaffected, being relative already.
+  try {
+    const data = await (await fetch(
+      `api/detections?camera=${encodeURIComponent(cameraId)}&limit=200`)).json();
+    zoneDots = (data.detections || [])
+      .filter((d) => Number.isFinite(d.box_x))
+      .map((d) => ({
+        x: (d.box_x + d.box_w / 2) / zoneCanvas.width,
+        y: (d.box_y + d.box_h) / zoneCanvas.height,
+        label: d.label,
+      }));
+  } catch (err) { zoneDots = []; }
+}
+
+// The same ray casting the add-on applies, so the preview and the rule agree.
+function pointInShape(points, x, y) {
+  let inside = false;
+  for (let i = 0, j = points.length - 1; i < points.length; j = i++) {
+    const [xi, yi] = points[i], [xj, yj] = points[j];
+    if ((yi > y) !== (yj > y) && x < xi + ((y - yi) / (yj - yi)) * (xj - xi)) {
+      inside = !inside;
+    }
+  }
+  return inside;
 }
 
 document.getElementById("zone-draw").addEventListener("click", () => openZoneEditor(null));
@@ -827,8 +876,33 @@ function drawZone() {
   strokeShape(ctx, zonePoints, ignoring ? "#e56a6a" : "#5ad19a",
               ignoring ? "rgba(229,106,106,0.25)" : "rgba(90,209,154,0.25)");
 
-  zoneEditorNote.textContent = zonePoints.length < 3
+  // Every recent detection of the object types this area covers, plotted where
+  // it actually stood. Filled means this shape would act on it — kept, for an
+  // include area; dropped, for an ignore one — so dragging an edge shows which
+  // side of it the real traffic falls on before anything is saved.
+  const covered = [...document.querySelectorAll("#zone-labels input:checked")]
+    .map((i) => i.value);
+  const dots = zoneDots.filter((d) => !covered.length || covered.includes(d.label));
+  let acted = 0;
+  const radius = Math.max(3, zoneCanvas.width / 200);
+  for (const dot of dots) {
+    const inside = zonePoints.length >= 3 && pointInShape(zonePoints, dot.x, dot.y);
+    if (inside) acted += 1;
+    ctx.beginPath();
+    ctx.arc(dot.x * zoneCanvas.width, dot.y * zoneCanvas.height, radius, 0, Math.PI * 2);
+    ctx.fillStyle = inside ? (ignoring ? "#e56a6a" : "#5ad19a") : "rgba(255,255,255,0.45)";
+    ctx.fill();
+    ctx.lineWidth = Math.max(1, radius / 3);
+    ctx.strokeStyle = "rgba(0,0,0,0.6)";
+    ctx.stroke();
+  }
+
+  const shape = zonePoints.length < 3
     ? `${zonePoints.length} of 3 points` : `${zonePoints.length} points`;
+  const verdict = dots.length
+    ? ` · ${acted} of ${dots.length} recent detections ${ignoring ? "dropped" : "kept"}`
+    : " · no recent detections of these types to check against";
+  zoneEditorNote.textContent = shape + verdict;
 }
 
 function strokeShape(ctx, points, stroke, fill) {
@@ -852,6 +926,7 @@ function strokeShape(ctx, points, stroke, fill) {
 }
 
 document.getElementById("zone-kind").addEventListener("change", drawZone);
+document.getElementById("zone-labels").addEventListener("change", drawZone);
 document.getElementById("zone-undo").addEventListener("click", () => {
   zonePoints.pop();
   drawZone();
