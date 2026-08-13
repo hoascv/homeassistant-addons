@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.35.0
+
+- **Finishing a challenge's day now leaves you with a line, not just a
+  checkmark.** The toast that used to say "Day done 🎉" now carries a short
+  Stoic quote — Marcus Aurelius, Seneca, Epictetus — alongside the streak,
+  picked so the same one never shows twice in a row.
+- **Clearing every challenge due on a given day gets a bigger moment.** When
+  the last item across *all* of today's challenges gets ticked, a full-screen
+  card replaces the small toast: a heavier confetti burst, a count of how much
+  got done, and its own quote. It only fires on the tick that actually
+  finishes the day, never on the way back down.
+- Completing a routine through the ▶ player now shares this instead of its own
+  separate "Done — streak" toast, so the moment is the same whether you tick
+  the row by hand or count yourself through it.
+
 ## 1.34.0
 
 - **An exercise can now be a routine, and the app counts you through it.** Give

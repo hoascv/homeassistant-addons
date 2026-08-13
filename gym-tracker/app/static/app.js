@@ -32,6 +32,35 @@ function toast(msg) {
 
 const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
 
+// Short enough to read in a toast, plain enough to not need footnotes.
+const STOIC_QUOTES = [
+  ["You have power over your mind — not outside events.", "Marcus Aurelius"],
+  ["Waste no more time arguing what a good man should be. Be one.", "Marcus Aurelius"],
+  ["We suffer more often in imagination than in reality.", "Seneca"],
+  ["Difficulties strengthen the mind, as labor does the body.", "Seneca"],
+  ["He who fears death will never do anything worthy of a living man.", "Seneca"],
+  ["It's not what happens to you, but how you react that matters.", "Epictetus"],
+  ["No man is free who is not master of himself.", "Epictetus"],
+  ["First say to yourself what you would be, then do what you have to do.", "Epictetus"],
+  ["The impediment to action advances action. What stands in the way becomes the way.", "Marcus Aurelius"],
+  ["Every new beginning comes from some other beginning's end.", "Seneca"],
+  ["Wealth consists not in having great possessions, but in having few wants.", "Epictetus"],
+  ["If it is not right, do not do it. If it is not true, do not say it.", "Marcus Aurelius"],
+  ["Man conquers the world by conquering himself.", "Zeno of Citium"],
+  ["While we wait for life, life passes.", "Seneca"],
+  ["Don't explain your philosophy. Embody it.", "Epictetus"],
+  ["The best revenge is to be unlike him who performed the injury.", "Marcus Aurelius"],
+];
+
+let lastQuoteIndex = -1;
+function pickQuote() {
+  if (STOIC_QUOTES.length < 2) return STOIC_QUOTES[0];
+  let i;
+  do { i = Math.floor(Math.random() * STOIC_QUOTES.length); } while (i === lastQuoteIndex);
+  lastQuoteIndex = i;
+  return STOIC_QUOTES[i];
+}
+
 function confetti(count = 90) {
   // Hand-rolled rather than a library: the page is served from an add-on with
   // no CDN access, and this is ~30 lines. Skipped entirely for anyone who has
@@ -86,11 +115,53 @@ function confetti(count = 90) {
 function celebrateDay(challenge) {
   confetti(60);
   const streak = challenge && challenge.streak;
-  toast(streak > 1 ? `Day done — ${streak} day streak 🔥` : "Day done 🎉");
+  const [text, author] = pickQuote();
+  const streakPart = streak > 1 ? ` · ${streak} day streak 🔥` : "";
+  toast(`“${text}” — ${author}${streakPart}`);
+}
+
+// Every challenge due today, fully ticked — the moment the checklist itself
+// can't beat, so it gets the modal rather than the toast the daily one uses.
+function challengesDueToday(list) {
+  return (list || []).filter(
+    (c) =>
+      !c.finished &&
+      !c.not_started &&
+      c.due_today !== false &&
+      (c.items || []).some((i) => !i.archived)
+  );
+}
+
+function allDueChallengesComplete(list) {
+  const due = challengesDueToday(list);
+  return due.length > 0 && due.every(isChallengeComplete);
+}
+
+function celebrateAllDone(list) {
+  const due = challengesDueToday(list);
+  const items = due.reduce((n, c) => n + (c.items || []).filter((i) => !i.archived).length, 0);
+  const el = document.getElementById("celebration");
+  el.classList.add("celebration-grand");
+  el.querySelector(".celebration-emoji").textContent = "⚡";
+  document.getElementById("celebration-title").textContent = "All done for today";
+  el.querySelector(".celebration-name").textContent = "Every box, ticked";
+  el.querySelector(".celebration-stats").textContent =
+    `${due.length} challenge${due.length === 1 ? "" : "s"} · ${items} item${items === 1 ? "" : "s"}`;
+  const [text, author] = pickQuote();
+  const quoteEl = document.getElementById("celebration-quote");
+  quoteEl.textContent = `“${text}” — ${author}`;
+  quoteEl.hidden = false;
+  el.hidden = false;
+  confetti(200);
+  if (!reducedMotion.matches) setTimeout(() => confetti(140), 260);
 }
 
 function celebrateChallenge(view, stats) {
   const el = document.getElementById("celebration");
+  el.classList.remove("celebration-grand");
+  el.querySelector(".celebration-emoji").textContent = "🏆";
+  document.getElementById("celebration-title").textContent = "Challenge complete";
+  document.getElementById("celebration-quote").hidden = true;
   const pct = stats && stats.completion_pct != null ? `${stats.completion_pct}%` : null;
   const lines = [];
   if (stats) {
@@ -104,7 +175,12 @@ function celebrateChallenge(view, stats) {
 }
 
 function dismissCelebration() {
-  document.getElementById("celebration").hidden = true;
+  const el = document.getElementById("celebration");
+  el.hidden = true;
+  el.classList.remove("celebration-grand");
+  const quoteEl = document.getElementById("celebration-quote");
+  quoteEl.hidden = true;
+  quoteEl.textContent = "";
 }
 
 function openSheet(id) { document.getElementById(id).classList.add("open"); }
@@ -734,11 +810,18 @@ document.getElementById("challenge-cards").addEventListener("click", (e) => {
   // the same change back and tell the user.
   const nextDone = !item.done_today;
   const wasComplete = isChallengeComplete(found.challenge);
+  const wasAllDone = allDueChallengesComplete(challengeData);
   applyChallengeToggle(item, nextDone, found.challenge);
   // The tick that finishes the day, not merely any tick, and never on the way
-  // back down — un-ticking is not an achievement.
+  // back down — un-ticking is not an achievement. If that same tick also
+  // finishes every other challenge due today, the bigger moment replaces the
+  // small one rather than stacking after it.
   if (nextDone && !wasComplete && isChallengeComplete(found.challenge)) {
-    celebrateDay(found.challenge);
+    if (!wasAllDone && allDueChallengesComplete(challengeData)) {
+      celebrateAllDone(challengeData);
+    } else {
+      celebrateDay(found.challenge);
+    }
   }
 
   fetchJSON("api/challenge/toggle", {
@@ -2428,6 +2511,7 @@ async function finishRoutine(completed) {
 
   if (completed) cueFinish();
 
+  const wasAllDone = allDueChallengesComplete(challengeData);
   try {
     const res = await fetchJSON(`api/exercises/${exerciseId}/routine/session`, {
       method: "POST",
@@ -2441,12 +2525,19 @@ async function finishRoutine(completed) {
     });
     closeRoutinePlayer();
     if (completed) {
-      toast(res.done ? `Done — ${res.streak} day streak 🔥` : "Routine logged.");
-      if (res.done && !reducedMotion.matches) confetti();
+      await loadChallenge();
+      const found = itemId ? findChallengeItem(itemId) : null;
+      if (res.done && found && !wasAllDone && allDueChallengesComplete(challengeData)) {
+        celebrateAllDone(challengeData);
+      } else if (res.done) {
+        celebrateDay(found ? found.challenge : { streak: res.streak });
+      } else {
+        toast("Routine logged.");
+      }
     } else {
       toast(`Stopped — ${fmtSeconds(elapsed)} logged.`);
+      loadChallenge();
     }
-    loadChallenge();
     refreshWorkoutViews();
   } catch (err) {
     // The workout happened whether or not the server heard about it, so say so

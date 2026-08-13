@@ -556,7 +556,20 @@ input:focus, select:focus { outline: 2px solid var(--accent-soft); border-color:
 }
 .celebration-name { margin: 0.25rem 0 0.4rem; font-size: 1.35rem; }
 .celebration-stats { margin: 0 0 1.25rem; color: var(--text-muted); }
+.celebration-quote {
+  margin: -0.5rem 0 1.25rem; font-size: 0.85rem; font-style: italic;
+  color: var(--text-muted); line-height: 1.4;
+}
+.celebration-quote[hidden] { display: none; }
 .celebration .btn-primary { width: 100%; }
+
+/* The once-a-day "everything is ticked" moment — same card, turned up: a
+   bigger mark and a warm edge, not a different component. */
+.celebration-grand .celebration-card {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.5), 0 0 0 1px color-mix(in srgb, var(--accent) 25%, transparent);
+}
+.celebration-grand .celebration-emoji { font-size: 3.75rem; }
 
 @keyframes celebration-in {
   from { opacity: 0; transform: translateY(14px) scale(0.96); }
