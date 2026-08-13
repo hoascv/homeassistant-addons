@@ -31,9 +31,14 @@ PGBR_CONF=/etc/pgbackrest/pgbackrest.conf
 # reconcile below). Telemetry is off — this is a home host.
 PG_OPTS=(-c shared_preload_libraries=timescaledb -c timescaledb.telemetry_level=off)
 
-psql_super() {
+psql_db() {
+    local db="$1"; shift
     PGPASSWORD="$POSTGRES_PASSWORD" psql -q -v ON_ERROR_STOP=1 \
-        -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" "$@"
+        -h 127.0.0.1 -U "$POSTGRES_USER" -d "$db" "$@"
+}
+
+psql_super() {
+    psql_db "$POSTGRES_DB" "$@"
 }
 
 # A small status file the Add-on Watchdog reads. The watchdog deliberately holds
@@ -151,6 +156,32 @@ SQL
                 && echo "[Pipeline Postgres] pg_hba: allowed replication from 172.30.32.0/23"
         fi
     fi
+
+    # The sensor_test role/database/schema for an external, non-Home-Assistant
+    # timeseries client. The initdb hook (30-init-sensor-db.sh) covers a fresh
+    # install; this covers an add-on that was already running before this
+    # feature shipped — same reasoning as the replication role above, and its
+    # password is set every start so rotating sensor_test_db_password in the
+    # UI actually takes effect.
+    psql_super -v suser="sensor_test" -v spw="$SENSOR_DB_PASSWORD" <<'SQL' \
+        && echo "[Pipeline Postgres] sensor_test role ready" \
+        || echo "[Pipeline Postgres] WARNING: could not set up the sensor_test role"
+SELECT format('CREATE ROLE %I WITH LOGIN PASSWORD %L', :'suser', :'spw')
+ WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = :'suser')\gexec
+SELECT format('ALTER ROLE %I WITH LOGIN PASSWORD %L', :'suser', :'spw')\gexec
+SQL
+
+    if [ "$(psql_super -tAc "SELECT 1 FROM pg_database WHERE datname = 'sensor_db'")" != "1" ]; then
+        psql_super -c 'CREATE DATABASE sensor_db OWNER sensor_test' \
+            && echo "[Pipeline Postgres] sensor_db database created" \
+            || echo "[Pipeline Postgres] WARNING: could not create the sensor_db database"
+    fi
+
+    psql_db sensor_db -c 'CREATE EXTENSION IF NOT EXISTS timescaledb' \
+        -c 'CREATE SCHEMA IF NOT EXISTS sensor AUTHORIZATION sensor_test' \
+        -c "ALTER ROLE sensor_test SET search_path TO sensor, public" \
+        && echo "[Pipeline Postgres] sensor schema ready in sensor_db" \
+        || echo "[Pipeline Postgres] WARNING: could not set up the sensor schema"
 
     [ "$BACKUP_ENABLED" = "true" ] || exit 0
 

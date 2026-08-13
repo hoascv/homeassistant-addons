@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.4.1
+
+- Fixed: on an add-on already running before 1.4.0, the `sensor_test` role,
+  `sensor_db` database and `sensor` schema never appeared — the initdb hook
+  that provisions them only runs against an empty data directory, which an
+  existing install never has. Reconciled on every start instead (like the
+  replication role), so it now also applies to add-ons that were already
+  installed, and rotating `sensor_test_db_password` in the UI takes effect
+  immediately rather than only on a fresh install.
+
 ## 1.4.0
 
 - On first start, provisions a **`sensor_test`** role, a **`sensor_db`**
