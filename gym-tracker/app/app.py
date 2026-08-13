@@ -19,7 +19,7 @@ from flask import Flask, Response, g, jsonify, render_template, request, send_fi
 
 import garmin_client
 
-APP_VERSION = "1.33.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.34.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("GYM_DB_PATH", "/data/gym.db")
 OPTIONS_PATH = os.environ.get("GYM_OPTIONS_PATH", "/data/options.json")
@@ -387,9 +387,44 @@ def init_db():
             created_at TEXT,
             updated_at TEXT,
             -- How this exercise is counted: repetitions, or time held.
-            measure TEXT NOT NULL DEFAULT 'reps'
+            measure TEXT NOT NULL DEFAULT 'reps',
+            -- A routine is an exercise made of timed steps. Derived, never set
+            -- by hand: saving steps raises it, removing the last one clears it.
+            -- It exists so a listing can say "this is a routine" without an
+            -- EXISTS subquery per row.
+            is_routine INTEGER NOT NULL DEFAULT 0,
+            routine_rounds INTEGER NOT NULL DEFAULT 1
         )
         """
+    )
+    # The steps of a routine. Deliberately not a third `measure` value: every
+    # branch on measure in this app and in app.js is written as
+    # `duration ? seconds : reps`, so a third value falls silently into the reps
+    # arm. A routine is `measure = 'duration'` — it is timed, and logs a
+    # duration — and `is_routine` carries the rest.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS routine_steps (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            exercise_id INTEGER NOT NULL REFERENCES exercises(id),
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            -- 'work' or 'rest'. A rest step needs neither a reference nor a name.
+            kind TEXT NOT NULL DEFAULT 'work',
+            seconds INTEGER NOT NULL,
+            -- A work step is *either* a reference to a library exercise —
+            -- reusing its live name and picture, the way a challenge item does —
+            -- or free text. Never both: a column meaning two things is a trap
+            -- for whatever reads it next.
+            step_exercise_id INTEGER REFERENCES exercises(id),
+            label TEXT,
+            created_at TEXT,
+            updated_at TEXT
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_routine_steps_exercise "
+        "ON routine_steps(exercise_id, sort_order)"
     )
     conn.execute(
         """
@@ -626,6 +661,9 @@ TRACKED_TABLES = {
     "challenges": "id",
     "challenge_items": "id",
     "challenge_completions": "id",
+    # Without these a 240-second workout logged by a routine is unexplainable
+    # downstream: you could see the time but not what was actually done.
+    "routine_steps": "id",
     "goal": "id",
     "goal_history": "id",
     "garmin_daily": "day",
@@ -714,6 +752,15 @@ def _migrate_columns(conn):
         if col not in challenge_cols:
             conn.execute(f"ALTER TABLE challenge_items ADD COLUMN {col} {decl}")
     exercise_cols = {row[1] for row in conn.execute("PRAGMA table_info(exercises)")}
+    # Routines, added in 1.34.0. Both carry a non-null default, so the ALTER is
+    # accepted and every existing exercise reads as "not a routine" — which is
+    # what it is. No backfill: nothing before this release had steps.
+    for col, decl in (
+        ("is_routine", "INTEGER NOT NULL DEFAULT 0"),
+        ("routine_rounds", "INTEGER NOT NULL DEFAULT 1"),
+    ):
+        if col not in exercise_cols:
+            conn.execute(f"ALTER TABLE exercises ADD COLUMN {col} {decl}")
     if "measure" not in exercise_cols:
         conn.execute(
             "ALTER TABLE exercises ADD COLUMN measure TEXT NOT NULL DEFAULT 'reps'"
@@ -1717,6 +1764,9 @@ def _active_challenge_items(conn, challenge_id=None):
         "SELECT ci.id, ci.sort_order, ci.item_type, ci.exercise_id, ci.supplement_id, "
         "ci.target_sets, ci.target_reps, ci.target_seconds, ci.dose, ci.label AS stored_label, "
         "ci.challenge_id, ci.joined_on, e.name AS exercise_name, e.measure AS measure, "
+        "e.is_routine, e.routine_rounds, "
+        "(SELECT COALESCE(SUM(rs.seconds), 0) FROM routine_steps rs"
+        " WHERE rs.exercise_id = e.id) * e.routine_rounds AS routine_seconds, "
         "s.name AS supplement_name, i.updated_at AS image_v "
         "FROM challenge_items ci "
         "LEFT JOIN exercises e ON e.id = ci.exercise_id "
@@ -1751,6 +1801,9 @@ def _challenge_membership(conn, challenge_id, challenge=None):
         "ci.target_sets, ci.target_reps, ci.dose, ci.label AS stored_label, ci.challenge_id, "
         "ci.archived, ci.created_at, ci.archived_at, ci.joined_on, ci.target_seconds, "
         "e.name AS exercise_name, e.measure AS measure, s.name AS supplement_name, "
+        "e.is_routine, e.routine_rounds, "
+        "(SELECT COALESCE(SUM(rs.seconds), 0) FROM routine_steps rs"
+        " WHERE rs.exercise_id = e.id) * e.routine_rounds AS routine_seconds, "
         "i.updated_at AS image_v "
         "FROM challenge_items ci "
         "LEFT JOIN exercises e ON e.id = ci.exercise_id "
@@ -1982,14 +2035,45 @@ def _challenge_days(conn, ch, membership=None):
 
 MEASURES = ("reps", "duration")
 
+ROUTINE_STEP_KINDS = ("work", "rest")
+# Bounds, so a typo cannot produce a routine nobody can finish or a timeline the
+# player has to flatten into tens of thousands of entries.
+MAX_ROUTINE_STEPS = 50
+MAX_ROUTINE_ROUNDS = 99
+MAX_STEP_SECONDS = 3600
 
-def _resolve_measure(value, current="reps"):
+
+def _resolve_measure(value, current="reps", is_routine=False):
     value = (value or "").strip().lower()
     if not value:
         return current, None
     if value not in MEASURES:
         return None, f"measure must be one of {', '.join(MEASURES)}"
+    # A routine is a sequence of timed steps and logs a duration; counting one
+    # in reps would leave every target and every logged row meaning the wrong
+    # thing. Remove its steps first if it is really meant to be counted.
+    if is_routine and value != "duration":
+        return None, "a routine is timed; it cannot be counted in reps"
     return value, None
+
+
+def _routine_total_seconds(step_seconds, rounds):
+    """How long a routine takes: the rounds times the sum of its steps.
+
+    Every step runs, including a trailing rest, so the total is always
+    `rounds × round` — 8 rounds of 20s work and 10s rest is 4 minutes exactly.
+    Dropping the last rest would read a little better and make the arithmetic
+    un-checkable.
+    """
+    return int(step_seconds or 0) * max(1, int(rounds or 1))
+
+
+def _routine_target_text(rounds, total_seconds):
+    """'4m · 8 rounds' — what a routine reads as on a challenge card."""
+    if not total_seconds:
+        return None
+    held = _format_seconds(total_seconds)
+    return f"{held} · {rounds} rounds" if rounds and rounds > 1 else held
 
 
 def _format_seconds(seconds):
@@ -2026,9 +2110,16 @@ def _challenge_item_view(r):
     item_type = r["item_type"]
     if item_type == "exercise":
         name = r["exercise_name"] or r["stored_label"]
-        target = _exercise_target_text(
-            r["target_sets"], r["target_reps"], _row_value(r, "target_seconds")
-        )
+        # A routine's target is the routine itself — its steps and rounds — not
+        # the sets and reps a counted exercise carries.
+        if _row_value(r, "is_routine"):
+            target = _routine_target_text(
+                _row_value(r, "routine_rounds", 1), _row_value(r, "routine_seconds")
+            )
+        else:
+            target = _exercise_target_text(
+                r["target_sets"], r["target_reps"], _row_value(r, "target_seconds")
+            )
         label = f"{name}{' · ' + target if target else ''}"
     elif item_type == "supplement":
         name = r["supplement_name"] or r["stored_label"]
@@ -2050,6 +2141,11 @@ def _challenge_item_view(r):
         "target_reps": r["target_reps"],
         "target_seconds": _row_value(r, "target_seconds"),
         "measure": _row_value(r, "measure") or "reps",
+        # Absent from a query that did not join them is simply "not a routine",
+        # so an older call site degrades rather than raising.
+        "is_routine": bool(_row_value(r, "is_routine")),
+        "routine_rounds": _row_value(r, "routine_rounds", 1),
+        "routine_seconds": _row_value(r, "routine_seconds"),
         "dose": r["dose"],
         "name": name,
         "label": label,
@@ -2321,6 +2417,11 @@ def api_exercises():
         dict(r)
         for r in db.execute(
             "SELECT e.id, e.name, e.equipment, e.category, e.is_custom, e.notes, e.measure, "
+            # A correlated subquery rather than a GROUP BY: it leaves the shape
+            # of every existing listing query untouched.
+            "e.is_routine, e.routine_rounds, "
+            "(SELECT COALESCE(SUM(rs.seconds), 0) FROM routine_steps rs"
+            " WHERE rs.exercise_id = e.id) * e.routine_rounds AS routine_seconds, "
             "i.updated_at AS image_v FROM exercises e "
             "LEFT JOIN exercise_images i ON i.exercise_id = e.id "
             "WHERE e.archived = 0 ORDER BY e.equipment ASC, e.name ASC"
@@ -2425,6 +2526,276 @@ def api_add_exercise():
     return jsonify({"status": "created", "id": cur.lastrowid}), 201
 
 
+# --- Routines: an exercise made of timed steps -------------------------------
+
+
+def _routine_steps(conn, exercise_id):
+    """A routine's steps, with each referenced exercise's live name and picture.
+
+    Resolved here rather than in the browser for two reasons: the player must
+    not depend on the exercise cache being loaded, and that cache excludes
+    archived rows — a routine that names an exercise archived later still has to
+    say what the step is. Hence no `archived = 0` filter on the join.
+    """
+    rows = conn.execute(
+        "SELECT rs.*, e.name AS step_name, i.updated_at AS image_v "
+        "FROM routine_steps rs "
+        "LEFT JOIN exercises e ON e.id = rs.step_exercise_id "
+        "LEFT JOIN exercise_images i ON i.exercise_id = rs.step_exercise_id "
+        "WHERE rs.exercise_id = ? ORDER BY rs.sort_order ASC, rs.id ASC",
+        (exercise_id,),
+    ).fetchall()
+    return [
+        {
+            "id": r["id"],
+            "sort_order": r["sort_order"],
+            "kind": r["kind"],
+            "seconds": r["seconds"],
+            "step_exercise_id": r["step_exercise_id"],
+            "name": r["step_name"] or r["label"],
+            "image_v": r["image_v"],
+        }
+        for r in rows
+    ]
+
+
+def _routine_view(conn, row):
+    steps = _routine_steps(conn, row["id"])
+    round_seconds = sum(s["seconds"] for s in steps)
+    rounds = _row_value(row, "routine_rounds", 1) or 1
+    return {
+        "exercise_id": row["id"],
+        "name": row["name"],
+        "is_routine": bool(_row_value(row, "is_routine")),
+        "rounds": rounds,
+        "round_seconds": round_seconds,
+        "total_seconds": _routine_total_seconds(round_seconds, rounds),
+        "steps": steps,
+    }
+
+
+def _clean_routine_steps(conn, exercise_id, raw):
+    """Validate a posted step list. Returns (steps, error).
+
+    Each refusal names the thing that is wrong with it: these arrive from a
+    canvas somebody has just built by hand, and "invalid" would send them back
+    to guess which of ten steps it meant.
+    """
+    if not isinstance(raw, list):
+        return None, "steps must be a list"
+    if len(raw) > MAX_ROUTINE_STEPS:
+        return None, f"a routine can have at most {MAX_ROUTINE_STEPS} steps"
+
+    steps = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            return None, "each step must be an object"
+        kind = (entry.get("kind") or "work").strip().lower()
+        if kind not in ROUTINE_STEP_KINDS:
+            return None, f"a step's kind must be {' or '.join(ROUTINE_STEP_KINDS)}"
+        try:
+            seconds = int(entry.get("seconds"))
+        except (TypeError, ValueError):
+            return None, "a step's seconds must be a number"
+        if not 1 <= seconds <= MAX_STEP_SECONDS:
+            return None, f"a step must last between 1 and {MAX_STEP_SECONDS} seconds"
+
+        step_exercise_id = entry.get("step_exercise_id")
+        label = (entry.get("label") or "").strip()
+        if kind == "rest":
+            # A rest needs no name; calling it anything else invites a step that
+            # says "Rest" twice.
+            step_exercise_id, label = None, ""
+        else:
+            if bool(step_exercise_id) == bool(label):
+                return None, "a work step needs either an exercise or a name, not both"
+            if step_exercise_id:
+                referenced = conn.execute(
+                    "SELECT id, is_routine FROM exercises WHERE id = ?", (step_exercise_id,)
+                ).fetchone()
+                if referenced is None:
+                    return None, "no such exercise for a step"
+                if _row_value(referenced, "is_routine"):
+                    # Nesting would be an unbounded timeline and an unbounded
+                    # recursion in the total.
+                    return None, "a step cannot reference another routine"
+        steps.append({
+            "id": entry.get("id"),
+            "kind": kind,
+            "seconds": seconds,
+            "step_exercise_id": step_exercise_id or None,
+            "label": label or None,
+        })
+    return steps, None
+
+
+@app.route("/api/exercises/<int:exercise_id>/routine")
+def api_get_routine(exercise_id):
+    db = get_db()
+    row = db.execute("SELECT * FROM exercises WHERE id = ?", (exercise_id,)).fetchone()
+    if row is None:
+        return jsonify({"error": "no such exercise"}), 404
+    return jsonify(_routine_view(db, row))
+
+
+@app.route("/api/exercises/<int:exercise_id>/routine", methods=["PUT"])
+def api_save_routine(exercise_id):
+    """Replace a routine's steps and round count, in one transaction.
+
+    The whole list is sent because reordering on a phone is local list
+    manipulation, and N move requests make the order non-atomic — a dropped
+    connection halfway leaves a half-applied reorder.
+
+    But it is *diffed by id* rather than deleted and re-inserted: a rewrite
+    would emit two change-log rows per step on every edit and churn ids the
+    lakehouse has already merged.
+    """
+    data = request.get_json(force=True, silent=True) or {}
+    db = get_db()
+    row = db.execute("SELECT * FROM exercises WHERE id = ?", (exercise_id,)).fetchone()
+    if row is None:
+        return jsonify({"error": "no such exercise"}), 404
+
+    try:
+        rounds = int(data.get("rounds", 1))
+    except (TypeError, ValueError):
+        return jsonify({"error": "rounds must be a number"}), 400
+    if not 1 <= rounds <= MAX_ROUTINE_ROUNDS:
+        return jsonify({"error": f"rounds must be between 1 and {MAX_ROUTINE_ROUNDS}"}), 400
+
+    steps, err = _clean_routine_steps(db, exercise_id, data.get("steps"))
+    if err:
+        return jsonify({"error": err}), 400
+
+    stamp = _now_ts()
+    existing_ids = {
+        r["id"] for r in db.execute(
+            "SELECT id FROM routine_steps WHERE exercise_id = ?", (exercise_id,)
+        )
+    }
+    kept = set()
+    for order, step in enumerate(steps):
+        step_id = step["id"] if step["id"] in existing_ids else None
+        if step_id:
+            kept.add(step_id)
+            db.execute(
+                "UPDATE routine_steps SET sort_order = ?, kind = ?, seconds = ?, "
+                "step_exercise_id = ?, label = ?, updated_at = ? WHERE id = ?",
+                (order, step["kind"], step["seconds"], step["step_exercise_id"],
+                 step["label"], stamp, step_id),
+            )
+        else:
+            db.execute(
+                "INSERT INTO routine_steps (exercise_id, sort_order, kind, seconds, "
+                "step_exercise_id, label, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (exercise_id, order, step["kind"], step["seconds"],
+                 step["step_exercise_id"], step["label"], stamp),
+            )
+    for gone in existing_ids - kept:
+        db.execute("DELETE FROM routine_steps WHERE id = ?", (gone,))
+
+    # Derived, not declared: steps make it a routine, and removing the last one
+    # makes it an ordinary exercise again. A routine is always timed — it logs a
+    # duration — so saving steps also settles the measure.
+    is_routine = 1 if steps else 0
+    if is_routine:
+        db.execute(
+            "UPDATE exercises SET is_routine = 1, routine_rounds = ?, measure = 'duration', "
+            "updated_at = ? WHERE id = ?",
+            (rounds, stamp, exercise_id),
+        )
+    else:
+        db.execute(
+            "UPDATE exercises SET is_routine = 0, routine_rounds = 1, updated_at = ? "
+            "WHERE id = ?",
+            (stamp, exercise_id),
+        )
+    db.commit()
+    fresh = db.execute("SELECT * FROM exercises WHERE id = ?", (exercise_id,)).fetchone()
+    return jsonify(_routine_view(db, fresh))
+
+
+@app.route("/api/exercises/<int:exercise_id>/routine/session", methods=["POST"])
+def api_record_routine_session(exercise_id):
+    """Record a guided run of a routine.
+
+    Finishing ticks the challenge item and logs the workout, so guidance
+    replaces the tap rather than adding a chore to it. Stopping early logs the
+    seconds actually worked and does *not* tick — the effort is real, the day is
+    not done.
+
+    The server stamps the time from its own clock; only the elapsed seconds come
+    from the browser. A phone's clock must not set a timestamp that a heart-rate
+    window is later read back from.
+    """
+    data = request.get_json(force=True, silent=True) or {}
+    db = get_db()
+    exercise = db.execute(
+        "SELECT id, name, is_routine FROM exercises WHERE id = ?", (exercise_id,)
+    ).fetchone()
+    if exercise is None:
+        return jsonify({"error": "no such exercise"}), 404
+    if not _row_value(exercise, "is_routine"):
+        return jsonify({"error": "that exercise is not a routine"}), 400
+
+    try:
+        elapsed = int(data.get("elapsed_seconds"))
+    except (TypeError, ValueError):
+        return jsonify({"error": "elapsed_seconds must be a number"}), 400
+    if not 0 <= elapsed <= 86400:
+        return jsonify({"error": "elapsed_seconds must be between 0 and 86400"}), 400
+
+    completed = bool(data.get("completed"))
+    day = date.today().isoformat()
+
+    item = None
+    if data.get("item_id"):
+        try:
+            item_id = int(data["item_id"])
+        except (TypeError, ValueError):
+            return jsonify({"error": "item_id must be a number"}), 400
+        item = db.execute(
+            "SELECT id, item_type, exercise_id FROM challenge_items "
+            "WHERE id = ? AND archived = 0",
+            (item_id,),
+        ).fetchone()
+        if item is None:
+            return jsonify({"error": "no such challenge item"}), 404
+        # What stops a confused client ticking something else off.
+        if item["exercise_id"] != exercise_id:
+            return jsonify({"error": "that challenge item is not for this routine"}), 400
+
+    if completed and item is not None:
+        _, _, workout_id = _record_completion(db, item, day, duration_sec=elapsed)
+        done = True
+    else:
+        # A partial is logged as a *manual* row on purpose. Marked 'challenge'
+        # it would be replaced by a later completed run and deleted by a later
+        # un-tick — so work somebody genuinely did would disappear because of
+        # something they did afterwards.
+        note = None
+        if not completed:
+            rounds_done = data.get("rounds_done")
+            note = (
+                f"Routine stopped during round {rounds_done}" if rounds_done
+                else "Routine stopped early"
+            )
+        ts, ts_exact = _completion_stamp(day)
+        cur = db.execute(
+            "INSERT INTO workout_logs (ts, exercise_id, duration_sec, notes, source, ts_exact) "
+            "VALUES (?, ?, ?, ?, 'manual', ?)",
+            (ts, exercise_id, elapsed, note, ts_exact),
+        )
+        workout_id = cur.lastrowid
+        done = False
+
+    db.commit()
+    return jsonify({
+        "status": "ok", "done": done, "workout_id": workout_id,
+        "streak": _challenge_streak(db),
+    })
+
+
 @app.route("/api/exercises/<int:exercise_id>", methods=["PUT"])
 def api_update_exercise(exercise_id):
     data = request.get_json(force=True, silent=True) or {}
@@ -2440,7 +2811,8 @@ def api_update_exercise(exercise_id):
         (data.get("category") or "").strip() or None if "category" in data else existing["category"]
     )
     measure, err = _resolve_measure(
-        data.get("measure"), _row_value(existing, "measure") or "reps"
+        data.get("measure"), _row_value(existing, "measure") or "reps",
+        is_routine=bool(_row_value(existing, "is_routine")),
     )
     if err:
         return jsonify({"error": err}), 400
@@ -2467,6 +2839,10 @@ def api_delete_exercise(exercise_id):
         "SELECT 1 FROM workout_logs WHERE exercise_id = ? LIMIT 1", (exercise_id,)
     ).fetchone() or db.execute(
         "SELECT 1 FROM challenge_items WHERE exercise_id = ? AND archived = 0 LIMIT 1", (exercise_id,)
+    ).fetchone() or db.execute(
+        # A step of somebody's routine counts as being used. Without this the
+        # exercise would be hard-deleted and the step left pointing at nothing.
+        "SELECT 1 FROM routine_steps WHERE step_exercise_id = ? LIMIT 1", (exercise_id,)
     ).fetchone()
     if used:
         db.execute(
@@ -3278,6 +3654,71 @@ def api_challenge():
     return jsonify(_challenge_view(db, active[0]))
 
 
+def _completion_stamp(day):
+    """(ts, ts_exact) for ticking `day`.
+
+    Ticking today records the moment; ticking an earlier day cannot know when it
+    happened, so it keeps the day's midday placeholder.
+    """
+    now = datetime.now()
+    today = day == now.date().isoformat()
+    return (now.isoformat(timespec="seconds") if today else f"{day}T12:00:00"), (1 if today else 0)
+
+
+def _record_completion(db, item, day, duration_sec=None, sets=None, reps=None, notes=None):
+    """Tick an item for a day, and log the workout it stands for.
+
+    One place knows the timestamp rule and the workout insert, because two
+    callers need them identical: tapping an item, and finishing a guided
+    routine. Returns (ts, ts_exact, workout_id).
+
+    Idempotent on the workout: replaying replaces the row rather than adding a
+    second one, which is what makes a retried session safe.
+    """
+    ts, ts_exact = _completion_stamp(day)
+    existing = db.execute(
+        "SELECT id FROM challenge_completions WHERE item_id = ? AND day = ?",
+        (item["id"], day),
+    ).fetchone()
+    if existing is None:
+        db.execute(
+            "INSERT INTO challenge_completions (item_id, day, ts) VALUES (?, ?, ?)",
+            (item["id"], day, ts),
+        )
+
+    workout_id = None
+    if item["item_type"] == "exercise" and item["exercise_id"]:
+        db.execute(
+            "DELETE FROM workout_logs WHERE source = 'challenge' AND challenge_item_id = ? "
+            "AND substr(ts, 1, 10) = ?",
+            (item["id"], day),
+        )
+        cur = db.execute(
+            "INSERT INTO workout_logs (ts, exercise_id, sets, reps, duration_sec, notes, "
+            "source, challenge_item_id, ts_exact) VALUES (?, ?, ?, ?, ?, ?, 'challenge', ?, ?)",
+            (ts, item["exercise_id"], sets, reps, duration_sec, notes, item["id"], ts_exact),
+        )
+        workout_id = cur.lastrowid
+    return ts, ts_exact, workout_id
+
+
+def _clear_completion(db, item, day):
+    """Un-tick, and remove the workout the tick created.
+
+    Manual entries are never touched — only rows this app wrote on the user's
+    behalf, which is what `source = 'challenge'` marks.
+    """
+    db.execute(
+        "DELETE FROM challenge_completions WHERE item_id = ? AND day = ?", (item["id"], day)
+    )
+    if item["item_type"] == "exercise" and item["exercise_id"]:
+        db.execute(
+            "DELETE FROM workout_logs WHERE source = 'challenge' AND challenge_item_id = ? "
+            "AND substr(ts, 1, 10) = ?",
+            (item["id"], day),
+        )
+
+
 @app.route("/api/challenge/toggle", methods=["POST"])
 def api_challenge_toggle():
     data = request.get_json(force=True, silent=True) or {}
@@ -3303,42 +3744,18 @@ def api_challenge_toggle():
         "SELECT id FROM challenge_completions WHERE item_id = ? AND day = ?", (item_id, day)
     ).fetchone()
     if existing:
-        db.execute("DELETE FROM challenge_completions WHERE id = ?", (existing["id"],))
+        _clear_completion(db, item, day)
         done = False
     else:
-        # Ticking today records the moment; ticking an earlier day can't know
-        # when it happened, so it keeps the day's midday placeholder.
-        now = datetime.now()
-        today = day == now.date().isoformat()
-        ts = now.isoformat(timespec="seconds") if today else f"{day}T12:00:00"
-        ts_exact = 1 if today else 0
-        db.execute(
-            "INSERT INTO challenge_completions (item_id, day, ts) VALUES (?, ?, ?)",
-            (item_id, day, ts),
+        # An exercise item ticked off also lands in the workout log; a timed one
+        # logs the hold, so the entry means the same thing as one logged by hand.
+        _record_completion(
+            db, item, day,
+            sets=item["target_sets"],
+            reps=item["target_reps"],
+            duration_sec=_row_value(item, "target_seconds"),
         )
         done = True
-
-    # An exercise item ticked off also lands in the workout log (source
-    # 'challenge'); un-ticking removes that auto-created entry so history
-    # stays in sync. Manual workout entries are never touched.
-    if item["item_type"] == "exercise" and item["exercise_id"]:
-        if done:
-            db.execute(
-                "INSERT INTO workout_logs (ts, exercise_id, sets, reps, duration_sec, source, "
-                "challenge_item_id, ts_exact) VALUES (?, ?, ?, ?, ?, 'challenge', ?, ?)",
-                (
-                    ts, item["exercise_id"], item["target_sets"], item["target_reps"],
-                    # A timed exercise logs the hold, so the entry means the
-                    # same thing as one logged by hand.
-                    _row_value(item, "target_seconds"), item_id, ts_exact,
-                ),
-            )
-        else:
-            db.execute(
-                "DELETE FROM workout_logs WHERE source = 'challenge' AND challenge_item_id = ? "
-                "AND substr(ts, 1, 10) = ?",
-                (item_id, day),
-            )
     db.commit()
     return jsonify({"status": "ok", "done": done, "streak": _challenge_streak(db)})
 

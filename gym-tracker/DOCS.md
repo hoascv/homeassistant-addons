@@ -80,6 +80,42 @@ labels, which read *Plank · 1m 30s* or *3 × 45s*.
 (*1×60* for a minute's plank), it's moved across automatically the first time
 this version runs.
 
+### Routines — being counted through it
+
+Some exercises aren't one number. *30 seconds of jumping jacks, 15 seconds' rest,
+45 seconds of plank* is one thing you do, and the app can count you through it.
+
+Press **⏱** on any exercise in the 🏋️ Library to give it steps. Each step is
+either **an exercise** you already have (it borrows the name and picture), **something
+else** you just name, or a **rest**. Set **rounds** to repeat the whole list —
+the **Tabata** button fills in the classic 8 rounds of 20 seconds' work and 10
+seconds' rest, which is the quickest way to see what a routine is.
+
+Every step runs, including a final rest, so the total is always rounds × the
+round: 8 × (20s + 10s) is four minutes exactly.
+
+**Running one.** A routine on a challenge card gets a **▶**. Tap it and the
+screen fills with the countdown, what you're doing now, what's next, and two
+bars — one for the step, one for the whole routine. **Pause**, **Skip** and
+**Stop** are there throughout.
+
+- **Finishing ticks the item and logs the workout**, with the seconds it actually
+  took. The guidance replaces the tap; you don't do both.
+- **Stopping early logs what you did and leaves the item unticked.** The effort
+  is real, so it's kept — but the day isn't done, so it doesn't say it is.
+- Tapping the row itself still ticks by hand, exactly as before.
+
+**Cues.** Three toggles on the start screen — a **flash**, a **sound** and a
+**vibration** at each change, plus a countdown beep for the last three seconds.
+Turn any of them off; the choice is remembered on that device. Two things worth
+knowing on an iPhone: there's no vibration at all (the toggle is simply absent),
+and the ringer switch silences the beeps — so the screen carries it, which is
+why the player keeps your screen awake while it runs.
+
+**If you look away**, the timer keeps going and stays correct — it reads the
+clock rather than counting, so coming back to the app shows the right number
+immediately. It won't replay the beeps you missed while it was in the background.
+
 ### Pictures
 
 Every exercise can have a picture. In the 🏋️ Library, tap the thumbnail beside
@@ -424,6 +460,12 @@ told apart from a caller sending the wrong token without guessing.
   so you can tell a value you entered from one the add-on wrote for you. Each
   entry has the row's current state for an insert or update, and
   `null` for a delete. Apply them in order.
+
+`routine_steps` is in the feed too, which is what makes a routine's workout
+readable downstream: without the steps, a 240-second row is a duration with
+nothing behind it. Note that an abandoned routine is logged as a **manual**
+workout with a note rather than a challenge one, so it survives the item later
+being ticked and un-ticked.
 
 Deletes are in the feed, which matters here: un-ticking a challenge item
 removes both the tick and the workout it created. Watch `full_reload_required`

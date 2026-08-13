@@ -250,6 +250,59 @@
   </div>
 </div>
 
+<!-- Routine builder: the steps an exercise is made of -->
+<div class="sheet-backdrop" id="routine-edit-backdrop">
+  <div class="sheet sheet-full">
+    <h2 id="routine-edit-title">Routine</h2>
+    <p class="sheet-subtext">
+      A routine is a timed sequence — work, rest, work — that the app counts you
+      through. Add steps below, then press ▶ on the exercise to run it.
+    </p>
+
+    <div class="ci-row">
+      <label>Rounds
+        <input type="number" id="routine-rounds" min="1" max="99" value="1">
+      </label>
+      <button type="button" class="btn-secondary" id="routine-tabata">Tabata</button>
+    </div>
+    <p class="challenge-progress" id="routine-summary"></p>
+
+    <ul class="items-list" id="routine-steps-list"></ul>
+
+    <form class="inline-form" id="routine-step-form">
+      <div class="ci-row">
+        <label>Step
+          <select id="routine-step-kind">
+            <option value="exercise">Exercise</option>
+            <option value="text">Something else</option>
+            <option value="rest">Rest</option>
+          </select>
+        </label>
+        <label>Seconds
+          <input type="number" id="routine-step-seconds" min="1" max="3600" value="30">
+        </label>
+      </div>
+      <label id="routine-step-exercise-label">Which exercise
+        <select id="routine-step-exercise"></select>
+      </label>
+      <label id="routine-step-text-label" hidden>Name
+        <input type="text" id="routine-step-text" maxlength="60" placeholder="High knees">
+      </label>
+      <div class="form-actions">
+        <button type="submit" class="btn-secondary full">Add step</button>
+      </div>
+    </form>
+
+    <div class="form-actions">
+      <button type="button" class="btn-secondary" id="routine-preview">Preview</button>
+      <button type="button" class="btn-primary" id="routine-save">Save routine</button>
+    </div>
+    <div class="sheet-actions">
+      <button type="button" class="btn-secondary" id="routine-edit-close">Close</button>
+    </div>
+  </div>
+</div>
+
 <!-- Challenge-items management sheet (typed builder) -->
 <!-- Create / edit a challenge -->
 <div class="sheet-backdrop" id="challenge-edit-backdrop">
@@ -496,6 +549,43 @@
     <h2 class="celebration-name"></h2>
     <p class="celebration-stats"></p>
     <button type="button" class="btn-primary" onclick="dismissCelebration()">Nice</button>
+  </div>
+</div>
+
+<!-- The routine player. Not a .sheet: a sheet is bottom-anchored, scrollable and
+     dismissed by tapping the backdrop, and losing a running timer to a stray
+     thumb is the one thing this must not do. Modelled on .celebration instead —
+     full screen, opaque, dismissed only on purpose. -->
+<div class="player" id="routine-player" hidden role="dialog" aria-modal="true"
+     aria-labelledby="player-name">
+
+  <div class="player-head">
+    <h2 id="player-name"></h2>
+    <span class="pill" id="player-round" hidden></span>
+    <button type="button" class="player-close" id="player-close" aria-label="Close">&times;</button>
+  </div>
+
+  <!-- Ready -->
+  <div id="player-ready">
+    <p class="player-total" id="player-total"></p>
+    <ol class="player-steps" id="player-steps"></ol>
+    <div class="player-cues" id="player-cues"></div>
+    <button type="button" class="btn-primary full" id="player-start">Start</button>
+  </div>
+
+  <!-- Running -->
+  <div id="player-run" hidden>
+    <img class="player-thumb" id="player-thumb" alt="" hidden>
+    <p class="player-step" id="player-step"></p>
+    <p class="player-count" id="player-count" aria-live="off">0</p>
+    <div class="bar"><div class="bar-fill" id="player-step-bar"></div></div>
+    <p class="player-next" id="player-next"></p>
+    <div class="bar player-overall"><div class="bar-fill bar-fill-alt" id="player-overall-bar"></div></div>
+    <div class="player-controls">
+      <button type="button" class="btn-secondary" id="player-skip">Skip</button>
+      <button type="button" class="btn-primary" id="player-pause">Pause</button>
+    </div>
+    <button type="button" class="link-btn player-stop" id="player-stop">Stop</button>
   </div>
 </div>
 

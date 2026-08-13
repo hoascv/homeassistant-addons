@@ -98,9 +98,20 @@ SCHEMAS = {
             "id long, ts string, weight_kg double, body_fat_pct double, "
             "notes string, device string, ts_exact long"
         ),
+        # is_routine/routine_rounds arrived with Gym Tracker 1.34.0 and are 0/1
+        # on everything recorded before it. A routine is an exercise made of
+        # timed steps — see routine_steps.
         "exercises": (
             "id long, name string, equipment string, category string, "
             "is_custom long, archived long, notes string, measure string, "
+            "created_at string, updated_at string, "
+            "is_routine long, routine_rounds long"
+        ),
+        # What a routine is actually made of. Without this a 240-second
+        # workout_logs row is a duration with nothing behind it.
+        "routine_steps": (
+            "id long, exercise_id long, sort_order long, kind string, "
+            "seconds long, step_exercise_id long, label string, "
             "created_at string, updated_at string"
         ),
         "challenges": (

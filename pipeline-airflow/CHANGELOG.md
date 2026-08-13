@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.15.0
+
+- Keeps up with **Gym Tracker 1.34.0**, where an exercise can be a routine — an
+  ordered list of timed steps. The new `routine_steps` table joins the schemas,
+  and `exercises` gains `is_routine` and `routine_rounds`. Without them a
+  240-second workout row is a duration with nothing behind it.
+- Worth knowing when reading workouts across that change: a routine abandoned
+  part-way is logged as a **manual** entry with a note rather than a challenge
+  one, so it is not attached to a `challenge_item_id` the way a completed one is.
+
+
 ## 2.14.0
 
 - Keeps up with **Detection Hub 1.15.0**, where a camera's areas became named

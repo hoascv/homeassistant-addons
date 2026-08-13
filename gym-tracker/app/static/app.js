@@ -647,6 +647,11 @@ function challengeCardHtml(ch) {
           ? `<img class="ci-thumb" src="${exerciseImageUrl(it.exercise_id, it.image_v)}" alt="" loading="lazy">`
           : ""}
         <span class="challenge-label">${escapeHtml(it.label)}</span>
+        ${it.is_routine
+          ? `<button type="button" class="link-btn ci-play" data-exercise="${it.exercise_id}"
+                     data-item="${it.id}" aria-label="Start this routine"
+                     title="Count me through it">▶</button>`
+          : ""}
       </li>`
     )
     .join("");
@@ -705,6 +710,13 @@ document.getElementById("challenge-cards").addEventListener("toggle", (e) => {
 }, true);  // capture: `toggle` does not bubble
 
 document.getElementById("challenge-cards").addEventListener("click", (e) => {
+  // ▶ opens the player rather than ticking: same guard shape as the measure
+  // select in the library, which sits inside a row that is otherwise tappable.
+  const play = e.target.closest(".ci-play");
+  if (play) {
+    openRoutinePlayer(Number(play.dataset.exercise), Number(play.dataset.item));
+    return;
+  }
   const el = e.target.closest(".challenge-item");
   if (!el) return;
   const found = findChallengeItem(Number(el.dataset.id));
@@ -1667,14 +1679,21 @@ async function loadExercises() {
             </button>
             <div class="ex-main">
               <div class="ex-name">${escapeHtml(ex.name)}</div>
-              ${ex.category ? `<div class="ex-cat">${escapeHtml(ex.category)}</div>` : ""}
+              ${ex.is_routine
+                ? `<div class="ex-cat">${escapeHtml(fmtSeconds(ex.routine_seconds))} · ${ex.routine_rounds} rounds</div>`
+                : ex.category ? `<div class="ex-cat">${escapeHtml(ex.category)}</div>` : ""}
             </div>
             <div class="exercise-actions">
               <select class="ex-measure" data-id="${ex.id}" aria-label="How this exercise is counted"
-                      title="Counted in repetitions, or timed">
+                      ${ex.is_routine ? "disabled" : ""}
+                      title="${ex.is_routine
+                        ? "A routine is timed — remove its steps to count it in reps"
+                        : "Counted in repetitions, or timed"}">
                 <option value="reps" ${ex.measure === "duration" ? "" : "selected"}>reps</option>
                 <option value="duration" ${ex.measure === "duration" ? "selected" : ""}>time</option>
               </select>
+              <button type="button" class="link-btn ex-routine" data-id="${ex.id}"
+                      aria-label="Steps" title="Build a timed routine">⏱</button>
               <button type="button" class="link-btn ex-log-btn" data-id="${ex.id}">Log</button>
               <button type="button" class="link-btn ex-edit" data-id="${ex.id}" aria-label="Edit">✎</button>
               <button type="button" class="list-del ex-del" data-id="${ex.id}" aria-label="Remove">✕</button>
@@ -1739,6 +1758,11 @@ document.getElementById("exercises-groups").addEventListener("click", async (e) 
     }
     input.dataset.exerciseId = photo.dataset.id;
     input.click();
+    return;
+  }
+  const routine = e.target.closest(".ex-routine");
+  if (routine) {
+    openRoutineEditor(Number(routine.dataset.id));
     return;
   }
   const del = e.target.closest(".ex-del");
@@ -1964,13 +1988,22 @@ document.getElementById("workout-form").addEventListener("submit", async (e) => 
   } catch (err) { toast(err.message); }
 });
 
+// Mirrors _format_seconds in app.py: 60 -> "60s", 90 -> "1m 30s", 240 -> "4m".
+function fmtSeconds(seconds) {
+  const total = Math.max(0, Math.round(seconds));
+  if (total < 60) return `${total}s`;
+  const minutes = Math.floor(total / 60);
+  const rest = total % 60;
+  return rest ? `${minutes}m ${rest}s` : `${minutes}m`;
+}
+
 function workoutSummary(w) {
   const bits = [];
   if (w.sets != null && w.reps != null) bits.push(`${w.sets}×${w.reps}`);
   else if (w.reps != null) bits.push(`${w.reps} reps`);
   else if (w.sets != null) bits.push(`${w.sets} sets`);
   if (w.weight_kg != null) bits.push(`@ ${w.weight_kg} kg`);
-  if (w.duration_sec != null) bits.push(`${w.duration_sec}s`);
+  if (w.duration_sec != null) bits.push(fmtSeconds(w.duration_sec));
   // Heart rate arrives later, once the watch has uploaded, so it is simply
   // absent until then rather than shown as a zero.
   if (w.hr_avg != null) {
@@ -2072,6 +2105,561 @@ function renderRecentWorkouts(rows) {
     )
     .join("");
 }
+
+
+// --- Routine player ---------------------------------------------------------
+// A routine is an exercise made of timed steps, and this walks you through them.
+//
+// The one thing that has to be right is time. A phone locks its screen and
+// throttles timers, so nothing here counts ticks — elapsed is always derived
+// from the wall clock, which means the display is correct the instant the tab
+// comes back rather than however far behind the interval fell.
+
+let playerRoutine = null;     // the routine being played
+let playerItemId = null;      // the challenge item to tick, if it came from one
+let playerTimeline = [];      // steps × rounds, flattened, with ms offsets
+let playerTotalMs = 0;
+let playerTimer = null;
+let playerStartedAt = 0;      // Date.now() when Start was pressed
+let playerPausedTotal = 0;    // accumulated paused ms
+let playerPausedAt = null;    // Date.now() while paused, else null
+let playerLastIndex = -1;     // which step was on screen last tick
+let playerLastShown = -1;     // which second was on screen last tick
+let playerFinished = false;
+let playerAudio = null;
+
+// Per-device, not per-account: this phone has a speaker, that laptop does not.
+// Same try/catch shape as the tab memory, because ingress can run without
+// storage and remembering a preference is not worth failing over.
+let playerCues = { visual: true, sound: true, vibrate: true };
+const PLAYER_CUES_KEY = "gym.routine.cues";
+try {
+  const saved = JSON.parse(localStorage.getItem(PLAYER_CUES_KEY) || "null");
+  if (saved) playerCues = Object.assign(playerCues, saved);
+} catch (e) { /* no storage; the defaults are fine */ }
+
+// iOS Safari has no vibration at all, so the toggle is hidden rather than
+// offered as a switch that does nothing.
+const CAN_VIBRATE = typeof navigator.vibrate === "function";
+
+const playerEl = document.getElementById("routine-player");
+
+function playerElapsedMs() {
+  return (playerPausedAt ?? Date.now()) - playerStartedAt - playerPausedTotal;
+}
+
+// Flatten the steps into the run that will actually happen, once, on Start.
+// Every step runs including a trailing rest, so the total is rounds × round.
+function buildTimeline(routine) {
+  const timeline = [];
+  let at = 0;
+  for (let round = 1; round <= routine.rounds; round += 1) {
+    for (const step of routine.steps) {
+      const ms = step.seconds * 1000;
+      timeline.push({
+        round,
+        kind: step.kind,
+        name: step.kind === "rest" ? "Rest" : (step.name || "Work"),
+        seconds: step.seconds,
+        imageUrl: step.step_exercise_id && step.image_v
+          ? exerciseImageUrl(step.step_exercise_id, step.image_v) : null,
+        startMs: at,
+        endMs: at + ms,
+      });
+      at += ms;
+    }
+  }
+  return timeline;
+}
+
+function stepIndexAt(ms) {
+  for (let i = 0; i < playerTimeline.length; i += 1) {
+    if (ms < playerTimeline[i].endMs) return i;
+  }
+  return playerTimeline.length - 1;
+}
+
+// --- cues --------------------------------------------------------------------
+
+function playerBeep(freq, ms, when = 0) {
+  if (!playerCues.sound || !playerAudio) return;
+  try {
+    const start = playerAudio.currentTime + when;
+    const osc = playerAudio.createOscillator();
+    const gain = playerAudio.createGain();
+    // Sine, not square: a square wave through a phone speaker is unpleasant.
+    osc.type = "sine";
+    osc.frequency.value = freq;
+    // Ramped rather than switched, or each tone ends in an audible click.
+    gain.gain.setValueAtTime(0.0001, start);
+    gain.gain.exponentialRampToValueAtTime(0.14, start + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, start + ms / 1000);
+    osc.connect(gain).connect(playerAudio.destination);
+    osc.start(start);
+    osc.stop(start + ms / 1000 + 0.02);
+  } catch (e) { /* audio is a bonus, never a reason to stop the workout */ }
+}
+
+function playerBuzz(pattern) {
+  if (!playerCues.vibrate || !CAN_VIBRATE) return;
+  try { navigator.vibrate(pattern); } catch (e) { /* ignore */ }
+}
+
+function playerFlash() {
+  if (!playerCues.visual || reducedMotion.matches) return;
+  playerEl.classList.remove("is-flash");
+  void playerEl.offsetWidth;   // restart the animation
+  playerEl.classList.add("is-flash");
+}
+
+function cueStep(step) {
+  playerFlash();
+  if (step.kind === "rest") {
+    playerBeep(440, 0.2);
+    playerBuzz([60]);
+  } else {
+    playerBeep(660, 0.12);
+    playerBeep(990, 0.12, 0.13);
+    playerBuzz([120]);
+  }
+}
+
+function cueFinish() {
+  playerBeep(660, 0.15);
+  playerBeep(880, 0.15, 0.16);
+  playerBeep(1180, 0.3, 0.32);
+  playerBuzz([60, 60, 60]);
+}
+
+function renderCueToggles() {
+  const host = document.getElementById("player-cues");
+  const cues = [
+    ["visual", "Flash"],
+    ["sound", "Sound"],
+    ...(CAN_VIBRATE ? [["vibrate", "Vibrate"]] : []),
+  ];
+  host.innerHTML = cues.map(([key, label]) =>
+    `<button type="button" class="player-cue" data-cue="${key}"
+             aria-pressed="${playerCues[key]}">${label}</button>`).join("");
+}
+
+document.getElementById("player-cues").addEventListener("click", (e) => {
+  const btn = e.target.closest("button[data-cue]");
+  if (!btn) return;
+  const key = btn.dataset.cue;
+  playerCues[key] = !playerCues[key];
+  btn.setAttribute("aria-pressed", String(playerCues[key]));
+  try { localStorage.setItem(PLAYER_CUES_KEY, JSON.stringify(playerCues)); } catch (err) { /* ignore */ }
+});
+
+// --- opening -----------------------------------------------------------------
+
+async function openRoutinePlayer(exerciseId, itemId = null) {
+  try {
+    playerRoutine = await fetchJSON(`api/exercises/${exerciseId}/routine`);
+  } catch (err) { toast(err.message); return; }
+  if (!playerRoutine.steps.length) { toast("That routine has no steps yet."); return; }
+
+  playerItemId = itemId;
+  playerFinished = false;
+  document.getElementById("player-name").textContent = playerRoutine.name;
+  document.getElementById("player-total").textContent =
+    `${playerRoutine.rounds} round${playerRoutine.rounds === 1 ? "" : "s"} · ` +
+    `${fmtSeconds(playerRoutine.total_seconds)}`;
+  document.getElementById("player-steps").innerHTML = playerRoutine.steps.map((s) =>
+    `<li class="${s.kind}">${escapeHtml(s.kind === "rest" ? "Rest" : (s.name || "Work"))}` +
+    ` · ${fmtSeconds(s.seconds)}</li>`).join("");
+  renderCueToggles();
+
+  document.getElementById("player-ready").hidden = false;
+  document.getElementById("player-run").hidden = true;
+  document.getElementById("player-round").hidden = true;
+  playerEl.classList.remove("is-work", "is-rest", "is-ending");
+  playerEl.hidden = false;
+}
+
+function closeRoutinePlayer() {
+  stopPlayerTimer();
+  releaseWakeLock();
+  playerEl.hidden = true;
+  playerEl.classList.remove("is-work", "is-rest", "is-ending", "is-flash");
+  playerRoutine = null;
+  playerItemId = null;
+}
+
+// --- the run -----------------------------------------------------------------
+
+document.getElementById("player-start").addEventListener("click", () => {
+  // The AudioContext is created here, inside the click, because that press is
+  // the user gesture iOS requires to unlock audio — and there is no second
+  // chance once the routine is running.
+  try {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (Ctx && !playerAudio) playerAudio = new Ctx();
+    if (playerAudio && playerAudio.state === "suspended") playerAudio.resume();
+  } catch (e) { playerAudio = null; }
+
+  playerTimeline = buildTimeline(playerRoutine);
+  playerTotalMs = playerTimeline[playerTimeline.length - 1].endMs;
+  playerStartedAt = Date.now();
+  playerPausedTotal = 0;
+  playerPausedAt = null;
+  playerLastIndex = -1;
+  playerLastShown = -1;
+  playerFinished = false;
+
+  document.getElementById("player-ready").hidden = true;
+  document.getElementById("player-run").hidden = false;
+  document.getElementById("player-round").hidden = false;
+  document.getElementById("player-pause").textContent = "Pause";
+
+  requestWakeLock();
+  cueStep(playerTimeline[0]);
+  playerLastIndex = 0;
+  tickPlayer();
+  playerTimer = setInterval(tickPlayer, 200);
+});
+
+function stopPlayerTimer() {
+  if (playerTimer) clearInterval(playerTimer);
+  playerTimer = null;
+}
+
+function tickPlayer() {
+  if (!playerTimeline.length || playerFinished) return;
+  const elapsed = playerElapsedMs();
+
+  if (elapsed >= playerTotalMs) { finishRoutine(true); return; }
+
+  const index = stepIndexAt(elapsed);
+  const step = playerTimeline[index];
+  const remaining = Math.ceil((step.endMs - elapsed) / 1000);
+
+  if (index !== playerLastIndex) {
+    // Only cue a transition we actually witnessed. A jump of more than one
+    // step, or a boundary already well past, means the tab was asleep — firing
+    // the beeps it missed would be four tones at once, which is worse than the
+    // silence it replaces.
+    const justCrossed = elapsed - step.startMs < 1500;
+    if (index === playerLastIndex + 1 && justCrossed) cueStep(step);
+    playerLastIndex = index;
+    playerLastShown = -1;
+    renderPlayerStep(step, index);
+  }
+
+  if (remaining !== playerLastShown) {
+    playerLastShown = remaining;
+    document.getElementById("player-count").textContent = String(remaining);
+    playerEl.classList.toggle("is-ending", remaining <= 3);
+    // The last three seconds of a step, so you can look up in time.
+    if (remaining <= 3 && remaining > 0) playerBeep(880, 0.06);
+    // Driven at 1 Hz: .bar-fill eases over 400ms and looks laggy if pushed
+    // faster than it can settle.
+    document.getElementById("player-overall-bar").style.width =
+      `${Math.min(100, (elapsed / playerTotalMs) * 100)}%`;
+  }
+  document.getElementById("player-step-bar").style.width =
+    `${Math.min(100, ((elapsed - step.startMs) / (step.endMs - step.startMs)) * 100)}%`;
+}
+
+function renderPlayerStep(step, index) {
+  document.getElementById("player-step").textContent = step.name;
+  document.getElementById("player-round").textContent =
+    `Round ${step.round} of ${playerRoutine.rounds}`;
+  const next = playerTimeline[index + 1];
+  document.getElementById("player-next").textContent =
+    next ? `next · ${next.name} ${fmtSeconds(next.seconds)}` : "last one";
+
+  const thumb = document.getElementById("player-thumb");
+  if (step.imageUrl) {
+    thumb.src = step.imageUrl;
+    thumb.hidden = false;
+  } else {
+    thumb.hidden = true;
+  }
+  playerEl.classList.toggle("is-work", step.kind === "work");
+  playerEl.classList.toggle("is-rest", step.kind === "rest");
+}
+
+document.getElementById("player-pause").addEventListener("click", (e) => {
+  if (playerPausedAt === null) {
+    playerPausedAt = Date.now();
+    e.currentTarget.textContent = "Resume";
+  } else {
+    playerPausedTotal += Date.now() - playerPausedAt;
+    playerPausedAt = null;
+    e.currentTarget.textContent = "Pause";
+  }
+});
+
+document.getElementById("player-skip").addEventListener("click", () => {
+  const step = playerTimeline[stepIndexAt(playerElapsedMs())];
+  if (!step) return;
+  // Skipping moves the clock, not an index, so elapsed stays the single source
+  // of truth and the logged duration stays honest about the wall clock.
+  playerStartedAt -= step.endMs - playerElapsedMs();
+  tickPlayer();
+});
+
+document.getElementById("player-stop").addEventListener("click", () => {
+  if (!confirm("Stop here? The time you did is logged, but the item is not ticked.")) return;
+  finishRoutine(false);
+});
+
+document.getElementById("player-close").addEventListener("click", () => {
+  if (playerTimer && !playerFinished) {
+    if (!confirm("Stop here? The time you did is logged, but the item is not ticked.")) return;
+    finishRoutine(false);
+    return;
+  }
+  closeRoutinePlayer();
+});
+
+async function finishRoutine(completed) {
+  if (playerFinished) return;
+  playerFinished = true;
+  stopPlayerTimer();
+  releaseWakeLock();
+
+  const elapsed = Math.round(Math.min(playerElapsedMs(), playerTotalMs) / 1000);
+  const step = playerTimeline[stepIndexAt(playerElapsedMs())];
+  const exerciseId = playerRoutine.exercise_id;
+  const itemId = playerItemId;
+
+  if (completed) cueFinish();
+
+  try {
+    const res = await fetchJSON(`api/exercises/${exerciseId}/routine/session`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        item_id: itemId,
+        elapsed_seconds: Math.max(0, elapsed),
+        completed,
+        rounds_done: step ? step.round : null,
+      }),
+    });
+    closeRoutinePlayer();
+    if (completed) {
+      toast(res.done ? `Done — ${res.streak} day streak 🔥` : "Routine logged.");
+      if (res.done && !reducedMotion.matches) confetti();
+    } else {
+      toast(`Stopped — ${fmtSeconds(elapsed)} logged.`);
+    }
+    loadChallenge();
+    refreshWorkoutViews();
+  } catch (err) {
+    // The workout happened whether or not the server heard about it, so say so
+    // rather than closing as though it had been recorded.
+    toast(`Couldn't save that session: ${err.message}`);
+  }
+}
+
+// Wall-clock elapsed means the display is simply correct when the tab returns;
+// there is no catch-up to run. Never auto-pause on hidden — a timed routine has
+// to keep running while you look away from the phone.
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden && playerTimer) tickPlayer();
+  if (!document.hidden) requestWakeLock();
+});
+
+// --- keeping the screen on ---------------------------------------------------
+// Needs a secure context, which ingress inherits from Home Assistant: over
+// HTTPS this keeps the screen alive through a plank, over plain HTTP it simply
+// does not exist and nothing breaks. Deliberately not the looping-muted-video
+// hack, which burns battery and stops working every other browser release.
+let wakeLockHandle = null;
+
+async function requestWakeLock() {
+  if (!("wakeLock" in navigator) || wakeLockHandle || !playerTimer) return;
+  try {
+    wakeLockHandle = await navigator.wakeLock.request("screen");
+    wakeLockHandle.addEventListener("release", () => { wakeLockHandle = null; });
+  } catch (e) { wakeLockHandle = null; }
+}
+
+function releaseWakeLock() {
+  if (!wakeLockHandle) return;
+  try { wakeLockHandle.release(); } catch (e) { /* ignore */ }
+  wakeLockHandle = null;
+}
+
+
+// --- Routine editor ---------------------------------------------------------
+// The steps an exercise is made of. Unlike the challenge-items sheet, which
+// saves on every change, this edits a local draft and PUTs once: a reorder is N
+// changes, and a half-applied reorder is a mess to recover from.
+
+let routineDraft = null;      // {exercise_id, name, rounds, steps: [...]}
+
+async function openRoutineEditor(exerciseId) {
+  let routine;
+  try { routine = await fetchJSON(`api/exercises/${exerciseId}/routine`); }
+  catch (err) { toast(err.message); return; }
+
+  routineDraft = {
+    exercise_id: exerciseId,
+    name: routine.name,
+    rounds: routine.rounds || 1,
+    steps: routine.steps.map((s) => ({
+      id: s.id, kind: s.kind, seconds: s.seconds,
+      step_exercise_id: s.step_exercise_id,
+      label: s.step_exercise_id ? null : s.name,
+      name: s.name,
+    })),
+  };
+  document.getElementById("routine-edit-title").textContent = `Routine · ${routine.name}`;
+  document.getElementById("routine-rounds").value = routineDraft.rounds;
+  populateRoutineExercisePicker(exerciseId);
+  renderRoutineDraft();
+  openSheet("routine-edit-backdrop");
+}
+
+function populateRoutineExercisePicker(exerciseId) {
+  // Routines are excluded, and so is this exercise: a routine inside a routine
+  // is an unbounded timeline, and the server refuses it anyway.
+  const select = document.getElementById("routine-step-exercise");
+  select.innerHTML = exerciseGroups.map((g) => {
+    const options = g.exercises
+      .filter((ex) => !ex.is_routine && ex.id !== exerciseId)
+      .map((ex) => `<option value="${ex.id}">${escapeHtml(ex.name)}</option>`)
+      .join("");
+    return options ? `<optgroup label="${escapeHtml(g.equipment)}">${options}</optgroup>` : "";
+  }).join("");
+}
+
+function renderRoutineDraft() {
+  const host = document.getElementById("routine-steps-list");
+  const steps = routineDraft.steps;
+  host.innerHTML = steps.length
+    ? steps.map((s, i) => `
+        <li>
+          <span class="ci-label">${escapeHtml(s.kind === "rest" ? "Rest" : (s.name || s.label || "Work"))}
+            · ${escapeHtml(fmtSeconds(s.seconds))}</span>
+          <button type="button" class="link-btn rs-up" data-idx="${i}"
+                  aria-label="Move up" ${i === 0 ? "disabled" : ""}>▲</button>
+          <button type="button" class="link-btn rs-down" data-idx="${i}"
+                  aria-label="Move down" ${i === steps.length - 1 ? "disabled" : ""}>▼</button>
+          <button type="button" class="list-del rs-del" data-idx="${i}" aria-label="Remove">✕</button>
+        </li>`).join("")
+    : '<li class="empty-state">No steps yet — add one below.</li>';
+
+  const round = steps.reduce((sum, s) => sum + s.seconds, 0);
+  const rounds = routineDraft.rounds;
+  document.getElementById("routine-summary").textContent = steps.length
+    ? `${rounds} round${rounds === 1 ? "" : "s"} · ${fmtSeconds(round)} each · ${fmtSeconds(round * rounds)} total`
+    : "";
+}
+
+document.getElementById("routine-rounds").addEventListener("input", (e) => {
+  if (!routineDraft) return;
+  routineDraft.rounds = Math.min(99, Math.max(1, parseInt(e.target.value, 10) || 1));
+  renderRoutineDraft();
+});
+
+// The step type decides which field is asked for; a rest needs neither.
+document.getElementById("routine-step-kind").addEventListener("change", (e) => {
+  const kind = e.target.value;
+  document.getElementById("routine-step-exercise-label").hidden = kind !== "exercise";
+  document.getElementById("routine-step-text-label").hidden = kind !== "text";
+  document.getElementById("routine-step-seconds").value = kind === "rest" ? 15 : 30;
+});
+
+document.getElementById("routine-step-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  if (!routineDraft) return;
+  const kind = document.getElementById("routine-step-kind").value;
+  const seconds = parseInt(document.getElementById("routine-step-seconds").value, 10);
+  if (!seconds || seconds < 1) { toast("How many seconds?"); return; }
+
+  if (kind === "rest") {
+    routineDraft.steps.push({ kind: "rest", seconds, step_exercise_id: null, label: null });
+  } else if (kind === "exercise") {
+    const id = parseInt(document.getElementById("routine-step-exercise").value, 10);
+    if (!id) { toast("Pick an exercise."); return; }
+    const chosen = exerciseById(id);
+    routineDraft.steps.push({
+      kind: "work", seconds, step_exercise_id: id, label: null,
+      name: chosen ? chosen.name : "Work",
+    });
+  } else {
+    const label = document.getElementById("routine-step-text").value.trim();
+    if (!label) { toast("Give the step a name."); return; }
+    routineDraft.steps.push({ kind: "work", seconds, step_exercise_id: null, label, name: label });
+    document.getElementById("routine-step-text").value = "";
+  }
+  renderRoutineDraft();
+});
+
+// Arrows rather than drag-and-drop: HTML5 dragging does not work on touch, and
+// a pointer-events drag inside a scrolling sheet is a lot of fragile code with
+// no test harness here to catch it breaking.
+document.getElementById("routine-steps-list").addEventListener("click", (e) => {
+  const btn = e.target.closest("button[data-idx]");
+  if (!btn || !routineDraft) return;
+  const idx = Number(btn.dataset.idx);
+  const steps = routineDraft.steps;
+  if (btn.classList.contains("rs-del")) steps.splice(idx, 1);
+  else if (btn.classList.contains("rs-up") && idx > 0) {
+    [steps[idx - 1], steps[idx]] = [steps[idx], steps[idx - 1]];
+  } else if (btn.classList.contains("rs-down") && idx < steps.length - 1) {
+    [steps[idx], steps[idx + 1]] = [steps[idx + 1], steps[idx]];
+  }
+  renderRoutineDraft();
+});
+
+// The canonical interval workout, and the quickest way to see what a routine is.
+document.getElementById("routine-tabata").addEventListener("click", () => {
+  if (!routineDraft) return;
+  routineDraft.rounds = 8;
+  routineDraft.steps = [
+    { kind: "work", seconds: 20, step_exercise_id: null, label: "Work", name: "Work" },
+    { kind: "rest", seconds: 10, step_exercise_id: null, label: null },
+  ];
+  document.getElementById("routine-rounds").value = 8;
+  renderRoutineDraft();
+});
+
+async function saveRoutineDraft() {
+  return fetchJSON(`api/exercises/${routineDraft.exercise_id}/routine`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      rounds: routineDraft.rounds,
+      steps: routineDraft.steps.map((s) => ({
+        id: s.id, kind: s.kind, seconds: s.seconds,
+        step_exercise_id: s.step_exercise_id, label: s.label,
+      })),
+    }),
+  });
+}
+
+document.getElementById("routine-save").addEventListener("click", async () => {
+  if (!routineDraft) return;
+  try {
+    await saveRoutineDraft();
+    closeSheet("routine-edit-backdrop");
+    toast(routineDraft.steps.length ? "Routine saved." : "Routine cleared.");
+    loadExercises();
+    loadChallenge();
+  } catch (err) { toast(err.message); }
+});
+
+// Saved first, because the player reads the routine back from the server —
+// previewing something that only exists in the browser would run the old one.
+document.getElementById("routine-preview").addEventListener("click", async () => {
+  if (!routineDraft || !routineDraft.steps.length) { toast("Add a step first."); return; }
+  try {
+    await saveRoutineDraft();
+    closeSheet("routine-edit-backdrop");
+    loadExercises();
+    openRoutinePlayer(routineDraft.exercise_id, null);
+  } catch (err) { toast(err.message); }
+});
+
+document.getElementById("routine-edit-close").addEventListener("click", () => {
+  closeSheet("routine-edit-backdrop");
+});
 
 // --- Reminders -------------------------------------------------------------
 

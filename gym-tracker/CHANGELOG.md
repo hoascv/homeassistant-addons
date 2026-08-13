@@ -1,5 +1,39 @@
 # Changelog
 
+## 1.34.0
+
+- **An exercise can now be a routine, and the app counts you through it.** Give
+  one steps in the 🏋️ Library — *30s jumping jacks, 15s rest, 45s plank* — set a
+  round count, and press **▶** on its challenge card. The screen fills with the
+  countdown, what you are doing, what is next, and a bar for the step and one for
+  the whole thing. A step borrows an exercise you already have, with its name and
+  picture, or is just something you type; rests need neither.
+- **Finishing ticks the item and logs the workout**, with the seconds it actually
+  took rather than the seconds it was designed to take. The guidance replaces the
+  tap — you do not do both. Tapping the row still ticks by hand.
+- **Stopping halfway logs what you did and leaves the item unticked.** The effort
+  was real so it is kept; the day was not finished so nothing claims it was. It is
+  logged as a manual entry on purpose: as a challenge entry a later un-tick would
+  delete it, and work you genuinely did would vanish because of something you did
+  afterwards.
+- **A flash, a sound and a vibration** at every change, plus a countdown beep for
+  the last three seconds. Each is a toggle, remembered per device. On an iPhone
+  there is no vibration at all so that toggle is absent, and the ringer switch
+  silences the beeps — which is why the player holds the screen awake while it
+  runs.
+- **The timer reads the clock rather than counting.** Look away, take a call, let
+  the screen dim: coming back shows the right number immediately instead of
+  however far behind the app fell — and it will not replay the beeps it missed
+  while it was in the background.
+- The **Tabata** button fills in 8 rounds of 20 seconds' work and 10 seconds'
+  rest, which is the fastest way to see what a routine is. Every step runs
+  including the last rest, so the total is always rounds × the round.
+- Durations everywhere now read as *4m* rather than *240s*.
+- Fixed alongside: deleting an exercise that is only used as a step in somebody's
+  routine now archives it rather than hard-deleting it and leaving the step
+  pointing at nothing.
+- Needs `pipeline-airflow` 2.15.0, which carries the new table.
+
 ## 1.33.0
 
 - **The challenges that owe you something today come first.** With several
