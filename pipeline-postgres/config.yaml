@@ -1,5 +1,5 @@
 name: "Pipeline Postgres"
-version: "1.4.1"
+version: "1.5.0"
 slug: "pipeline-postgres"
 description: "PostgreSQL 16 + TimescaleDB for the data-pipeline stack (also hosts Airflow's metadata database)"
 url: "https://github.com/hoascv/homeassistant-addons/tree/main/pipeline-postgres"
@@ -23,6 +23,7 @@ options:
   postgres_db: "pipeline"
   airflow_db_password: "changeme"
   sensor_test_db_password: "FbgaLYpHqkNHG6DkwFXZ"
+  hoas_admin_password: "master"
   replication_user: "replicator"
   replication_password: "changeme"
   # Off by default on purpose: switching it on turns on archive_mode, and from
@@ -39,6 +40,7 @@ schema:
   postgres_db: "str"
   airflow_db_password: "password"
   sensor_test_db_password: "password"
+  hoas_admin_password: "password?"
   replication_user: "str"
   replication_password: "password"
   backup_enabled: "bool"

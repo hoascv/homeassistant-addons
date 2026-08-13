@@ -11,6 +11,7 @@ export AIRFLOW_DB_PASSWORD="$(jq -r '.airflow_db_password' "$OPTIONS")"
 # Consumed by the initdb hook (30-init-sensor-db.sh) on first init only.
 export SENSOR_DB_PASSWORD="$(jq -r '.sensor_test_db_password' "$OPTIONS")"
 
+ADMIN_DB_PASSWORD="$(jq -r '.hoas_admin_password // ""' "$OPTIONS")"
 REPL_USER="$(jq -r '.replication_user // "replicator"' "$OPTIONS")"
 REPL_PASSWORD="$(jq -r '.replication_password // ""' "$OPTIONS")"
 BACKUP_ENABLED="$(jq -r '.backup_enabled // false' "$OPTIONS")"
@@ -132,6 +133,22 @@ fi
     psql_super -c 'CREATE EXTENSION IF NOT EXISTS timescaledb' \
         && echo "[Pipeline Postgres] TimescaleDB extension ready in $POSTGRES_DB" \
         || echo "[Pipeline Postgres] WARNING: could not enable TimescaleDB in $POSTGRES_DB"
+
+    # A dedicated superuser role for external DB-admin tools (pgAdmin, DBeaver,
+    # psql from a workstation, ...), separate from postgres_user so those
+    # tools don't need the pipeline app's own login. Optional: only created
+    # when hoas_admin_password is set. Reconciled every start, same reasoning
+    # as the replication role below — rotating the password in the UI
+    # actually takes effect.
+    if [ -n "$ADMIN_DB_PASSWORD" ]; then
+        psql_super -v auser="hoas" -v apw="$ADMIN_DB_PASSWORD" <<'SQL' \
+            && echo "[Pipeline Postgres] hoas admin role ready" \
+            || echo "[Pipeline Postgres] WARNING: could not set up the hoas admin role"
+SELECT format('CREATE ROLE %I WITH LOGIN SUPERUSER PASSWORD %L', :'auser', :'apw')
+ WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = :'auser')\gexec
+SELECT format('ALTER ROLE %I WITH LOGIN SUPERUSER PASSWORD %L', :'auser', :'apw')\gexec
+SQL
+    fi
 
     # A replication role, so a standby can stream. Created if absent, and its
     # password set every start so changing the option actually takes effect —

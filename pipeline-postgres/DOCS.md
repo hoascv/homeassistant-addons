@@ -25,6 +25,9 @@ until you want table names instead of paths, or a standby.
   **`sensor_db`** database (owned by that role) with a **`sensor`** schema,
   and enables TimescaleDB in it — for an external, non-Home-Assistant client
   to write timeseries data into.
+- Optionally provisions a **`hoas`** superuser role, for connecting a
+  DB-admin tool to the whole instance without using the pipeline app's own
+  credentials.
 - Stores all data in the add-on's persistent volume (`/data/pgdata`), so it
   survives restarts and updates.
 
@@ -39,12 +42,19 @@ until you want table names instead of paths, or a standby.
   used by the external timeseries client (see below). Unlike the other
   passwords on this page, this one is re-applied on every start, so rotating
   it here takes effect on the next restart.
+- **hoas_admin_password**: optional. Leave blank and no admin role is created.
+  Set it and the add-on creates (or updates) a **`hoas`** role with
+  `SUPERUSER`, reapplied every start just like `sensor_test_db_password`.
 
 > **postgres_user**/**postgres_password**/**postgres_db** and
 > **airflow_db_password** are applied **only on the first start** (when the
 > data directory is empty). To change them afterwards you must either use SQL
-> (`ALTER ROLE … PASSWORD …`) or reset the add-on's data. **sensor_test_db_password**
-> is the exception — see below, it's reconciled on every start.
+> (`ALTER ROLE … PASSWORD …`) or reset the add-on's data.
+> **sensor_test_db_password** and **hoas_admin_password** are the exception —
+> both are reconciled on every start.
+
+> **Security:** `hoas` is a full superuser, equivalent to `postgres_user`. Set
+> a strong password before exposing this add-on beyond your own LAN.
 
 ## TimescaleDB
 
@@ -87,6 +97,15 @@ the main pipeline database:
 CREATE TABLE readings (ts timestamptz NOT NULL, sensor text, value double precision);
 SELECT create_hypertable('readings', 'ts');
 ```
+
+## Admin access (`hoas`)
+
+Set **hoas_admin_password** to get a `hoas` role with `SUPERUSER` — full
+access to every database in the instance (`pipeline`, `airflow`, `sensor_db`,
+anything else you create), independent of `postgres_user`. Meant for pointing
+a DB-admin GUI or a workstation `psql` at the instance without sharing the
+pipeline app's own login. Connect the same way as any other client (see
+**Connecting** below); leave the option blank to not create it.
 
 ## Backups and point-in-time recovery
 

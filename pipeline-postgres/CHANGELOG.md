@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.5.0
+
+- New **`hoas`** superuser role for external DB-admin tools (pgAdmin, DBeaver,
+  a workstation `psql`, ...), separate from `postgres_user` so those tools
+  don't need the pipeline app's own credentials. Off unless
+  **hoas_admin_password** is set; reconciled every start like the replication
+  role, so rotating the password in the UI takes effect on the next restart.
+
 ## 1.4.1
 
 - Fixed: on an add-on already running before 1.4.0, the `sensor_test` role,
