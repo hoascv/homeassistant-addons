@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.4.0
+
+- On first start, provisions a **`sensor_test`** role, a **`sensor_db`**
+  database (owned by that role, TimescaleDB enabled) and a **`sensor`** schema
+  inside it, for an external, non-Home-Assistant client to store timeseries
+  data. New **sensor_test_db_password** option, same first-start-only caveat
+  as `airflow_db_password`.
+
 ## 1.3.1
 
 - Documentation fixes. Documented **`replication_user`** (default `replicator`),

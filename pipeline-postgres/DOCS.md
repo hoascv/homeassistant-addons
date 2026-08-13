@@ -21,6 +21,10 @@ until you want table names instead of paths, or a standby.
   aggregates and compression on time-series data.
 - On first start only, provisions a separate **`airflow`** role and database that
   the Pipeline Airflow add-on uses for its metadata.
+- On first start only, provisions a **`sensor_test`** role, a **`sensor_db`**
+  database (owned by that role) with a **`sensor`** schema, and enables
+  TimescaleDB in it — for an external, non-Home-Assistant client to write
+  timeseries data into.
 - Stores all data in the add-on's persistent volume (`/data/pgdata`), so it
   survives restarts and updates.
 
@@ -31,8 +35,10 @@ until you want table names instead of paths, or a standby.
 - **postgres_db**: the main pipeline database name (default `pipeline`).
 - **airflow_db_password**: password for the auto-created `airflow` role. Set the
   **same value** in the Pipeline Airflow add-on's `airflow_db_password`.
+- **sensor_test_db_password**: password for the auto-created `sensor_test` role,
+  used by the external timeseries client (see below).
 
-> The user, databases and passwords are applied **only on the first start** (when
+> The users, databases and passwords are applied **only on the first start** (when
 > the data directory is empty). To change them afterwards you must either use SQL
 > (`ALTER ROLE … PASSWORD …`) or reset the add-on's data.
 
@@ -56,6 +62,26 @@ Notes:
   the add-on log for `TimescaleDB extension ready`.
 - Other databases you create yourself need their own
   `CREATE EXTENSION timescaledb;`.
+
+## External timeseries client (`sensor_test`)
+
+For a client outside Home Assistant that needs its own timeseries store, the
+add-on provisions, on first start only:
+
+- a role **`sensor_test`**, login password from **sensor_test_db_password**
+- a database **`sensor_db`**, owned by that role, with TimescaleDB enabled
+- a schema **`sensor`** inside it, owned by that role (its default
+  `search_path`, so unqualified table names resolve there)
+
+Connect the same way as any other client (see **Connecting** below) — there is
+no extra network restriction for this role, so any host that can reach port
+5432 with the right password can use it. Create hypertables the same way as in
+the main pipeline database:
+
+```sql
+CREATE TABLE readings (ts timestamptz NOT NULL, sensor text, value double precision);
+SELECT create_hypertable('readings', 'ts');
+```
 
 ## Backups and point-in-time recovery
 

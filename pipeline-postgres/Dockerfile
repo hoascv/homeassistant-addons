@@ -19,12 +19,15 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends timescaledb-2-postgresql-16 \
     && rm -rf /var/lib/apt/lists/*
 
-# Both run once, on first database init: Airflow's metadata DB/role, then the
-# TimescaleDB extension in the main pipeline database.
+# All three run once, on first database init: Airflow's metadata DB/role, the
+# TimescaleDB extension in the main pipeline database, then the sensor_test
+# role/database/schema for the external timeseries consumer.
 COPY init-airflow-db.sh /docker-entrypoint-initdb.d/10-init-airflow-db.sh
 COPY init-timescaledb.sh /docker-entrypoint-initdb.d/20-init-timescaledb.sh
+COPY init-sensor-db.sh /docker-entrypoint-initdb.d/30-init-sensor-db.sh
 COPY run.sh /run.sh
 RUN chmod a+x /run.sh /docker-entrypoint-initdb.d/10-init-airflow-db.sh \
-    /docker-entrypoint-initdb.d/20-init-timescaledb.sh
+    /docker-entrypoint-initdb.d/20-init-timescaledb.sh \
+    /docker-entrypoint-initdb.d/30-init-sensor-db.sh
 
 ENTRYPOINT [ "/run.sh" ]

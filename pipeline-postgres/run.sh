@@ -8,6 +8,8 @@ export POSTGRES_PASSWORD="$(jq -r '.postgres_password' "$OPTIONS")"
 export POSTGRES_DB="$(jq -r '.postgres_db' "$OPTIONS")"
 # Consumed by the initdb hook (10-init-airflow-db.sh) on first init only.
 export AIRFLOW_DB_PASSWORD="$(jq -r '.airflow_db_password' "$OPTIONS")"
+# Consumed by the initdb hook (30-init-sensor-db.sh) on first init only.
+export SENSOR_DB_PASSWORD="$(jq -r '.sensor_test_db_password' "$OPTIONS")"
 
 REPL_USER="$(jq -r '.replication_user // "replicator"' "$OPTIONS")"
 REPL_PASSWORD="$(jq -r '.replication_password // ""' "$OPTIONS")"
