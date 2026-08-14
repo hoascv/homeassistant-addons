@@ -17,12 +17,16 @@ async function fetchJSON(url, opts) {
 }
 
 let toastTimer = null;
+// 2600ms was tuned for short, glanceable text ("Set logged."). A stoic quote
+// runs three or four times as long, so the on-screen time scales with the
+// message rather than every toast racing the same fixed clock.
 function toast(msg) {
   const el = document.getElementById("toast");
   el.textContent = msg;
   el.hidden = false;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { el.hidden = true; }, 2600);
+  const duration = Math.min(7000, Math.max(2600, msg.length * 60));
+  toastTimer = setTimeout(() => { el.hidden = true; }, duration);
 }
 
 // --- Celebrations -----------------------------------------------------------

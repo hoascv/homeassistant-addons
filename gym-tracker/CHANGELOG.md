@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.35.1
+
+- **The quote toast was gone before it could be read.** Toasts now stay up
+  longer the more there is to read, instead of every message racing the same
+  fixed 2.6s clock — a short one still clears quickly, a full quote gets up to
+  7s.
+- Fixed alongside: `APP_VERSION` in `app.py` had not been bumped with 1.35.0,
+  so the app's own version endpoint still reported 1.34.0.
+
 ## 1.35.0
 
 - **Finishing a challenge's day now leaves you with a line, not just a
