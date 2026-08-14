@@ -15,9 +15,6 @@ Personal Home Assistant add-on repository.
   event the moment something appears, and keeps the history for the pipeline.
   Optionally puts a **name** to the people it sees, if your camera shows faces
   big enough — it has a check that tells you. amd64 only.
-- **[Pulse Runner](pulse-runner/DOCS.md)** — an original rhythm
-  precision-platformer: tap to jump, dodge hazards, build your own levels.
-  Not a copy of any commercial game — same genre, original name and assets.
 - **[Add-on Watchdog](addon-watchdog/DOCS.md)** — whether the add-ons here are
   actually working, not merely running: a status page plus a sensor per add-on,
   with a probe that catches a live container around a dead service. It also
