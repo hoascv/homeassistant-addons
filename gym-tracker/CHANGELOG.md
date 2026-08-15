@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.35.2
+
+- **The daily-completion quote toast stays up 2x as long** — up to 14s for a
+  full quote plus a streak line, instead of racing the same up-to-7s clock
+  every other toast in the app uses. Scoped to that one message: `toast()`
+  gained an opt-in `multiplier`, so "Set logged.", error messages, and
+  everything else keep their existing, shorter timing.
+
 ## 1.35.1
 
 - **The quote toast was gone before it could be read.** Toasts now stay up

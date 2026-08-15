@@ -19,13 +19,16 @@ async function fetchJSON(url, opts) {
 let toastTimer = null;
 // 2600ms was tuned for short, glanceable text ("Set logged."). A stoic quote
 // runs three or four times as long, so the on-screen time scales with the
-// message rather than every toast racing the same fixed clock.
-function toast(msg) {
+// message rather than every toast racing the same fixed clock. `multiplier`
+// is an escape hatch for a specific caller that needs longer than the normal
+// formula gives it (see celebrateDay) without changing the clock every other
+// toast in the app races against.
+function toast(msg, { multiplier = 1 } = {}) {
   const el = document.getElementById("toast");
   el.textContent = msg;
   el.hidden = false;
   clearTimeout(toastTimer);
-  const duration = Math.min(7000, Math.max(2600, msg.length * 60));
+  const duration = Math.min(7000, Math.max(2600, msg.length * 60)) * multiplier;
   toastTimer = setTimeout(() => { el.hidden = true; }, duration);
 }
 
@@ -121,7 +124,9 @@ function celebrateDay(challenge) {
   const streak = challenge && challenge.streak;
   const [text, author] = pickQuote();
   const streakPart = streak > 1 ? ` · ${streak} day streak 🔥` : "";
-  toast(`“${text}” — ${author}${streakPart}`);
+  // 2x the normal clock — even at 1.35.1's up-to-7s cap, a full quote plus a
+  // streak line was still gone before some people finished reading it.
+  toast(`“${text}” — ${author}${streakPart}`, { multiplier: 2 });
 }
 
 // Every challenge due today, fully ticked — the moment the checklist itself
