@@ -97,6 +97,17 @@ class Lifecycle:
             self.last_error = f"MinIO bucket: {err}"
             self.log(self.last_error)
             return None
+
+        err = uploader.ensure_lifecycle(
+            client, self.options["minio_bucket"], self.options["minio_prefix"],
+            self.options.get("datalake_retention_days", 7),
+        )
+        if err:
+            # Not fatal: uploads can proceed without an expiry rule in place —
+            # losing automatic cleanup costs storage, not correctness, and
+            # isn't worth blocking on.
+            self.log(f"MinIO lifecycle rule: {err}")
+
         self.client = client
         return client
 

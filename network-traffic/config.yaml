@@ -1,5 +1,5 @@
 name: "Network Traffic Monitor"
-version: "0.1.0"
+version: "0.2.0"
 slug: "network-traffic"
 description: "Full packet capture from the Home Assistant host, landed in the datalake for later investigation"
 url: "https://github.com/hoascv/homeassistant-addons/tree/main/network-traffic"
@@ -65,6 +65,13 @@ options:
   minio_secret_key: "changeme"
   minio_bucket: "raw"
   minio_prefix: "network_traffic"
+  # An S3 lifecycle (expiration) rule kept on the bucket, scoped to this
+  # add-on's own prefix — MinIO deletes old captures on its own schedule
+  # rather than this add-on tracking and deleting objects itself. 7 days is a
+  # week of full packet capture, which for most home networks is enough to
+  # investigate something noticed a few days late without keeping it forever.
+  # 0 disables expiration (keep everything).
+  datalake_retention_days: 7
   # Included in each uploaded object's key. Empty means the container
   # hostname, which is enough to tell captures apart if this add-on is ever
   # installed on more than one host.
@@ -81,5 +88,6 @@ schema:
   minio_secret_key: "password"
   minio_bucket: "str"
   minio_prefix: "str"
+  datalake_retention_days: "int(0,3650)"
   capture_label: "str?"
   restrict_to_user_ids: "str?"

@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.2.0
+
+- Added `datalake_retention_days` (default 7): an S3 lifecycle rule kept on
+  MinIO's `raw` bucket, scoped to this add-on's own prefix, so old captures
+  expire on MinIO's own schedule instead of accumulating forever. `0`
+  disables it. `retention_files` already bounded the local buffer before
+  upload; nothing previously bounded how long uploaded data sat in the
+  datalake itself, and continuous full packet capture left unbounded there
+  grows without limit.
+- The rule is merged into whatever lifecycle configuration already exists on
+  the bucket, touching only the rule carrying this add-on's own ID — the
+  `raw` bucket is shared with the trackers' own archived exports, and this
+  never overwrites their configuration.
+
 ## 0.1.0
 
 - First release. Runs `tcpdump` against the Home Assistant host's network,

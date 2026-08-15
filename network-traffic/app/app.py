@@ -51,6 +51,7 @@ def load_options():
         "minio_secret_key": "changeme",
         "minio_bucket": "raw",
         "minio_prefix": "network_traffic",
+        "datalake_retention_days": 7,
         "capture_label": "",
         "restrict_to_user_ids": "",
     }

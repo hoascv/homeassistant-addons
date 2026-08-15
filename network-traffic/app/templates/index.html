@@ -96,6 +96,8 @@
     <dt>Local retention</dt><dd>{{ options.retention_files }} files</dd>
     <dt>Snap length</dt><dd>{{ options.snap_length }} {{ "(full packet)" if options.snap_length == 0 else "bytes" }}</dd>
     <dt>MinIO target</dt><dd>{{ options.minio_endpoint }}/{{ options.minio_bucket }}/{{ options.minio_prefix }}</dd>
+    <dt>Datalake retention</dt>
+    <dd>{{ (options.datalake_retention_days ~ " days") if options.datalake_retention_days else "kept forever" }}</dd>
   </dl>
 </div>
 

@@ -86,6 +86,15 @@ in MinIO without the source pcap backing it up.
   these credentials — this add-on will create it if missing.
 - **minio_prefix** (default `network_traffic`): the key prefix under the
   bucket.
+- **datalake_retention_days** (default 7): an S3 lifecycle (expiration) rule
+  kept on the bucket, scoped to `minio_prefix` — MinIO deletes captures older
+  than this on its own schedule, so the datalake doesn't grow forever under
+  continuous full packet capture. `0` disables expiration and keeps
+  everything. Scoped to this add-on's own prefix only: the `raw` bucket is
+  shared with the trackers' own archived exports, and this never touches
+  their rules. As with any S3-style lifecycle rule, expiration isn't instant
+  at the exact day boundary — MinIO's own ILM scanner runs periodically, so
+  expect deletion within roughly a day of the threshold, not to the second.
 - **capture_label** (default empty, meaning the container hostname): included
   in every object's key, useful if this add-on ever runs on more than one
   host writing into the same bucket.

@@ -65,6 +65,62 @@ def ensure_bucket(client, bucket):
         return str(exc)
 
 
+def ensure_lifecycle(client, bucket, prefix, retention_days):
+    """Keep an S3 expiration rule on the bucket, scoped to this add-on's own
+    prefix, so MinIO deletes old captures on its own schedule instead of this
+    add-on tracking and deleting objects itself.
+
+    `retention_files`/the local janitor loop only bound the on-disk buffer
+    before upload; nothing else bounds how long data sits in the datalake, and
+    continuous packet capture left unbounded there grows forever. A lifecycle
+    rule is the right layer for that — MinIO's own ILM scanner does the
+    deleting, and it survives this add-on being stopped or reinstalled.
+
+    The bucket's lifecycle configuration is bucket-wide, not per-prefix, and
+    `raw` is shared with the trackers' own archived exports — so this reads
+    whatever rules already exist, replaces only the one carrying this add-on's
+    own ID, and writes the whole set back rather than clobbering anyone
+    else's. `retention_days <= 0` removes this add-on's rule (kept forever),
+    deleting the bucket's lifecycle configuration entirely if that was the
+    only rule left, since PutBucketLifecycleConfiguration rejects an empty
+    rule list.
+
+    Returns an error string, or None. Never raises: a failure here costs
+    automatic cleanup, not correctness, and should not block uploads.
+    """
+    rule_id = f"network-traffic-{prefix}-expiry"
+    try:
+        existing = client.get_bucket_lifecycle_configuration(Bucket=bucket)
+        rules = existing.get("Rules", [])
+    except ClientError as exc:
+        code = str(exc.response.get("Error", {}).get("Code", ""))
+        if code != "NoSuchLifecycleConfiguration":
+            return str(exc)
+        rules = []
+    except BotoCoreError as exc:
+        return str(exc)
+
+    rules = [rule for rule in rules if rule.get("ID") != rule_id]
+    if retention_days and retention_days > 0:
+        rules.append({
+            "ID": rule_id,
+            "Filter": {"Prefix": f"{prefix}/"},
+            "Status": "Enabled",
+            "Expiration": {"Days": int(retention_days)},
+        })
+
+    try:
+        if rules:
+            client.put_bucket_lifecycle_configuration(
+                Bucket=bucket, LifecycleConfiguration={"Rules": rules},
+            )
+        else:
+            client.delete_bucket_lifecycle(Bucket=bucket)
+    except (ClientError, BotoCoreError) as exc:
+        return str(exc)
+    return None
+
+
 def resolve_label(capture_label):
     """An empty capture_label option means the container hostname — enough
     to tell captures apart if this add-on is ever installed on more than one

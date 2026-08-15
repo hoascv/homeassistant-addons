@@ -71,6 +71,7 @@ def test_lifecycle_uploads_completed_rotation_and_cleans_up(tmp_path, monkeypatc
     monkeypatch.setattr(extract, "extract_jsonl", lambda pcap_path, jsonl_path, timeout=120: (5, None))
     monkeypatch.setattr(uploader, "make_client", lambda *a, **k: object())
     monkeypatch.setattr(uploader, "ensure_bucket", lambda client, bucket: None)
+    monkeypatch.setattr(uploader, "ensure_lifecycle", lambda *a, **k: None)
 
     uploaded = []
 
@@ -92,6 +93,39 @@ def test_lifecycle_uploads_completed_rotation_and_cleans_up(tmp_path, monkeypatc
     assert uploaded == [str(done)]
     assert not done.exists()  # deleted after a successful upload
     assert active.exists()  # still the active file, left alone
+
+
+def test_lifecycle_upload_proceeds_even_if_the_retention_rule_fails(tmp_path, monkeypatch):
+    """A failed lifecycle-rule call costs automatic cleanup, not correctness
+    — it must not block the upload it has nothing to do with."""
+    monkeypatch.setattr(capture, "PCAP_DIR", str(tmp_path))
+
+    now = time.time()
+    done = tmp_path / "capture-20260815T000000Z.pcap"
+    active = tmp_path / "capture-20260815T000100Z.pcap"
+    _touch(done, now - 100)
+    _touch(active, now)
+
+    monkeypatch.setattr(extract, "extract_jsonl", lambda pcap_path, jsonl_path, timeout=120: (5, None))
+    monkeypatch.setattr(uploader, "make_client", lambda *a, **k: object())
+    monkeypatch.setattr(uploader, "ensure_bucket", lambda client, bucket: None)
+    monkeypatch.setattr(uploader, "ensure_lifecycle", lambda *a, **k: "MinIO does not support ILM")
+    monkeypatch.setattr(
+        uploader, "upload_pair",
+        lambda client, bucket, pcap_path, jsonl_path, prefix, label: (("x.pcap", "x.jsonl"), None),
+    )
+
+    options = {
+        "retention_files": 10, "rotate_seconds": 300,
+        "minio_endpoint": "http://x", "minio_access_key": "a", "minio_secret_key": "b",
+        "minio_bucket": "raw", "minio_prefix": "network_traffic", "capture_label": "host",
+        "datalake_retention_days": 7,
+    }
+    life = lifecycle.Lifecycle(options, log=lambda *_: None)
+    life.process_once()
+
+    assert life.uploaded_count == 1
+    assert life.client is not None
 
 
 def test_lifecycle_leaves_files_in_place_when_extract_fails(tmp_path, monkeypatch):

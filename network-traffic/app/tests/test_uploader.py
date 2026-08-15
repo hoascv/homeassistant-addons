@@ -4,6 +4,7 @@ add-on is the first in the repository to talk to MinIO outside Airflow, so
 there is no existing double for it to reuse.
 """
 import boto3
+from botocore.exceptions import ClientError
 from moto import mock_aws
 
 import uploader
@@ -71,3 +72,82 @@ def test_upload_pair_reports_error_without_raising(tmp_path):
     )
     assert keys is None
     assert err
+
+
+@mock_aws
+def test_ensure_lifecycle_creates_an_expiration_rule():
+    client = boto3.client("s3", region_name="us-east-1")
+    client.create_bucket(Bucket="raw")
+
+    err = uploader.ensure_lifecycle(client, "raw", "network_traffic", 7)
+
+    assert err is None
+    rules = client.get_bucket_lifecycle_configuration(Bucket="raw")["Rules"]
+    assert len(rules) == 1
+    assert rules[0]["Filter"]["Prefix"] == "network_traffic/"
+    assert rules[0]["Expiration"]["Days"] == 7
+    assert rules[0]["Status"] == "Enabled"
+
+
+@mock_aws
+def test_ensure_lifecycle_updates_its_own_rule_without_touching_others():
+    client = boto3.client("s3", region_name="us-east-1")
+    client.create_bucket(Bucket="raw")
+    client.put_bucket_lifecycle_configuration(
+        Bucket="raw",
+        LifecycleConfiguration={"Rules": [{
+            "ID": "gym-tracker-expiry",
+            "Filter": {"Prefix": "gym_tracker/"},
+            "Status": "Enabled",
+            "Expiration": {"Days": 30},
+        }]},
+    )
+
+    uploader.ensure_lifecycle(client, "raw", "network_traffic", 7)
+    uploader.ensure_lifecycle(client, "raw", "network_traffic", 14)  # a later change of mind
+
+    rules = client.get_bucket_lifecycle_configuration(Bucket="raw")["Rules"]
+    assert len(rules) == 2
+    ours = next(r for r in rules if r["Filter"]["Prefix"] == "network_traffic/")
+    theirs = next(r for r in rules if r["Filter"]["Prefix"] == "gym_tracker/")
+    assert ours["Expiration"]["Days"] == 14
+    assert theirs["Expiration"]["Days"] == 30  # untouched
+
+
+@mock_aws
+def test_ensure_lifecycle_zero_days_removes_only_our_rule():
+    client = boto3.client("s3", region_name="us-east-1")
+    client.create_bucket(Bucket="raw")
+    client.put_bucket_lifecycle_configuration(
+        Bucket="raw",
+        LifecycleConfiguration={"Rules": [{
+            "ID": "gym-tracker-expiry",
+            "Filter": {"Prefix": "gym_tracker/"},
+            "Status": "Enabled",
+            "Expiration": {"Days": 30},
+        }]},
+    )
+    uploader.ensure_lifecycle(client, "raw", "network_traffic", 7)
+
+    err = uploader.ensure_lifecycle(client, "raw", "network_traffic", 0)
+
+    assert err is None
+    rules = client.get_bucket_lifecycle_configuration(Bucket="raw")["Rules"]
+    assert len(rules) == 1
+    assert rules[0]["Filter"]["Prefix"] == "gym_tracker/"
+
+
+@mock_aws
+def test_ensure_lifecycle_zero_days_deletes_configuration_if_nothing_left():
+    client = boto3.client("s3", region_name="us-east-1")
+    client.create_bucket(Bucket="raw")
+    uploader.ensure_lifecycle(client, "raw", "network_traffic", 7)
+
+    err = uploader.ensure_lifecycle(client, "raw", "network_traffic", 0)
+
+    assert err is None
+    try:
+        client.get_bucket_lifecycle_configuration(Bucket="raw")
+        assert False, "expected NoSuchLifecycleConfiguration"
+    except ClientError as exc:
+        assert exc.response["Error"]["Code"] == "NoSuchLifecycleConfiguration"
