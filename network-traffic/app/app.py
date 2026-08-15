@@ -118,10 +118,15 @@ def _report_status():
     """
     cap = _capture.status() if _capture else {}
     life = _lifecycle.status() if _lifecycle else {}
-    ok = bool(cap.get("running"))
-    details = []
-    if not ok:
-        details.append("tcpdump is not running")
+    # A pause is a deliberate operator action, not a fault — the same
+    # distinction ignore_stopped draws for a boot:manual add-on the watchdog
+    # finds stopped on purpose. Reporting it as degraded would train whoever
+    # paused this to ignore the alert the next time it fires for a real crash.
+    if cap.get("paused"):
+        ok, details = True, ["capture paused"]
+    else:
+        ok = bool(cap.get("running"))
+        details = [] if ok else ["tcpdump is not running"]
     if life.get("last_error"):
         details.append(life["last_error"])
     status.write_status(ok, "; ".join(details) or "capturing", metrics={**cap, **life})
@@ -173,10 +178,58 @@ def api_status():
 def api_health():
     """What the Add-on Watchdog's probe hits — not `/`, because the
     dashboard answers perfectly well with a dead tcpdump process behind it.
+
+    A pause counts as healthy: it is a deliberate stop, not tcpdump having
+    died, and reporting it as degraded would be an alert someone would
+    quickly learn to ignore.
     """
-    ok = bool(_capture and _capture.status().get("running"))
+    cap = _capture.status() if _capture else {}
+    if cap.get("paused"):
+        return jsonify({"ok": True, "detail": "capture paused"}), 200
+    ok = bool(cap.get("running"))
     detail = "capturing" if ok else "tcpdump is not running"
     return jsonify({"ok": ok, "detail": detail}), (200 if ok else 503)
+
+
+@app.route("/api/pause", methods=["POST"])
+def api_pause():
+    """What the dashboard's Pause button calls. Stops tcpdump and keeps it
+    stopped — including across a restart — until /api/resume is called.
+    """
+    if _capture:
+        _capture.pause()
+    return jsonify({"paused": True})
+
+
+@app.route("/api/resume", methods=["POST"])
+def api_resume():
+    if _capture:
+        _capture.resume()
+    return jsonify({"paused": False})
+
+
+@app.route("/api/datalake-usage")
+def api_datalake_usage():
+    """What the dashboard's usage tile and the Clear button's confirmation
+    prompt are populated from."""
+    if not _lifecycle:
+        return jsonify({"count": None, "bytes": None, "error": "not ready yet"}), 503
+    count, total_bytes, err = _lifecycle.datalake_usage()
+    return jsonify({"count": count, "bytes": total_bytes, "error": err})
+
+
+@app.route("/api/clear-datalake", methods=["POST"])
+def api_clear_datalake():
+    """Permanently deletes everything under this add-on's own prefix in
+    MinIO. Scoped there in uploader.clear_prefix — never the whole bucket,
+    which is shared with the trackers' own data. The dashboard's own
+    confirmation dialog is the only thing standing between a click and a
+    real, irreversible delete, so this endpoint does not ask twice.
+    """
+    if not _lifecycle:
+        return jsonify({"deleted": None, "bytes": None, "error": "not ready yet"}), 503
+    count, freed_bytes, err = _lifecycle.clear_datalake()
+    return jsonify({"deleted": count, "bytes": freed_bytes, "error": err}), (200 if not err else 502)
 
 
 def main():
@@ -190,6 +243,8 @@ def main():
 
     _capture = capture.Capture(_options, log=_log)
     _lifecycle = lifecycle.Lifecycle(_options, log=_log)
+    if _capture.paused:
+        _log("starting paused (resume from the dashboard or POST /api/resume)")
 
     threading.Thread(target=_capture.run_forever, daemon=True).start()
     threading.Thread(target=_lifecycle.run_forever, daemon=True).start()

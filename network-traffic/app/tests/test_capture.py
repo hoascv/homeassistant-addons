@@ -2,6 +2,8 @@
 exercised entirely against a fake subprocess — no real tcpdump involved, the
 same style diskio.py's fio tests use for run_benchmark.
 """
+import os
+
 import capture
 
 
@@ -88,5 +90,106 @@ def test_status_reports_not_running_before_first_spawn():
     cap = capture.Capture({}, log=lambda *_: None)
     status = cap.status()
     assert status["running"] is False
+    assert status["paused"] is False
     assert status["pid"] is None
     assert status["restarts"] == 0
+
+
+def test_init_starts_paused_if_flag_file_already_exists(monkeypatch, tmp_path):
+    flag_path = tmp_path / "paused"
+    flag_path.write_text("")
+    monkeypatch.setattr(capture, "PAUSE_FLAG_PATH", str(flag_path))
+
+    cap = capture.Capture({}, log=lambda *_: None)
+
+    assert cap.paused is True
+
+
+def test_pause_sets_flag_and_terminates_a_running_process(monkeypatch, tmp_path):
+    flag_path = str(tmp_path / "paused")
+    monkeypatch.setattr(capture, "PAUSE_FLAG_PATH", flag_path)
+
+    cap = capture.Capture({}, log=lambda *_: None)
+    cap.process = FakeProcess()
+
+    cap.pause()
+
+    assert cap.paused is True
+    assert os.path.exists(flag_path)
+    assert cap.process.terminated is True
+
+
+def test_resume_clears_the_flag(monkeypatch, tmp_path):
+    flag_path = str(tmp_path / "paused")
+    monkeypatch.setattr(capture, "PAUSE_FLAG_PATH", flag_path)
+
+    cap = capture.Capture({}, log=lambda *_: None)
+    cap.pause()
+    assert os.path.exists(flag_path)
+
+    cap.resume()
+
+    assert cap.paused is False
+    assert not os.path.exists(flag_path)
+
+
+def test_run_forever_holds_without_spawning_while_paused(monkeypatch, tmp_path):
+    monkeypatch.setattr(capture, "PAUSE_FLAG_PATH", str(tmp_path / "paused"))
+    monkeypatch.setattr(capture.os, "makedirs", lambda *a, **k: None)
+
+    processes = []
+    monkeypatch.setattr(capture.subprocess, "Popen", lambda cmd, **k: processes.append(FakeProcess()))
+
+    cap = capture.Capture(
+        {"capture_interfaces": "any", "bpf_filter": "", "rotate_seconds": 60, "snap_length": 0},
+        log=lambda *_: None,
+    )
+    cap.pause()
+
+    sleeps = []
+
+    def fake_sleep(seconds):
+        sleeps.append(seconds)
+        cap.stop()
+
+    monkeypatch.setattr(capture.time, "sleep", fake_sleep)
+
+    cap.run_forever()
+
+    assert processes == []  # tcpdump never spawned while paused
+    assert sleeps == [1]  # the paused holding-pattern sleep, not a backoff sleep
+
+
+def test_exit_while_paused_is_not_counted_as_a_restart(monkeypatch, tmp_path):
+    """Simulates pause() terminating the process while run_forever's wait()
+    was blocked on it — by the time wait() returns, self.paused is already
+    true, and that exit must not be treated as a crash.
+    """
+    monkeypatch.setattr(capture, "PAUSE_FLAG_PATH", str(tmp_path / "paused"))
+    monkeypatch.setattr(capture.os, "makedirs", lambda *a, **k: None)
+
+    cap = capture.Capture(
+        {"capture_interfaces": "any", "bpf_filter": "", "rotate_seconds": 60, "snap_length": 0},
+        log=lambda *_: None,
+    )
+
+    class PausedMidWaitProcess(FakeProcess):
+        def wait(self):
+            cap.paused = True  # what pause() would have set, from another thread
+            self._returncode = -15
+            return -15
+
+    monkeypatch.setattr(capture.subprocess, "Popen", lambda cmd, **k: PausedMidWaitProcess())
+
+    sleeps = []
+
+    def fake_sleep(seconds):
+        sleeps.append(seconds)
+        cap.stop()
+
+    monkeypatch.setattr(capture.time, "sleep", fake_sleep)
+
+    cap.run_forever()
+
+    assert cap.restarts == 0
+    assert sleeps == [1]  # only the paused holding-pattern sleep, no backoff

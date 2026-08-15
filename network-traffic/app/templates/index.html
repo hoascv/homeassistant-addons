@@ -26,9 +26,15 @@
   .stat span { color:var(--muted); font-size:.8rem; }
   .stat.bad b { color:#dc2626; }
   .stat.good b { color:#166534; }
+  .stat.paused b { color:#92400e; }
   @media (prefers-color-scheme: dark) {
-    .stat.good b { color:#86efac; } .stat.bad b { color:#fca5a5; }
+    .stat.good b { color:#86efac; } .stat.bad b { color:#fca5a5; } .stat.paused b { color:#fcd34d; }
   }
+  .pause-row { display:flex; align-items:center; gap:10px; margin-top:8px; }
+  .pause-row button { font-size:.85rem; padding:6px 14px; border-radius:8px; cursor:pointer;
+                       border:1px solid var(--line); background:var(--card); color:var(--fg); }
+  .pause-row button:disabled { opacity:.6; cursor:default; }
+  .pause-row span { color:var(--muted); font-size:.8rem; }
   .err { background:#fee2e2; color:#991b1b; padding:10px 12px; border-radius:8px;
          margin-bottom:14px; }
   @media (prefers-color-scheme: dark) { .err { background:#7f1d1d; color:#fecaca; } }
@@ -41,6 +47,15 @@
   .warn { background:#fffbeb; color:#92400e; padding:10px 12px; border-radius:8px;
           margin-bottom:14px; font-size:.85rem; }
   @media (prefers-color-scheme: dark) { .warn { background:#451a03; color:#fcd34d; } }
+  .danger { border-color:#dc2626; }
+  .danger h2 { color:#dc2626; }
+  @media (prefers-color-scheme: dark) { .danger { border-color:#f87171; } .danger h2 { color:#f87171; } }
+  .danger button { font-size:.85rem; padding:7px 16px; border-radius:8px; cursor:pointer;
+                    border:1px solid #dc2626; background:transparent; color:#dc2626; }
+  .danger button:disabled { opacity:.5; cursor:default; }
+  @media (prefers-color-scheme: dark) { .danger button { border-color:#f87171; color:#f87171; } }
+  .danger p { font-size:.88rem; margin:0 0 10px; }
+  .danger #clear-msg { font-size:.85rem; margin-top:8px; color:var(--muted); }
   footer { color:var(--muted); font-size:.8rem; margin-top:14px; }
 </style>
 </head>
@@ -54,7 +69,10 @@
   see DOCS.md's Security section for what that means for what it can see.
 </div>
 
-{% if not cap.running %}
+{% if cap.paused %}
+  <div class="warn"><b>Capture is paused.</b> tcpdump is stopped and stays that way, including
+    across a restart, until you press Resume below.</div>
+{% elif not cap.running %}
   <div class="err"><b>tcpdump is not running.</b> {{ cap.last_error or "" }}</div>
 {% endif %}
 {% if life.last_error %}
@@ -62,8 +80,15 @@
 {% endif %}
 
 <div class="grid">
-  <div class="stat {% if cap.running %}good{% else %}bad{% endif %}">
-    <b>{{ "capturing" if cap.running else "stopped" }}</b><span>tcpdump, pid {{ cap.pid or "—" }}</span>
+  <div class="stat {% if cap.paused %}paused{% elif cap.running %}good{% else %}bad{% endif %}">
+    <b>{{ "paused" if cap.paused else ("capturing" if cap.running else "stopped") }}</b>
+    <span>tcpdump, pid {{ cap.pid or "—" }}</span>
+    <div class="pause-row">
+      <button type="button" id="pause-btn"
+              onclick="togglePause(this, {{ 'true' if cap.paused else 'false' }})">
+        {{ "Resume capture" if cap.paused else "Pause capture" }}
+      </button>
+    </div>
   </div>
   <div class="stat"><b>{{ cap.restarts or 0 }}</b><span>tcpdump restarts</span></div>
   <div class="stat">
@@ -76,6 +101,9 @@
   <div class="stat bad"><b>{{ life.discarded_count }}</b><span>discarded, unshipped (buffer overrun)</span></div>
   {% endif %}
   <div class="stat"><b>{{ life.disk_free_mb or "—" }} MB</b><span>free on the capture volume</span></div>
+  <div class="stat">
+    <b id="usage-count">…</b><span>objects in the datalake (<span id="usage-bytes">…</span>)</span>
+  </div>
 </div>
 
 <div class="wrap">
@@ -101,7 +129,87 @@
   </dl>
 </div>
 
+<div class="wrap danger">
+  <h2>Danger zone</h2>
+  <p>
+    Permanently deletes every object this add-on has uploaded under
+    <code>{{ options.minio_bucket }}/{{ options.minio_prefix }}/</code> in MinIO. Local files
+    and every other source in that bucket are untouched. <b>Cannot be undone.</b>
+  </p>
+  <button type="button" id="clear-btn" disabled onclick="clearDatalake(this)">Clear datalake data</button>
+  <div id="clear-msg"></div>
+</div>
+
 <footer>Page refreshes every 15s &middot; capture and upload each run on their own loop</footer>
+
+<script>
+  // URLs stay relative so they resolve under the ingress prefix.
+  function togglePause(btn, isPaused) {
+    btn.disabled = true;
+    var url = isPaused ? "api/resume" : "api/pause";
+    fetch(url, {method: "POST"})
+      .then(function (r) { return r.json(); })
+      .then(function () { location.reload(); })
+      .catch(function (e) {
+        btn.disabled = false;
+        alert("could not " + (isPaused ? "resume" : "pause") + ": " + e);
+      });
+  }
+
+  // Loaded on demand rather than pushed by the server: listing every object
+  // is a real MinIO round trip, not something to pay on every page render.
+  var datalakeUsage = {count: null, bytes: null};
+
+  function formatMb(bytes) {
+    return bytes == null ? "—" : (bytes / 1048576).toFixed(1) + " MB";
+  }
+
+  function loadDatalakeUsage() {
+    fetch("api/datalake-usage")
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        datalakeUsage = d;
+        document.getElementById("usage-count").textContent = d.count != null ? d.count : "—";
+        document.getElementById("usage-bytes").textContent = formatMb(d.bytes);
+        var btn = document.getElementById("clear-btn");
+        if (d.error) {
+          document.getElementById("clear-msg").textContent = "could not check usage: " + d.error;
+          btn.disabled = true;
+        } else {
+          btn.disabled = !d.count;
+        }
+      })
+      .catch(function () {
+        document.getElementById("usage-count").textContent = "error";
+      });
+  }
+  loadDatalakeUsage();
+
+  function clearDatalake(btn) {
+    var what = (datalakeUsage.count != null ? datalakeUsage.count : "an unknown number of") +
+      " objects (" + formatMb(datalakeUsage.bytes) + ")";
+    if (!confirm("This permanently deletes " + what + " under {{ options.minio_prefix }}/ " +
+                 "in the raw bucket. This cannot be undone. Continue?")) {
+      return;
+    }
+    btn.disabled = true;
+    fetch("api/clear-datalake", {method: "POST"})
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d.error) {
+          document.getElementById("clear-msg").textContent =
+            "deleted " + d.deleted + " objects, then failed: " + d.error;
+        } else {
+          document.getElementById("clear-msg").textContent = "deleted " + d.deleted + " objects.";
+        }
+        loadDatalakeUsage();
+      })
+      .catch(function (e) {
+        document.getElementById("clear-msg").textContent = "error: " + e;
+        btn.disabled = false;
+      });
+  }
+</script>
 
 </body>
 </html>

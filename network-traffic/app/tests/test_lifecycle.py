@@ -178,3 +178,56 @@ def test_lifecycle_enforces_retention_backstop(tmp_path, monkeypatch):
     assert life.discarded_count == 2
     # The two oldest are gone, the two newest survive.
     assert os.path.basename(remaining[0]) == "capture-20260815T000002Z.pcap"
+
+
+def _options():
+    return {
+        "retention_files": 10, "rotate_seconds": 300,
+        "minio_endpoint": "http://x", "minio_access_key": "a", "minio_secret_key": "b",
+        "minio_bucket": "raw", "minio_prefix": "network_traffic", "capture_label": "host",
+        "datalake_retention_days": 7,
+    }
+
+
+def test_datalake_usage_delegates_to_uploader_count_prefix(monkeypatch):
+    monkeypatch.setattr(uploader, "make_client", lambda *a, **k: object())
+    monkeypatch.setattr(uploader, "ensure_bucket", lambda client, bucket: None)
+    monkeypatch.setattr(uploader, "ensure_lifecycle", lambda *a, **k: None)
+    monkeypatch.setattr(uploader, "count_prefix", lambda client, bucket, prefix: (3, 512, None))
+
+    life = lifecycle.Lifecycle(_options(), log=lambda *_: None)
+    count, total_bytes, err = life.datalake_usage()
+
+    assert (count, total_bytes, err) == (3, 512, None)
+
+
+def test_datalake_usage_reports_error_when_client_unavailable(monkeypatch):
+    monkeypatch.setattr(uploader, "make_client", lambda *a, **k: object())
+    monkeypatch.setattr(uploader, "ensure_bucket", lambda client, bucket: "bucket is on fire")
+
+    life = lifecycle.Lifecycle(_options(), log=lambda *_: None)
+    count, total_bytes, err = life.datalake_usage()
+
+    assert count is None
+    assert total_bytes is None
+    assert err
+
+
+def test_clear_datalake_delegates_to_uploader_clear_prefix(monkeypatch):
+    monkeypatch.setattr(uploader, "make_client", lambda *a, **k: object())
+    monkeypatch.setattr(uploader, "ensure_bucket", lambda client, bucket: None)
+    monkeypatch.setattr(uploader, "ensure_lifecycle", lambda *a, **k: None)
+
+    calls = []
+
+    def fake_clear_prefix(client, bucket, prefix):
+        calls.append((bucket, prefix))
+        return 4, 4096, None
+
+    monkeypatch.setattr(uploader, "clear_prefix", fake_clear_prefix)
+
+    life = lifecycle.Lifecycle(_options(), log=lambda *_: None)
+    count, freed_bytes, err = life.clear_datalake()
+
+    assert (count, freed_bytes, err) == (4, 4096, None)
+    assert calls == [("raw", "network_traffic")]  # never the wrong prefix

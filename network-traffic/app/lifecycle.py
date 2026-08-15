@@ -111,6 +111,38 @@ class Lifecycle:
         self.client = client
         return client
 
+    def datalake_usage(self):
+        """(count, total_bytes, error) for this add-on's own prefix in
+        MinIO — a lazy, on-demand call rather than part of the regular poll
+        loop, since listing every object is a real round trip not worth
+        paying on a 5-second cycle nobody is looking at.
+        """
+        client = self._ensure_client()
+        if client is None:
+            return None, None, self.last_error or "MinIO client unavailable"
+        return uploader.count_prefix(client, self.options["minio_bucket"], self.options["minio_prefix"])
+
+    def clear_datalake(self):
+        """Permanently delete everything this add-on has uploaded under its
+        own prefix. Never touches the local pending backlog — those files
+        are legitimately not-yet-shipped captures, and will just upload
+        again normally on the next pass.
+        """
+        client = self._ensure_client()
+        if client is None:
+            return None, None, self.last_error or "MinIO client unavailable"
+        count, freed_bytes, err = uploader.clear_prefix(
+            client, self.options["minio_bucket"], self.options["minio_prefix"],
+        )
+        if err:
+            self.log(f"clear datalake: {count} deleted before error: {err}")
+        else:
+            self.log(
+                f"cleared datalake: {count} objects, {freed_bytes / 1048576:.1f} MB "
+                f"deleted from {self.options['minio_prefix']}/"
+            )
+        return count, freed_bytes, err
+
     def _enforce_retention(self, paths):
         """Delete the oldest local files, unconditionally, once the backlog
         exceeds retention_files. This is the disk-safety net that leaving

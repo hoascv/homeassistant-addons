@@ -14,6 +14,12 @@ import time
 
 PCAP_DIR = os.environ.get("PCAP_DIR", "/data/pcap")
 
+# Presence of this file means "stay paused". Persisted rather than kept only
+# in memory: the reason to pause from the dashboard is usually urgent enough
+# (a full disk, an unwanted capture) that a Supervisor restart resuming
+# capture right back would be a nasty surprise, not a fresh start.
+PAUSE_FLAG_PATH = os.environ.get("PAUSE_FLAG_PATH", "/data/paused")
+
 # tcpdump's own strftime template for -w, expanded once per rotation. The
 # ISO-8601-ish stamp sorts lexicographically the same as chronologically,
 # which is what lets app.py's lifecycle loop tell a completed rotation from
@@ -75,6 +81,7 @@ class Capture:
         self.started_at = None
         self.restarts = 0
         self.last_error = None
+        self.paused = os.path.exists(PAUSE_FLAG_PATH)
         self._stop = False
 
     def _spawn(self):
@@ -110,14 +117,27 @@ class Capture:
         """Start, wait, restart with backoff — forever, until stop() is
         called. Meant to run on its own daemon thread for the add-on's
         lifetime.
+
+        Paused is a holding pattern, not an exit: the loop keeps running so
+        resume() is picked up without anything else needing to restart it,
+        it just skips spawning while self.paused is true.
         """
         backoff = 1
         while not self._stop:
+            if self.paused:
+                time.sleep(1)
+                continue
             self._spawn()
             self._drain_stderr()
             returncode = self.process.wait()
             if self._stop:
                 return
+            if self.paused:
+                # Stopped because pause() terminated it, not a crash — no
+                # restart bookkeeping, straight back to the holding pattern
+                # at the top of the loop.
+                self.log("capture paused")
+                continue
             ran_for = time.time() - self.started_at
             self.restarts += 1
             self.log(
@@ -126,6 +146,26 @@ class Capture:
             )
             time.sleep(backoff)
             backoff = 1 if ran_for > BACKOFF_RESET_SECONDS else min(backoff * 2, MAX_BACKOFF_SECONDS)
+
+    def pause(self):
+        """Stop tcpdump and keep it stopped until resume(). Idempotent —
+        calling it while already paused just re-confirms the flag file.
+        """
+        self.paused = True
+        try:
+            with open(PAUSE_FLAG_PATH, "w") as handle:
+                handle.write("")
+        except OSError as exc:
+            self.log(f"could not persist pause state: {exc}")
+        if self.process and self.process.poll() is None:
+            self.process.terminate()
+
+    def resume(self):
+        self.paused = False
+        try:
+            os.remove(PAUSE_FLAG_PATH)
+        except OSError:
+            pass
 
     def stop(self):
         self._stop = True
@@ -136,6 +176,7 @@ class Capture:
         running = self.process is not None and self.process.poll() is None
         return {
             "running": running,
+            "paused": self.paused,
             "pid": self.pid if running else None,
             "started_at": self.started_at if running else None,
             "restarts": self.restarts,

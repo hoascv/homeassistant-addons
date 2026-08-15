@@ -103,14 +103,57 @@ in MinIO without the source pcap backing it up.
   Worth setting here more than on almost any other add-on in this repository
   — this one shows you other devices' traffic.
 
+## Pausing capture
+
+The dashboard has a **Pause capture** button — stops `tcpdump` immediately
+without stopping the add-on itself, so the dashboard, the upload backlog
+drain, and the Add-on Watchdog integration all keep working. Useful when
+something needs to stop *right now*: a disk running low, a capture you
+didn't mean to leave running, investigating before deciding on a filter.
+
+The pause is written to a flag file under `/data` and survives a restart —
+if you press Pause and then update or restart the add-on, it comes back up
+still paused rather than silently capturing again. Press **Resume**, or
+`POST /api/resume` through ingress, to start it back up.
+
+A pause reports as healthy everywhere — `/api/health`, the dashboard, and the
+Add-on Watchdog's status page — since it's a deliberate stop, not `tcpdump`
+having died. The upload loop keeps running while paused: anything already
+captured still ships to MinIO once it can accept writes again.
+
+## Clearing the datalake
+
+The dashboard's **Danger zone** has a **Clear datalake data** button —
+permanently deletes every object this add-on has uploaded, straight from
+MinIO. Added for exactly the situation that motivated Pause: a MinIO-full
+incident, where reclaiming space quickly matters more than anything already
+captured.
+
+It shows the current object count and total size before you can click it,
+and the confirmation prompt repeats both — there is no blind "delete
+everything, trust me". **This is permanent. There is no undo.**
+
+Scoped to exactly `minio_bucket`/`minio_prefix` and nothing else — the `raw`
+bucket is shared with the trackers' own archived exports, and there is no
+path in this add-on's code that reaches past its own prefix, even by
+mistake. Only already-uploaded objects in MinIO are affected; local files
+under `/data/pcap` are never touched, and anything still pending upload just
+uploads normally afterward.
+
 ## Endpoints
 
 - `/` — the dashboard, refreshing every 15 seconds.
 - `/api/status` — capture and lifecycle state, as JSON.
 - `/api/health` — what the Add-on Watchdog probes: 200 while `tcpdump` is
-  running, 503 when it isn't. The dashboard can answer fine with a dead
-  capture process behind it, which is exactly why this is a separate
-  endpoint rather than `/`.
+  running or deliberately paused, 503 only when it has actually died. The
+  dashboard can answer fine with a dead capture process behind it, which is
+  exactly why this is a separate endpoint rather than `/`.
+- `POST /api/pause` / `POST /api/resume` — what the dashboard's button calls.
+- `GET /api/datalake-usage` — object count and total bytes under this
+  add-on's own prefix in MinIO. A live MinIO round trip, not cached.
+- `POST /api/clear-datalake` — what the Danger zone's button calls. No
+  confirmation at the API level; the dashboard's confirm dialog is the only
+  thing standing between a call and a real, irreversible delete.
 
 Everything here requires Home Assistant's ingress — there is no published
 host port, since nothing outside this add-on needs to reach it directly; the

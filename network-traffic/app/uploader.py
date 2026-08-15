@@ -121,6 +121,69 @@ def ensure_lifecycle(client, bucket, prefix, retention_days):
     return None
 
 
+def count_prefix(client, bucket, prefix):
+    """Object count and total bytes under `<bucket>/<prefix>/` — a preview
+    for the dashboard's "Clear datalake data" button, so the confirmation
+    prompt says something real rather than "delete everything, trust me".
+
+    Returns (count, total_bytes, error). Never raises.
+    """
+    count = 0
+    total_bytes = 0
+    try:
+        paginator = client.get_paginator("list_objects_v2")
+        for page in paginator.paginate(Bucket=bucket, Prefix=f"{prefix}/"):
+            contents = page.get("Contents", [])
+            count += len(contents)
+            total_bytes += sum(obj["Size"] for obj in contents)
+    except (ClientError, BotoCoreError) as exc:
+        return count, total_bytes, str(exc)
+    return count, total_bytes, None
+
+
+def clear_prefix(client, bucket, prefix):
+    """Permanently delete every object under `<bucket>/<prefix>/` — never
+    anything outside it. The `raw` bucket is shared with the trackers' own
+    archived exports, so this must not be able to reach past its own prefix
+    even if called with the wrong arguments by mistake; there is no "clear
+    the whole bucket" path anywhere in this add-on.
+
+    `delete_objects` takes at most 1000 keys per call, which is also
+    `list_objects_v2`'s own page size, so each page can be deleted directly
+    with no extra batching. Counts only what MinIO actually confirms deleted
+    — a 200 response can still carry per-key failures in its own `Errors`
+    list, which a bare try/except around the call would miss entirely.
+
+    Returns (deleted_count, deleted_bytes, error). Never raises.
+    """
+    deleted_count = 0
+    deleted_bytes = 0
+    errors = []
+    try:
+        paginator = client.get_paginator("list_objects_v2")
+        for page in paginator.paginate(Bucket=bucket, Prefix=f"{prefix}/"):
+            contents = page.get("Contents", [])
+            if not contents:
+                continue
+            sizes = {obj["Key"]: obj["Size"] for obj in contents}
+            keys = [{"Key": obj["Key"]} for obj in contents]
+            resp = client.delete_objects(Bucket=bucket, Delete={"Objects": keys, "Quiet": False})
+            for deleted in resp.get("Deleted", []):
+                deleted_count += 1
+                deleted_bytes += sizes.get(deleted["Key"], 0)
+            for err in resp.get("Errors", []):
+                errors.append(f"{err.get('Key')}: {err.get('Message')}")
+    except (ClientError, BotoCoreError) as exc:
+        errors.append(str(exc))
+
+    if not errors:
+        return deleted_count, deleted_bytes, None
+    shown = "; ".join(errors[:5])
+    if len(errors) > 5:
+        shown += f" (+{len(errors) - 5} more)"
+    return deleted_count, deleted_bytes, shown
+
+
 def resolve_label(capture_label):
     """An empty capture_label option means the container hostname — enough
     to tell captures apart if this add-on is ever installed on more than one

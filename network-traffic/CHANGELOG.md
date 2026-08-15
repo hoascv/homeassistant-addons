@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.4.0
+
+- The dashboard's "Danger zone" has a **Clear datalake data** button, for
+  reclaiming space directly from a MinIO-full incident without leaving the
+  add-on. Shows a live object count and size first, requires an explicit
+  confirmation naming both before deleting anything, and is permanent —
+  there is no undo.
+- Scoped to exactly this add-on's own prefix (`minio_bucket`/`minio_prefix`)
+  and nothing else — the `raw` bucket is shared with the trackers' own
+  archived exports, and there is no code path anywhere in this add-on that
+  can reach past its own prefix, even by mistake. Verified against a real
+  MinIO: objects under a different source's prefix survive a clear
+  untouched.
+- Local files are never touched by this — only already-uploaded objects in
+  MinIO. Anything still pending upload just uploads normally afterward.
+
+## 0.3.0
+
+- The dashboard has a **Pause capture** / **Resume capture** button. Pausing
+  stops `tcpdump` and keeps it stopped — including across a Supervisor
+  restart, via a flag file under `/data` — until you press Resume or call
+  `POST /api/resume`. Added after a real MinIO-full incident: with the
+  disk critically low, pausing from the dashboard was the fastest way to stop
+  the local pcap buffer growing further, without needing to stop the whole
+  add-on (which would also take down its own status page).
+- The upload/lifecycle loop keeps running while paused, so any already-
+  captured backlog still drains once MinIO can accept writes again — only
+  the capture side pauses.
+- A pause reports as **healthy**, not degraded, to both `/api/health` and the
+  `/share/pipeline-status` report the Add-on Watchdog reads — the same
+  distinction already drawn for a `boot: manual` add-on found stopped on
+  purpose. Reporting a deliberate pause as a fault would train whoever
+  pressed the button to ignore the alert the next time it fires for a real
+  crash.
+
 ## 0.2.0
 
 - Added `datalake_retention_days` (default 7): an S3 lifecycle rule kept on

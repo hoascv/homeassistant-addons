@@ -1,5 +1,5 @@
 name: "Network Traffic Monitor"
-version: "0.2.0"
+version: "0.4.0"
 slug: "network-traffic"
 description: "Full packet capture from the Home Assistant host, landed in the datalake for later investigation"
 url: "https://github.com/hoascv/homeassistant-addons/tree/main/network-traffic"
