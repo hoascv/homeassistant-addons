@@ -1,0 +1,6 @@
+-r requirements.txt
+pytest>=7.4,<9
+# Mocks S3 for test_uploader.py — this add-on is the first in the repository
+# to speak to MinIO directly rather than through Airflow's S3Hook, so there is
+# no existing test double for it to reuse.
+moto[s3]>=5.0,<6

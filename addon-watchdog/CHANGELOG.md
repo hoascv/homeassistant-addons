@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.13.0
+
+- Monitors the new **Network Traffic Monitor** add-on: probe and its
+  `/share/pipeline-status` report.
+- Probed at `/api/health` rather than `/`, same reasoning as Detection Hub:
+  its dashboard answers fine with a dead `tcpdump` process behind it, and
+  that endpoint returns 503 for exactly that case.
+
 ## 1.12.0
 
 - **The version column says when that version was installed** — `2h ago` under

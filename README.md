@@ -20,6 +20,13 @@ Personal Home Assistant add-on repository.
   with a probe that catches a live container around a dead service. It also
   records device I/O continuously, so a slow window can be evidenced after the
   fact — see [Is the storage the limit?](STORAGE-IO.md).
+- **[Network Traffic Monitor](network-traffic/DOCS.md)** — full packet capture
+  from the host: a rotating raw `.pcap` plus a parsed `.jsonl` record per
+  packet (DNS queries, TLS SNI, plaintext HTTP where present), shipped
+  straight to **Pipeline MinIO**'s `raw` bucket for your own Airflow DAG to
+  pick up later. Only needs MinIO running to upload — no other order
+  dependency. The first add-on here to run with `host_network` and elevated
+  capabilities; read its Security section before installing.
 
 ### Data pipeline (amd64 only)
 

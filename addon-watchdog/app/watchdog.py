@@ -57,6 +57,9 @@ PROBES = {
     # well with a broken model or a dead capture thread. It returns 503 for
     # exactly those, and the rest of its state arrives in its status file.
     "detection-hub": Probe("http", 8099, "/api/health", "detector ready"),
+    # Same reasoning as detection-hub: the dashboard can answer fine with a
+    # dead tcpdump process behind it, so /api/health rather than /.
+    "network-traffic": Probe("http", 8099, "/api/health", "capture running"),
     "pipeline-postgres": Probe("tcp", 5432, None, "accepting connections"),
     # The replica publishes 5433 on the host but still listens on 5432 inside
     # its container, and probes go to container ports.

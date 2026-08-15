@@ -29,6 +29,7 @@ that publishes nothing is still reachable:
 |---|---|
 | Gym Tracker / Coop Tracker | HTTP `:8099/` — the Flask app answers |
 | Detection Hub | HTTP `:8099/api/health` — **not** `/`, because its page answers perfectly well with a broken model or a dead capture thread. That endpoint returns 503 for exactly those, and the rest of its state arrives in its status file |
+| Network Traffic Monitor | HTTP `:8099/api/health` — same reasoning: the dashboard answers fine with a dead `tcpdump` process behind it |
 | Pipeline Postgres | TCP `:5432` — accepting connections |
 | Pipeline Postgres Replica | TCP `:5432` — the standby is accepting connections. It publishes 5433 on the host but still listens on 5432 inside its container, and probes go to container ports. Replication lag comes separately, from its status file |
 | Pipeline MinIO | HTTP `:9000/minio/health/live` |

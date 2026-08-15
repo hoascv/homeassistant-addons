@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<!-- Both loops run on their own timers regardless of who is looking; this
+     only re-renders their last state. A plain refresh rather than JS: the
+     whole page is a handful of stat tiles. -->
+<meta http-equiv="refresh" content="15">
+<title>Network Traffic Monitor</title>
+<style>
+  :root { color-scheme: light dark; --bg:#f6f7f9; --card:#fff; --fg:#1c1e21;
+          --muted:#6b7280; --line:#e5e7eb; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#15171a; --card:#1e2125; --fg:#e8eaed; --muted:#9aa0a6; --line:#2e3238; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:16px; background:var(--bg); color:var(--fg);
+         font:15px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
+  h1 { font-size:1.25rem; margin:0 0 4px; }
+  .subtitle { color:var(--muted); font-size:.85rem; margin:0 0 16px; }
+  .grid { display:flex; flex-wrap:wrap; gap:10px; margin-bottom:16px; }
+  .stat { background:var(--card); border:1px solid var(--line); border-radius:10px;
+          padding:10px 14px; min-width:140px; }
+  .stat b { display:block; font-size:1.4rem; line-height:1.2; }
+  .stat span { color:var(--muted); font-size:.8rem; }
+  .stat.bad b { color:#dc2626; }
+  .stat.good b { color:#166534; }
+  @media (prefers-color-scheme: dark) {
+    .stat.good b { color:#86efac; } .stat.bad b { color:#fca5a5; }
+  }
+  .err { background:#fee2e2; color:#991b1b; padding:10px 12px; border-radius:8px;
+         margin-bottom:14px; }
+  @media (prefers-color-scheme: dark) { .err { background:#7f1d1d; color:#fecaca; } }
+  .wrap { background:var(--card); border:1px solid var(--line); border-radius:10px;
+          padding:14px 16px; margin-bottom:14px; }
+  .wrap h2 { font-size:.95rem; margin:0 0 8px; }
+  .kv { display:grid; grid-template-columns:auto 1fr; gap:4px 14px; font-size:.88rem; }
+  .kv dt { color:var(--muted); }
+  .kv dd { margin:0; }
+  .warn { background:#fffbeb; color:#92400e; padding:10px 12px; border-radius:8px;
+          margin-bottom:14px; font-size:.85rem; }
+  @media (prefers-color-scheme: dark) { .warn { background:#451a03; color:#fcd34d; } }
+  footer { color:var(--muted); font-size:.8rem; margin-top:14px; }
+</style>
+</head>
+<body>
+
+<h1>Network Traffic Monitor</h1>
+<p class="subtitle">Full packet capture, rotated locally and shipped to the datalake.</p>
+
+<div class="warn">
+  This add-on runs with <code>host_network</code> and <code>NET_ADMIN</code>/<code>NET_RAW</code> —
+  see DOCS.md's Security section for what that means for what it can see.
+</div>
+
+{% if not cap.running %}
+  <div class="err"><b>tcpdump is not running.</b> {{ cap.last_error or "" }}</div>
+{% endif %}
+{% if life.last_error %}
+  <div class="err"><b>Lifecycle error:</b> {{ life.last_error }}</div>
+{% endif %}
+
+<div class="grid">
+  <div class="stat {% if cap.running %}good{% else %}bad{% endif %}">
+    <b>{{ "capturing" if cap.running else "stopped" }}</b><span>tcpdump, pid {{ cap.pid or "—" }}</span>
+  </div>
+  <div class="stat"><b>{{ cap.restarts or 0 }}</b><span>tcpdump restarts</span></div>
+  <div class="stat">
+    <b>{{ "%.1f"|format((life.throughput_bytes_per_sec or 0) / 1048576) }} MB/s</b>
+    <span>last rotation, average</span>
+  </div>
+  <div class="stat"><b>{{ life.pending_files or 0 }}</b><span>files pending upload</span></div>
+  <div class="stat"><b>{{ life.uploaded_count or 0 }}</b><span>rotations uploaded</span></div>
+  {% if life.discarded_count %}
+  <div class="stat bad"><b>{{ life.discarded_count }}</b><span>discarded, unshipped (buffer overrun)</span></div>
+  {% endif %}
+  <div class="stat"><b>{{ life.disk_free_mb or "—" }} MB</b><span>free on the capture volume</span></div>
+</div>
+
+<div class="wrap">
+  <h2>Timing</h2>
+  <dl class="kv">
+    <dt>Add-on uptime</dt><dd>{{ uptime(uptime_seconds) }}</dd>
+    <dt>Last rotation</dt><dd>{{ life.last_rotation_at | int if life.last_rotation_at else "—" }}</dd>
+    <dt>Last upload</dt><dd>{{ life.last_upload_at | int if life.last_upload_at else "—" }}</dd>
+  </dl>
+</div>
+
+<div class="wrap">
+  <h2>Capture configuration</h2>
+  <dl class="kv">
+    <dt>Interfaces</dt><dd>{{ options.capture_interfaces }}</dd>
+    <dt>BPF filter</dt><dd>{{ options.bpf_filter or "(none — capturing everything)" }}</dd>
+    <dt>Rotate every</dt><dd>{{ options.rotate_seconds }}s</dd>
+    <dt>Local retention</dt><dd>{{ options.retention_files }} files</dd>
+    <dt>Snap length</dt><dd>{{ options.snap_length }} {{ "(full packet)" if options.snap_length == 0 else "bytes" }}</dd>
+    <dt>MinIO target</dt><dd>{{ options.minio_endpoint }}/{{ options.minio_bucket }}/{{ options.minio_prefix }}</dd>
+  </dl>
+</div>
+
+<footer>Page refreshes every 15s &middot; capture and upload each run on their own loop</footer>
+
+</body>
+</html>
