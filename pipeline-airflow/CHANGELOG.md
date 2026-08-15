@@ -1,5 +1,25 @@
 # Changelog
 
+## 2.16.0
+
+- New notebook, **`notebooks/ingest_network_traffic.ipynb`**: reads the
+  Network Traffic Monitor add-on's JSONL packet records straight out of
+  `raw/network_traffic/`, a quick look at the data (protocols, DNS queries,
+  TLS SNI, bytes by source), and a first write into
+  `s3a://lakehouse/network_traffic/packets` as a Delta table partitioned by
+  date.
+- Deliberately a plain append rather than the trackers' MERGE-on-`seq`
+  pattern — a packet is an immutable fact the moment it's captured, so there
+  is nothing to reconcile. That also means re-running the write cell over
+  files it has already ingested duplicates rows; the notebook's last section
+  covers what a scheduled, watermarked DAG (the same shape
+  `trackers_ingest.py` already uses) would need to fix that once this is
+  worth automating.
+- Not registered in `lakehouse.py`'s `SCHEMAS` — that module's `table()`/
+  `raw()` assume the trackers' JSON-string-payload-plus-change-metadata
+  shape, which this data doesn't have; it's already flat columns with no
+  `seq`/`actor`/`deleted_at` to speak of.
+
 ## 2.15.0
 
 - Keeps up with **Gym Tracker 1.34.0**, where an exercise can be a routine — an
