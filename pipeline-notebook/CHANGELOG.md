@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.1.0
+
+- New **"Running outside Home Assistant"** section: this add-on's own
+  ingress-only, no-`ports:` design means the notebook lives inside Home
+  Assistant's sidebar iframe, which leaves little width for actual work
+  alongside its own file browser and tab bar. Both Pipeline Spark's Connect
+  server (`:15002`) and Pipeline MinIO's S3 API (`:9000`) are already
+  published to the LAN, 1:1, so nothing here needed to change — just written
+  up: the exact pip installs matching this add-on's own version pins, the
+  environment variables it would otherwise export for you, and where to get
+  the notebook file itself depending on whether it imports from
+  `/share/pipeline-airflow/lib`.
+- Cross-references Pipeline Spark's new **No authentication** callout: a
+  session opened this way has the same unauthenticated access to `:15002`
+  that any other LAN client already does, which is worth knowing plainly
+  before actively encouraging LAN-wide use of it.
+
 ## 1.0.2
 
 - Documentation fix: corrected the opening line. This is a seven-add-on

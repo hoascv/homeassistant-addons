@@ -86,6 +86,54 @@ workouts = logs.select(F.from_json("data", SCHEMA).alias("w")).select("w.*")
 Anything the schema doesn't mention is ignored, and anything missing comes back
 null, so this keeps working as the apps change.
 
+## Running outside Home Assistant
+
+You don't have to use this add-on at all. **Pipeline Spark**'s Connect server
+(`:15002`) and **Pipeline MinIO**'s S3 API (`:9000`) are both published to
+your LAN, 1:1, in their own `config.yaml` — the same `SparkSession.builder
+.remote(...)` call the notebooks here use works unchanged from a plain local
+JupyterLab or VS Code, full-width browser tab instead of Home Assistant's
+ingress iframe.
+
+Install the same versions this add-on bakes in, so nothing drifts between the
+two:
+
+```
+pip install "jupyterlab>=4.2,<5" "pyspark-client==4.1.3"
+pip install --no-deps "delta-spark==4.3.1"
+```
+
+Then set what this add-on would otherwise export for you — using the Home
+Assistant host's real LAN address (or its `public_host`, if you've set one in
+the Pipeline Spark add-on) instead of the internal gateway `172.30.32.1`,
+which only resolves from other add-on containers:
+
+```python
+import os
+os.environ["SPARK_CONNECT_URL"] = "sc://<home-assistant-host-ip-or-name>:15002"
+os.environ["MINIO_ENDPOINT"] = "http://<home-assistant-host-ip-or-name>:9000"
+os.environ["MINIO_ACCESS_KEY"] = "<root_user>"
+os.environ["MINIO_SECRET_KEY"] = "<root_password>"
+```
+
+Getting the notebook file itself onto your machine is one of two things,
+depending on what it imports:
+
+- A notebook with no `/share/pipeline-airflow/lib` import (`from lakehouse
+  import ...`, `from trackers_merge import ...`) — copy it straight out of
+  this repository's `pipeline-airflow/notebooks/` folder. No Home Assistant
+  access needed at all.
+- A notebook that does import from `lib/` — that directory isn't in git, so
+  pull the live file from `/share/pipeline-airflow/notebooks/` the same way
+  the top-level README's "Testing locally without Git" section reaches
+  `/addons`: a Samba or SSH & Web Terminal share onto the Home Assistant host.
+
+> **This inherits Pipeline Spark's own security note.** A session opened this
+> way runs with the same access as the Airflow DAGs' own — Spark Connect has
+> no authentication or credential of its own, so anyone who can reach `:15002`
+> already can. See the **No authentication** callout in Pipeline Spark's docs
+> before forwarding that port any further than your own LAN.
+
 ## Notes
 
 - Settings and workspaces live in `/data`, so the layout survives a restart.

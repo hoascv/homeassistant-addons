@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.8.0
+
+- New **No authentication** callout on the Connect server (`:15002`): nothing
+  gates it — no token, no TLS, nothing in this add-on's options — so anyone
+  who can reach that port already has the same fully-privileged access
+  Airflow does, including the MinIO and Postgres credentials baked into this
+  add-on's own config. Always true, surfaced now because Pipeline Notebook's
+  docs started actively pointing external, LAN-wide clients at this port.
+
 ## 1.7.0
 
 - **The master UI's "Workers" link never worked.** It resolved to

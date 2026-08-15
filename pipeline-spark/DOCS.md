@@ -122,6 +122,13 @@ Connect server** on `:15002`, whose own process is the driver and runs here. The
 client (Airflow) sends an unresolved query plan over gRPC and gets results back;
 it needs no Spark installation, no JVM, and no credentials of its own.
 
+> **No authentication.** That last part cuts both ways: nothing gates `:15002`
+> at all — no token, no TLS, nothing in this add-on's options. Anyone who can
+> reach that port can act as a fully-privileged Spark client, with the MinIO
+> and Postgres credentials already baked into this add-on's own config. Fine
+> on a trusted LAN, same as Airflow reaches it today; don't forward this port
+> any further than that.
+
 A hand-rolled `spark-submit` still works, in **client mode** — the driver then
 runs wherever you launched it, and must be reachable from this container.
 
