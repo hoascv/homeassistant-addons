@@ -36,7 +36,9 @@ in this order**: `postgres → minio → [metastore] → spark → airflow → n
 
 - **[Pipeline Postgres](pipeline-postgres/DOCS.md)** — PostgreSQL 16 with
   TimescaleDB (pipeline DB + Airflow metadata DB).
-- **[Pipeline MinIO](pipeline-minio/DOCS.md)** — MinIO S3-compatible object storage.
+- **[Pipeline MinIO](pipeline-minio/DOCS.md)** — MinIO S3-compatible object
+  storage, with its console in Home Assistant's own sidebar as well as on
+  the LAN directly.
 - **[Pipeline Spark](pipeline-spark/DOCS.md)** — Apache Spark 4.1 single-node
   cluster with a Spark Connect server.
 - **[Pipeline Airflow](pipeline-airflow/DOCS.md)** — Apache Airflow 3.3 orchestrator,

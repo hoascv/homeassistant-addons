@@ -1,5 +1,5 @@
 name: "Pipeline MinIO"
-version: "1.0.2"
+version: "1.1.0"
 slug: "pipeline-minio"
 description: "MinIO S3-compatible object storage for the data-pipeline stack"
 url: "https://github.com/hoascv/homeassistant-addons/tree/main/pipeline-minio"
@@ -8,12 +8,25 @@ arch:
 startup: services
 boot: manual
 init: false
+ingress: true
+# An internal-only port nginx listens on, fronting the console at :9001 with
+# the rewriting Home Assistant's ingress needs — see nginx.conf.template.
+# Not published: reaching it any other way than through ingress is pointless,
+# since :9001 already serves the same console directly.
+ingress_port: 9002
+panel_icon: mdi:bucket-outline
+panel_title: "MinIO"
+panel_admin: true
+# To read this add-on's own ingress path at startup, which nginx needs to
+# rewrite the console's <base> tag correctly. Nothing else is asked of the
+# Supervisor.
+hassio_api: true
 ports:
   9000/tcp: 9000
   9001/tcp: 9001
 ports_description:
   9000/tcp: "S3 API — point Spark/Airflow S3 clients here"
-  9001/tcp: "MinIO console (web UI)"
+  9001/tcp: "MinIO console (web UI) — also reachable through the Home Assistant sidebar"
 options:
   root_user: "minioadmin"
   root_password: "changeme"
