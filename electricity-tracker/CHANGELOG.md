@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.4.0
+
+- **Live partial-hour Saveeye estimate.** Previously, the hourly estimate
+  only ever filled a *completed* hour (samples bracketing both ends), which
+  meant a freshly-connected Saveeye showed nothing for "Today" at all until
+  after the current hour finished — technically honest, but not what
+  watching a live power reading leads you to expect. The hour in progress
+  now gets a `"source": "saveeye_partial"` estimate too, from the earliest
+  sample after the hour started through the latest live reading. It
+  undercounts a session started mid-hour (there's no reading for the energy
+  used before Saveeye connected) rather than guessing backward past it, and
+  still yields immediately to Eloverblik's measured figure once that lands.
+  Shown with the same hatched styling as a completed estimate, with its own
+  tooltip wording ("hour in progress").
+
 ## 1.3.0
 
 - The consumption chart's **Today** view now shows one bar per hour instead

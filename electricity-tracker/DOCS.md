@@ -248,9 +248,15 @@ narrows ingress access to specific Home Assistant users on top of
   `price_area`) — history for the old area is kept, not deleted.
 - Saveeye's hourly estimate only ever fills a genuine gap: an hour Eloverblik
   has already reported is never recomputed or overridden from Saveeye, even
-  if samples exist for it too. An hour is only estimated when real samples
-  bracket both its start and end — no interpolation is ever extrapolated
-  past the edge of what was actually observed.
+  if samples exist for it too. A completed hour is only estimated when real
+  samples bracket both its start and end — no interpolation is ever
+  extrapolated past the edge of what was actually observed. The hour
+  currently in progress is the one exception: it gets a running
+  `"source": "saveeye_partial"` estimate from whenever Saveeye's first
+  sample in that hour arrived through the latest reading, so "Today" shows
+  something immediately rather than staying at zero until midnight. A
+  session that started mid-hour is undercounted for that hour rather than
+  guessed at backward.
 - `saveeye_mqtt_password` is stored like any other add-on secret
   (`/data/options.json` on the host); it's whatever login you created on the
   Mosquitto broker for this purpose, not a Home Assistant account password.

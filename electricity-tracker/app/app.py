@@ -19,7 +19,7 @@ import eloverblik
 import saveeye
 import easee
 
-APP_VERSION = "1.3.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.4.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("ELECTRICITY_DB_PATH", "/data/electricity.db")
 OPTIONS_PATH = os.environ.get("ELECTRICITY_OPTIONS_PATH", "/data/options.json")
@@ -485,6 +485,26 @@ def combined_consumption_with_cost(
             }
         )
 
+    now_local = datetime.now(LOCAL_TZ)
+    current_hour_start = now_local.replace(minute=0, second=0, microsecond=0)
+    current_hour_key = current_hour_start.replace(tzinfo=None).isoformat()
+    if start_local <= now_local < end_local and current_hour_key not in covered and current_hour_key not in estimates:
+        partial = saveeye_partial_hour_kwh(conn, current_hour_start, now_local, saveeye_device_serial)
+        if partial:
+            price = hourly_totals.get(current_hour_key)
+            cost = round(partial["kwh"] * price, 4) if price is not None else None
+            rows.append(
+                {
+                    "time_utc": current_hour_start.astimezone(timezone.utc).isoformat(),
+                    "time_dk": current_hour_key,
+                    "kwh": partial["kwh"],
+                    "quality": None,
+                    "price_dkk_kwh": round(price, 4) if price is not None else None,
+                    "cost_dkk": cost,
+                    "source": "saveeye_partial",
+                }
+            )
+
     rows.sort(key=lambda r: r["time_dk"])
     return rows
 
@@ -740,6 +760,35 @@ def saveeye_hourly_kwh(conn, start_local, end_local, device_serial):
             out[hour.replace(tzinfo=None).isoformat()] = round((v_end - v_start) / 1000.0, 4)
         hour += timedelta(hours=1)
     return out
+
+
+def saveeye_partial_hour_kwh(conn, hour_start_local, now_local, device_serial):
+    """Energy so far in the current, still-open hour — the counterpart to
+    saveeye_hourly_kwh for an hour that hasn't finished yet.
+
+    saveeye_hourly_kwh only ever fills a *completed* hour (samples bracket
+    both ends), which means a freshly-connected Saveeye shows nothing at all
+    for "today" until after the current hour ends — technically honest, but
+    not what anyone watching a live power reading expects. This uses the
+    earliest sample at-or-after the hour started as the baseline instead of
+    interpolating backward past it, so a mid-hour connection undercounts
+    that hour rather than guessing at energy used before it existed —
+    `"partial": True` says so explicitly.
+    """
+    if not device_serial:
+        return None
+    rows = conn.execute(
+        "SELECT ts_utc, cumulative_wh FROM saveeye_samples "
+        "WHERE device_serial = ? AND ts_utc >= ? AND ts_utc <= ? ORDER BY ts_utc",
+        (device_serial, hour_start_local.astimezone(timezone.utc).isoformat(), now_local.astimezone(timezone.utc).isoformat()),
+    ).fetchall()
+    usable = [r["cumulative_wh"] for r in rows if r["cumulative_wh"] is not None]
+    if len(usable) < 2:
+        return None
+    kwh = (usable[-1] - usable[0]) / 1000.0
+    if kwh < 0:
+        return None  # a session/meter reset happened mid-hour — bail rather than show a negative
+    return {"kwh": round(kwh, 4), "partial": True}
 
 
 # --- Easee (EV charger, optional, read-only) ---

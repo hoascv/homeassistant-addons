@@ -180,6 +180,75 @@ def test_combined_consumption_without_saveeye_serial_is_eloverblik_only(conn):
     assert rows[0]["source"] == "eloverblik"
 
 
+def test_saveeye_partial_hour_kwh_needs_two_samples(conn):
+    now_local = datetime.now(electricityapp.LOCAL_TZ)
+    hour_start = now_local.replace(minute=0, second=0, microsecond=0)
+    _seed_saveeye_sample(conn, hour_start.astimezone(timezone.utc).isoformat(), cumulative_wh=1000.0)
+    conn.commit()
+    assert electricityapp.saveeye_partial_hour_kwh(conn, hour_start, now_local, "dev1") is None
+
+
+def test_saveeye_partial_hour_kwh_diffs_first_and_last_sample(conn):
+    now_local = datetime.now(electricityapp.LOCAL_TZ)
+    hour_start = now_local.replace(minute=0, second=0, microsecond=0)
+    _seed_saveeye_sample(conn, hour_start.astimezone(timezone.utc).isoformat(), cumulative_wh=1000.0)
+    _seed_saveeye_sample(conn, now_local.astimezone(timezone.utc).isoformat(), cumulative_wh=1500.0)
+    conn.commit()
+    partial = electricityapp.saveeye_partial_hour_kwh(conn, hour_start, now_local, "dev1")
+    assert partial == {"kwh": 0.5, "partial": True}
+
+
+def test_saveeye_partial_hour_kwh_rejects_negative_delta(conn):
+    now_local = datetime.now(electricityapp.LOCAL_TZ)
+    hour_start = now_local.replace(minute=0, second=0, microsecond=0)
+    _seed_saveeye_sample(conn, hour_start.astimezone(timezone.utc).isoformat(), cumulative_wh=1000.0)
+    _seed_saveeye_sample(conn, now_local.astimezone(timezone.utc).isoformat(), cumulative_wh=900.0)
+    conn.commit()
+    assert electricityapp.saveeye_partial_hour_kwh(conn, hour_start, now_local, "dev1") is None
+
+
+def test_combined_consumption_includes_partial_current_hour(conn):
+    opts = electricityapp.get_price_options(
+        {"grid_tariff_normal": 0.0, "transmission_tariff": 0.0, "electricity_tax": 0.0, "vat_rate": 0.0}
+    )
+    now_local = datetime.now(electricityapp.LOCAL_TZ)
+    hour_start = now_local.replace(minute=0, second=0, microsecond=0)
+    for minute in (0, 15, 30, 45):
+        t = (hour_start + timedelta(minutes=minute)).replace(tzinfo=None).isoformat()
+        _seed_price(conn, t, spot=2.0)
+    _seed_saveeye_sample(conn, hour_start.astimezone(timezone.utc).isoformat(), cumulative_wh=1000.0)
+    _seed_saveeye_sample(conn, now_local.astimezone(timezone.utc).isoformat(), cumulative_wh=1500.0)
+    conn.commit()
+
+    day_start = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+    day_end = day_start + timedelta(days=1)
+    rows = electricityapp.combined_consumption_with_cost(conn, day_start, day_end, "mp1", "DK2", opts, "dev1")
+
+    partial_rows = [r for r in rows if r["source"] == "saveeye_partial"]
+    assert len(partial_rows) == 1
+    assert partial_rows[0]["time_dk"] == hour_start.replace(tzinfo=None).isoformat()
+    assert partial_rows[0]["kwh"] == 0.5
+    assert partial_rows[0]["cost_dkk"] == 1.0  # 0.5 kWh * 2.0 DKK/kWh
+
+
+def test_combined_consumption_partial_hour_yields_to_eloverblik(conn):
+    opts = electricityapp.get_price_options({})
+    now_local = datetime.now(electricityapp.LOCAL_TZ)
+    hour_start = now_local.replace(minute=0, second=0, microsecond=0)
+    _seed_eloverblik_row(conn, hour_start.astimezone(timezone.utc).isoformat(), kwh=3.0)
+    _seed_saveeye_sample(conn, hour_start.astimezone(timezone.utc).isoformat(), cumulative_wh=1000.0)
+    _seed_saveeye_sample(conn, now_local.astimezone(timezone.utc).isoformat(), cumulative_wh=9000.0)
+    conn.commit()
+
+    day_start = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+    day_end = day_start + timedelta(days=1)
+    rows = electricityapp.combined_consumption_with_cost(conn, day_start, day_end, "mp1", "DK2", opts, "dev1")
+
+    assert len(rows) == 1
+    assert rows[0]["source"] == "eloverblik"
+    assert rows[0]["kwh"] == 3.0
+
+
 def test_api_saveeye_now_disabled_by_default(client):
     res = client.get("/api/saveeye/now")
     assert res.get_json() == {"enabled": False}

@@ -247,6 +247,10 @@ function renderEasee(easee) {
 
 // --- Consumption chart (daily totals) ---
 
+function isSaveeyeSource(source) {
+  return source === "saveeye_estimate" || source === "saveeye_partial";
+}
+
 function aggregateDaily(rows) {
   const map = new Map();
   for (const r of rows) {
@@ -255,7 +259,7 @@ function aggregateDaily(rows) {
     entry.kwh += r.kwh;
     if (r.cost_dkk != null) entry.cost += r.cost_dkk;
     else entry.costKnown = false;
-    if (r.source === "saveeye_estimate") entry.hasEstimate = true;
+    if (isSaveeyeSource(r.source)) entry.hasEstimate = true;
     map.set(day, entry);
   }
   return [...map.values()].sort((a, b) => a.day.localeCompare(b.day));
@@ -277,9 +281,10 @@ function renderHourlyChart(rows) {
     const x = i * barW;
     const y = H - padBottom - h;
     const costStr = r.cost_dkk != null ? `${r.cost_dkk.toFixed(2)} kr` : "cost n/a";
-    const sourceNote = r.source === "saveeye_estimate" ? " (live estimate)" : "";
+    const sourceNote = r.source === "saveeye_partial" ? " (live, hour in progress)"
+      : r.source === "saveeye_estimate" ? " (live estimate)" : "";
     const label = `${hm(r.time_dk)} — ${r.kwh.toFixed(2)} kWh, ${costStr}${sourceNote}`;
-    const estimateClass = r.source === "saveeye_estimate" ? " chart-bar-estimate" : "";
+    const estimateClass = isSaveeyeSource(r.source) ? " chart-bar-estimate" : "";
     return (
       `<rect class="chart-bar chart-bar-normal${estimateClass}" x="${x.toFixed(1)}" y="${y.toFixed(1)}" ` +
       `width="${Math.max(1, barW - 0.6).toFixed(1)}" height="${Math.max(1, h).toFixed(1)}" opacity="0.85">` +
@@ -341,7 +346,7 @@ function renderDailyChart(rows) {
 }
 
 function renderConsumptionChart(rows) {
-  document.getElementById("consumption-chart-legend").hidden = !rows.some((r) => r.source === "saveeye_estimate");
+  document.getElementById("consumption-chart-legend").hidden = !rows.some((r) => isSaveeyeSource(r.source));
   if (state.consumptionView === "hourly") {
     renderHourlyChart(rows);
   } else {
