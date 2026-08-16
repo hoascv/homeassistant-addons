@@ -238,7 +238,7 @@ def test_stats_are_only_fetched_from_addons_that_publish_them():
     them would mean the watchdog carrying database credentials."""
     assert watchdog.fetch_stats("pipeline-postgres", "host", 1) == (None, None)
     assert set(watchdog.STATS_PATHS) == {
-        "gym-tracker", "coop-tracker", "detection-hub"
+        "gym-tracker", "coop-tracker", "detection-hub", "electricity-tracker"
     }
 
 

@@ -20,6 +20,11 @@ Personal Home Assistant add-on repository.
   with a probe that catches a live container around a dead service. It also
   records device I/O continuously, so a slow window can be evidenced after the
   fact — see [Is the storage the limit?](STORAGE-IO.md).
+- **[Electricity Tracker](electricity-tracker/DOCS.md)** — Danish day-ahead
+  electricity spot prices (DK1/DK2) combined with your own smart-meter
+  consumption from Eloverblik into a full end-user price: spot + your grid
+  company's tariff + Energinet's transmission tariff + elafgift + VAT.
+  Works as a price-only tracker before Eloverblik is configured.
 - **[Network Traffic Monitor](network-traffic/DOCS.md)** — full packet capture
   from the host: a rotating raw `.pcap` plus a parsed `.jsonl` record per
   packet (DNS queries, TLS SNI, plaintext HTTP where present), shipped

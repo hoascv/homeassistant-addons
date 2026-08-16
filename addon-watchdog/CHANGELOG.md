@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.14.0
+
+- Monitors the new **Electricity Tracker** add-on: probe and `/api/stats`
+  record counts, same wiring as Gym Tracker, Coop Tracker and Detection Hub.
+
 ## 1.13.0
 
 - Monitors the new **Network Traffic Monitor** add-on: probe and its

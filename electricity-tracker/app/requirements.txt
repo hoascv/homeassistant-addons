@@ -1,0 +1,5 @@
+flask>=3.0,<4.0
+waitress>=3.0,<4.0
+# zoneinfo's fallback tz database — python:3.12-slim-bookworm has no
+# guarantee of system tzdata, and Europe/Copenhagen (DST) must resolve.
+tzdata>=2024.1

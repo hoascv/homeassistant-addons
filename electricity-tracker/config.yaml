@@ -1,0 +1,78 @@
+name: "Electricity Tracker"
+version: "1.0.0"
+slug: "electricity-tracker"
+description: "Danish electricity spot prices and your own smart-meter consumption, combined into what you actually pay"
+url: "https://github.com/hoascv/homeassistant-addons/tree/main/electricity-tracker"
+arch:
+  - aarch64
+  - amd64
+startup: application
+boot: auto
+init: false
+ingress: true
+ingress_port: 8099
+# Not published unless you set a port. Only needed to let something outside
+# Home Assistant — a data pipeline — reach the API with api_token.
+ports:
+  8099/tcp: null
+ports_description:
+  8099/tcp: "Direct API access for a data pipeline (requires api_token)"
+panel_icon: mdi:transmission-tower
+panel_title: "Electricity"
+# Only Home Assistant admin-group users get the sidebar menu entry (the
+# default, stated explicitly). See restrict_to_user_ids for a hard,
+# per-user access block on top of that.
+panel_admin: true
+homeassistant_api: true
+options:
+  price_area: "DK2"
+  # Grid company net tariff, in DKK/kWh excl. VAT, split into up to three
+  # time-of-day bands. These vary by grid company and change over time — look
+  # yours up on your grid company's site (find it via eloverblik.dk) and enter
+  # the current numbers. 0 means "not modelled" for that band.
+  grid_tariff_low: 0.0
+  grid_tariff_high: 0.0
+  grid_tariff_normal: 0.0
+  grid_tariff_low_start: "00:00"
+  grid_tariff_low_end: "06:00"
+  grid_tariff_high_start: "17:00"
+  grid_tariff_high_end: "21:00"
+  # High band only applies on these weekday numbers (1=Monday..7=Sunday) —
+  # most Danish grid companies only charge peak rates on weekdays.
+  grid_tariff_high_weekdays: "1,2,3,4,5"
+  # High band only applies in these calendar months — most Danish grid
+  # companies only charge a winter peak (Oct-Mar). Empty means all year.
+  grid_tariff_high_months: "1,2,3,10,11,12"
+  # Energinet's own system + transmission tariffs, combined into one flat
+  # DKK/kWh number (both are flat, non-time-differentiated). Look the current
+  # numbers up at energinet.dk/el/elmarkedet/tariffer.
+  transmission_tariff: 0.0
+  # Elafgift (Danish electricity tax), in DKK/kWh excl. VAT. Set by Parliament
+  # and changed at the turn of most years — 2026/2027 rate is 0.008 (0.8 øre).
+  electricity_tax: 0.008
+  # Danish VAT, applied on top of spot price + all tariffs + tax.
+  vat_rate: 0.25
+  eloverblik_refresh_token: ""
+  eloverblik_metering_point: ""
+  eloverblik_backfill_days: 30
+  restrict_to_user_ids: ""
+  api_token: ""
+schema:
+  price_area: "list(DK1|DK2)"
+  grid_tariff_low: "float(0,50)"
+  grid_tariff_high: "float(0,50)"
+  grid_tariff_normal: "float(0,50)"
+  grid_tariff_low_start: "str"
+  grid_tariff_low_end: "str"
+  grid_tariff_high_start: "str"
+  grid_tariff_high_end: "str"
+  grid_tariff_high_weekdays: "str"
+  grid_tariff_high_months: "str?"
+  transmission_tariff: "float(0,50)"
+  electricity_tax: "float(0,50)"
+  vat_rate: "float(0,1)"
+  eloverblik_refresh_token: "password?"
+  eloverblik_metering_point: "str?"
+  eloverblik_backfill_days: "int(1,730)"
+  restrict_to_user_ids: "str?"
+  api_token: "str?"

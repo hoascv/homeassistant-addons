@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<title>Electricity Tracker</title>
+<link rel="stylesheet" href="static/style.css?v={{ app_version }}">
+</head>
+<body>
+<header class="topbar">
+  <span class="topbar-icon">⚡</span>
+  <h1>Electricity</h1>
+  <span class="pill" id="price-area-pill">–</span>
+  <button type="button" class="topbar-icon-btn" id="settings-open-btn" aria-label="Settings">⚙️</button>
+</header>
+
+<main class="page">
+
+  <!-- Price now -->
+  <section class="card" id="now-card">
+    <div class="card-head">
+      <h2>Price now</h2>
+      <span class="pill" id="now-updated">–</span>
+    </div>
+    <div class="price-now">
+      <span class="price-now-value" id="price-now-value">–</span>
+      <span class="price-now-unit">DKK/kWh</span>
+    </div>
+    <div class="price-breakdown" id="price-breakdown"></div>
+    <div class="mini-stats">
+      <div class="mini-stat"><span class="mini-value" id="cheapest-today">–</span><span class="mini-label">Cheapest today</span></div>
+      <div class="mini-stat"><span class="mini-value" id="priciest-today">–</span><span class="mini-label">Priciest today</span></div>
+    </div>
+  </section>
+
+  <!-- Price curve -->
+  <section class="card" id="curve-card">
+    <div class="card-head">
+      <h2>Price today <span class="muted" id="curve-day-note"></span></h2>
+      <div class="seg" id="curve-day-toggle" role="tablist" aria-label="Day">
+        <button type="button" class="seg-btn seg-on" data-day="today">Today</button>
+        <button type="button" class="seg-btn" data-day="tomorrow" id="curve-tomorrow-btn" disabled>Tomorrow</button>
+      </div>
+    </div>
+    <div id="price-chart" class="chart-host"></div>
+    <p class="empty-state" id="price-chart-empty" hidden>No price data yet — the add-on fetches it shortly after starting.</p>
+  </section>
+
+  <!-- Consumption summary -->
+  <section class="card" id="consumption-card">
+    <div class="card-head">
+      <h2>Consumption</h2>
+      <span class="pill" id="consumption-updated">–</span>
+    </div>
+    <div class="mini-stats mini-stats-4" id="consumption-tiles">
+      <div class="mini-stat"><span class="mini-value" id="c-today-kwh">–</span><span class="mini-label">Today</span></div>
+      <div class="mini-stat"><span class="mini-value" id="c-yesterday-kwh">–</span><span class="mini-label">Yesterday</span></div>
+      <div class="mini-stat"><span class="mini-value" id="c-week-kwh">–</span><span class="mini-label">This week</span></div>
+      <div class="mini-stat"><span class="mini-value" id="c-month-kwh">–</span><span class="mini-label">This month</span></div>
+    </div>
+    <div class="mini-stats mini-stats-4">
+      <div class="mini-stat mini-stat-cost"><span class="mini-value" id="c-today-cost">–</span><span class="mini-label">kr today</span></div>
+      <div class="mini-stat mini-stat-cost"><span class="mini-value" id="c-yesterday-cost">–</span><span class="mini-label">kr yesterday</span></div>
+      <div class="mini-stat mini-stat-cost"><span class="mini-value" id="c-week-cost">–</span><span class="mini-label">kr this week</span></div>
+      <div class="mini-stat mini-stat-cost"><span class="mini-value" id="c-month-cost">–</span><span class="mini-label">kr this month</span></div>
+    </div>
+    <p class="empty-state" id="consumption-empty" hidden>
+      Not connected to Eloverblik yet. Set <code>eloverblik_refresh_token</code> and
+      <code>eloverblik_metering_point</code> in the add-on's Configuration tab, then use
+      <strong>Settings → Test Eloverblik connection</strong> below to find your metering point id.
+    </p>
+  </section>
+
+  <!-- Consumption chart -->
+  <section class="card" id="consumption-chart-card" hidden>
+    <div class="card-head">
+      <h2>Consumption &amp; cost</h2>
+      <div class="seg" id="consumption-range-toggle" role="tablist" aria-label="Range">
+        <button type="button" class="seg-btn seg-on" data-days="7">7d</button>
+        <button type="button" class="seg-btn" data-days="14">14d</button>
+        <button type="button" class="seg-btn" data-days="30">30d</button>
+      </div>
+    </div>
+    <div id="consumption-chart" class="chart-host"></div>
+  </section>
+
+  <footer class="foot">
+    <span id="last-price-sync">–</span>
+    <span id="last-consumption-sync"></span>
+    <span id="app-version">v{{ app_version }}</span>
+  </footer>
+
+</main>
+
+<!-- Settings sheet -->
+<div class="sheet-backdrop" id="settings-backdrop">
+  <div class="sheet">
+    <div class="sheet-head">
+      <h2>Settings</h2>
+      <button type="button" class="topbar-icon-btn" id="settings-close-btn" aria-label="Close">✕</button>
+    </div>
+    <p class="muted">
+      All configuration lives in the add-on's <strong>Configuration</strong> tab in Home
+      Assistant (price area, tariffs, elafgift, VAT, Eloverblik token). This panel only helps
+      you find the right values.
+    </p>
+    <h3>Eloverblik connection</h3>
+    <button type="button" class="btn-secondary full" id="eloverblik-test-btn">Test Eloverblik connection</button>
+    <div id="eloverblik-test-result"></div>
+  </div>
+</div>
+
+<script src="static/app.js?v={{ app_version }}"></script>
+</body>
+</html>
