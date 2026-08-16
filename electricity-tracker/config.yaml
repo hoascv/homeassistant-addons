@@ -1,5 +1,5 @@
 name: "Electricity Tracker"
-version: "1.1.0"
+version: "1.2.0"
 slug: "electricity-tracker"
 description: "Danish electricity spot prices and your own smart-meter consumption, combined into what you actually pay"
 url: "https://github.com/hoascv/homeassistant-addons/tree/main/electricity-tracker"
@@ -75,6 +75,18 @@ options:
   # common case of one Base reader. Set this (from /api/saveeye/now once
   # you're receiving telemetry) only if more than one ever publishes here.
   saveeye_device_serial: ""
+  # An Easee Home charger, if you have one: read-only monitoring (status,
+  # live power, session cost against the real price) — this add-on never
+  # starts, stops or throttles charging. Off by default.
+  easee_enabled: false
+  # Your Easee account's own login — the cloud API authenticates with these
+  # directly rather than an app-generated token, the same pattern Gym
+  # Tracker uses for Garmin.
+  easee_username: ""
+  easee_password: ""
+  # Leave empty to use the first charger on the account. Set this (from
+  # /api/easee/diagnose) only if you have more than one.
+  easee_charger_id: ""
   restrict_to_user_ids: ""
   api_token: ""
 schema:
@@ -101,5 +113,9 @@ schema:
   saveeye_mqtt_password: "password?"
   saveeye_mqtt_topic: "str"
   saveeye_device_serial: "str?"
+  easee_enabled: "bool"
+  easee_username: "str?"
+  easee_password: "password?"
+  easee_charger_id: "str?"
   restrict_to_user_ids: "str?"
   api_token: "str?"

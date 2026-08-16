@@ -93,6 +93,21 @@
     </p>
   </section>
 
+  <!-- EV charging (Easee) -->
+  <section class="card" id="easee-card" hidden>
+    <div class="card-head">
+      <h2>EV charging</h2>
+      <span class="pill" id="easee-status-pill">–</span>
+    </div>
+    <div class="mini-stats">
+      <div class="mini-stat"><span class="mini-value" id="easee-power">–</span><span class="mini-label">Power now</span></div>
+      <div class="mini-stat"><span class="mini-value" id="easee-energy">–</span><span class="mini-label">Session energy</span></div>
+      <div class="mini-stat"><span class="mini-value" id="easee-cost">–</span><span class="mini-label">Session cost</span></div>
+    </div>
+    <p class="muted" id="easee-started"></p>
+    <p class="empty-state" id="easee-empty" hidden>No charging session data yet.</p>
+  </section>
+
   <footer class="foot">
     <span id="last-price-sync">–</span>
     <span id="last-consumption-sync"></span>
@@ -119,6 +134,10 @@
 
     <h3>Saveeye connection</h3>
     <div id="saveeye-status" class="diag-output">saveeye_enabled is off.</div>
+
+    <h3>Easee connection</h3>
+    <button type="button" class="btn-secondary full" id="easee-test-btn">Test Easee connection</button>
+    <div id="easee-test-result"></div>
   </div>
 </div>
 

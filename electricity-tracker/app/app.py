@@ -17,8 +17,9 @@ from flask import Flask, Response, g, jsonify, render_template, request
 import energidataservice
 import eloverblik
 import saveeye
+import easee
 
-APP_VERSION = "1.1.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.2.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("ELECTRICITY_DB_PATH", "/data/electricity.db")
 OPTIONS_PATH = os.environ.get("ELECTRICITY_OPTIONS_PATH", "/data/options.json")
@@ -198,6 +199,15 @@ def get_saveeye_config(options):
     }
 
 
+def get_easee_config(options):
+    return {
+        "enabled": bool(options.get("easee_enabled", False)),
+        "username": (options.get("easee_username") or "").strip(),
+        "password": options.get("easee_password") or "",
+        "charger_id": (options.get("easee_charger_id") or "").strip() or None,
+    }
+
+
 # --- Database ---
 
 
@@ -278,6 +288,19 @@ def init_db():
             instant_power_w REAL,
             cumulative_wh REAL,            -- the meter's own ever-increasing counter
             PRIMARY KEY (ts_utc, device_serial)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS easee_samples (
+            ts_utc TEXT NOT NULL,
+            charger_id TEXT NOT NULL,
+            status TEXT,
+            session_energy_kwh REAL,       -- resets at the start of each charging session
+            total_power_w REAL,
+            fetched_at TEXT NOT NULL,
+            PRIMARY KEY (ts_utc, charger_id)
         )
         """
     )
@@ -719,6 +742,149 @@ def saveeye_hourly_kwh(conn, start_local, end_local, device_serial):
     return out
 
 
+# --- Easee (EV charger, optional, read-only) ---
+
+_easee_token_cache = {
+    "username": None,
+    "access_token": None,
+    "refresh_token": None,
+    "expires_at": 0.0,
+    "charger_id": None,
+}
+
+
+def _get_easee_access_token(username, password, timeout=15):
+    cache = _easee_token_cache
+    now = time.time()
+    if cache["username"] == username and cache["access_token"] and now < cache["expires_at"]:
+        return cache["access_token"]
+    if cache["username"] == username and cache["refresh_token"]:
+        try:
+            token = easee.refresh_token(cache["access_token"], cache["refresh_token"], timeout=timeout)
+            cache.update(username=username, **token)
+            return token["access_token"]
+        except easee.EaseeError:
+            pass  # refresh token no longer valid — fall through to a fresh login
+    token = easee.login(username, password, timeout=timeout)
+    cache.update(username=username, **token)
+    return token["access_token"]
+
+
+def _resolve_easee_charger_id(access_token, configured_charger_id):
+    if configured_charger_id:
+        return configured_charger_id
+    if _easee_token_cache["charger_id"]:
+        return _easee_token_cache["charger_id"]
+    chargers = easee.get_chargers(access_token)
+    if not chargers:
+        return None
+    charger_id = chargers[0]["id"]
+    _easee_token_cache["charger_id"] = charger_id
+    return charger_id
+
+
+def sync_easee(conn, options):
+    cfg = get_easee_config(options)
+    if not cfg["enabled"] or not cfg["username"] or not cfg["password"]:
+        return
+    try:
+        access_token = _get_easee_access_token(cfg["username"], cfg["password"])
+        charger_id = _resolve_easee_charger_id(access_token, cfg["charger_id"])
+        if not charger_id:
+            _log("Easee sync: no chargers found on this account")
+            return
+        state = easee.get_charger_state(access_token, charger_id)
+    except easee.EaseeError as exc:
+        _log(f"Easee sync failed: {exc}")
+        return
+    ts = _now_iso()
+    conn.execute(
+        "INSERT OR REPLACE INTO easee_samples "
+        "(ts_utc, charger_id, status, session_energy_kwh, total_power_w, fetched_at) VALUES (?, ?, ?, ?, ?, ?)",
+        (ts, charger_id, state["status"], state["session_energy_kwh"], state["total_power_w"], ts),
+    )
+    _set_app_state(conn, "last_easee_sync", ts)
+    conn.commit()
+    _log(f"Easee sync: {state['status']}, {state['session_energy_kwh']} kWh this session")
+
+
+def easee_current_session(conn, opts, price_area, charger_id):
+    """The most recent (or ongoing) charging session's energy and cost so
+    far, from Easee's own `sessionEnergy` field — which the charger itself
+    resets at the start of each session, so a *decrease* between two
+    consecutive polls marks a session boundary. The "session" here is
+    therefore the longest run of recent samples where it never decreases.
+
+    Cost is attributed by multiplying each poll-to-poll energy delta by the
+    price at the later sample's hour — the same mechanism a spot meter
+    reading would use, just applied to one appliance's share of the total
+    rather than the whole house.
+    """
+    rows = conn.execute(
+        "SELECT ts_utc, session_energy_kwh, total_power_w, status FROM easee_samples "
+        "WHERE charger_id = ? ORDER BY ts_utc DESC LIMIT 500",
+        (charger_id,),
+    ).fetchall()
+    if not rows:
+        return None
+    rows = list(reversed(rows))  # chronological
+
+    session_start_idx = len(rows) - 1
+    for i in range(len(rows) - 1, 0, -1):
+        prev, cur = rows[i - 1], rows[i]
+        if prev["session_energy_kwh"] is None or cur["session_energy_kwh"] is None:
+            break
+        if cur["session_energy_kwh"] < prev["session_energy_kwh"] - 0.01:
+            break  # a real decrease: a new session started here
+        session_start_idx = i - 1
+    session_rows = rows[session_start_idx:]
+    latest = session_rows[-1]
+
+    if len(session_rows) < 2:
+        return {
+            "status": latest["status"],
+            "session_energy_kwh": latest["session_energy_kwh"],
+            "total_power_w": latest["total_power_w"],
+            "session_cost_dkk": None,
+            "session_started_at": latest["ts_utc"],
+        }
+
+    start_local = datetime.fromisoformat(session_rows[0]["ts_utc"]).astimezone(LOCAL_TZ).replace(
+        minute=0, second=0, microsecond=0
+    )
+    end_local = datetime.fromisoformat(session_rows[-1]["ts_utc"]).astimezone(LOCAL_TZ).replace(
+        minute=0, second=0, microsecond=0
+    ) + timedelta(hours=1)
+    hourly_totals = _hourly_totals(quarter_prices_with_total(conn, start_local, end_local, price_area, opts))
+
+    cost = 0.0
+    cost_known = True
+    for prev, cur in zip(session_rows, session_rows[1:]):
+        if prev["session_energy_kwh"] is None or cur["session_energy_kwh"] is None:
+            continue
+        delta = cur["session_energy_kwh"] - prev["session_energy_kwh"]
+        if delta <= 0:
+            continue
+        hour_key = (
+            datetime.fromisoformat(cur["ts_utc"]).astimezone(LOCAL_TZ).replace(
+                minute=0, second=0, microsecond=0, tzinfo=None
+            ).isoformat()
+        )
+        price = hourly_totals.get(hour_key)
+        if price is None:
+            cost_known = False
+            continue
+        cost += delta * price
+
+    return {
+        "status": latest["status"],
+        "session_energy_kwh": latest["session_energy_kwh"],
+        "total_power_w": latest["total_power_w"],
+        "session_cost_dkk": round(cost, 2) if cost_known else None,
+        "session_started_at": session_rows[0]["ts_utc"],
+    }
+
+
 # --- Home Assistant sensors ---
 
 
@@ -813,6 +979,29 @@ def publish_sensors(conn, options):
                 },
             )
 
+    easee_cfg = get_easee_config(options)
+    if easee_cfg["enabled"]:
+        charger_id = easee_cfg["charger_id"] or _easee_token_cache["charger_id"]
+        if charger_id:
+            session = easee_current_session(conn, opts, opts["price_area"], charger_id)
+            if session:
+                state = session["total_power_w"] if session["total_power_w"] is not None else "unknown"
+                push_sensor(
+                    "sensor.electricity_tracker_ev_power",
+                    state,
+                    {
+                        "friendly_name": "EV charging power",
+                        "icon": "mdi:ev-station",
+                        "unit_of_measurement": "W",
+                        "device_class": "power",
+                        "state_class": "measurement",
+                        "status": session["status"],
+                        "session_energy_kwh": session["session_energy_kwh"],
+                        "session_cost_dkk": session["session_cost_dkk"],
+                        "session_started_at": session["session_started_at"],
+                    },
+                )
+
 
 # --- Background loop ---
 
@@ -832,6 +1021,7 @@ def _background_loop():
                     sync_consumption(conn, options)
                     last_consumption_sync = now
                 _persist_saveeye_sample(conn)
+                sync_easee(conn, options)
                 if SUPERVISOR_TOKEN:
                     publish_sensors(conn, options)
             finally:
@@ -882,6 +1072,15 @@ def api_summary():
         payload, received_at = get_saveeye_latest()
         saveeye_now = {"payload": payload, "received_at": received_at, **get_saveeye_status()}
 
+    easee_cfg = get_easee_config(options)
+    easee_now = None
+    if easee_cfg["enabled"]:
+        charger_id = easee_cfg["charger_id"] or _easee_token_cache["charger_id"]
+        easee_now = {
+            "charger_id": charger_id,
+            "session": easee_current_session(db, opts, opts["price_area"], charger_id) if charger_id else None,
+        }
+
     return jsonify(
         {
             "app_version": APP_VERSION,
@@ -899,6 +1098,7 @@ def api_summary():
             "consumption": consumption,
             "eloverblik_configured": bool(cfg["refresh_token"] and cfg["metering_point"]),
             "saveeye": saveeye_now,
+            "easee": easee_now,
             "last_price_sync": _get_app_state(db, "last_price_sync"),
             "last_consumption_sync": _get_app_state(db, "last_consumption_sync"),
         }
@@ -952,6 +1152,49 @@ def api_saveeye_now():
     return jsonify({"enabled": True, "payload": payload, "received_at": received_at, **get_saveeye_status()})
 
 
+@app.route("/api/easee/now")
+def api_easee_now():
+    """The current (or most recent) charging session's live state and cost
+    so far, from the last poll — see easee_current_session for how that's
+    derived."""
+    db = get_db()
+    options = _read_options()
+    cfg = get_easee_config(options)
+    if not cfg["enabled"]:
+        return jsonify({"enabled": False})
+    opts = get_price_options(options)
+    charger_id = cfg["charger_id"] or _easee_token_cache["charger_id"]
+    if not charger_id:
+        return jsonify({"enabled": True, "charger_id": None, "session": None})
+    session = easee_current_session(db, opts, opts["price_area"], charger_id)
+    return jsonify(
+        {
+            "enabled": True,
+            "charger_id": charger_id,
+            "session": session,
+            "last_sync": _get_app_state(db, "last_easee_sync"),
+        }
+    )
+
+
+@app.route("/api/easee/diagnose")
+def api_easee_diagnose():
+    """A live round-trip to Easee: logs in with the configured account and
+    lists every charger it can see, so the right charger id can be copied
+    into easee_charger_id without guessing — same role
+    /api/eloverblik/diagnose plays for Eloverblik."""
+    options = _read_options()
+    cfg = get_easee_config(options)
+    if not cfg["username"] or not cfg["password"]:
+        return jsonify({"ok": False, "error": "easee_username/easee_password not set"}), 400
+    try:
+        access_token = _get_easee_access_token(cfg["username"], cfg["password"])
+        chargers = easee.get_chargers(access_token)
+    except easee.EaseeError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 502
+    return jsonify({"ok": True, "chargers": chargers, "configured_charger_id": cfg["charger_id"]})
+
+
 @app.route("/api/eloverblik/diagnose")
 def api_eloverblik_diagnose():
     """A live round-trip to Eloverblik: exchanges the configured refresh token
@@ -984,7 +1227,7 @@ def api_health():
     return jsonify({"ok": True, "version": APP_VERSION})
 
 
-TRACKED_TABLES = ("prices", "consumption", "saveeye_samples")
+TRACKED_TABLES = ("prices", "consumption", "saveeye_samples", "easee_samples")
 
 
 @app.route("/api/stats")

@@ -211,6 +211,40 @@ function renderConsumptionSummary(consumption, configured) {
   document.getElementById("c-month-cost").textContent = fmtKr(consumption.month_cost_dkk);
 }
 
+// --- EV charging (Easee) ---
+
+function renderEasee(easee) {
+  const card = document.getElementById("easee-card");
+  if (!easee) {
+    card.hidden = true;
+    return;
+  }
+  card.hidden = false;
+
+  const session = easee.session;
+  const empty = document.getElementById("easee-empty");
+  if (!session) {
+    empty.hidden = false;
+    document.getElementById("easee-status-pill").textContent = "no data yet";
+    document.getElementById("easee-power").textContent = "–";
+    document.getElementById("easee-energy").textContent = "–";
+    document.getElementById("easee-cost").textContent = "–";
+    document.getElementById("easee-started").textContent = "";
+    return;
+  }
+  empty.hidden = true;
+
+  document.getElementById("easee-status-pill").textContent = session.status || "–";
+  document.getElementById("easee-power").textContent =
+    session.total_power_w != null ? `${(session.total_power_w / 1000).toFixed(2)} kW` : "–";
+  document.getElementById("easee-energy").textContent =
+    session.session_energy_kwh != null ? `${session.session_energy_kwh.toFixed(2)} kWh` : "–";
+  document.getElementById("easee-cost").textContent =
+    session.session_cost_dkk != null ? `${session.session_cost_dkk.toFixed(2)} kr` : "–";
+  const started = relTime(session.session_started_at);
+  document.getElementById("easee-started").textContent = started ? `Session started ${started}` : "";
+}
+
 // --- Consumption chart (daily totals) ---
 
 function aggregateDaily(rows) {
@@ -295,6 +329,7 @@ async function loadSummary() {
   renderNow(data);
   refreshChart(data.now_local);
   renderConsumptionSummary(data.consumption, data.eloverblik_configured);
+  renderEasee(data.easee);
 
   const priceSync = relTime(data.last_price_sync);
   const consumptionSync = relTime(data.last_consumption_sync);
@@ -370,6 +405,34 @@ function wireSettingsSheet() {
     } finally {
       btn.disabled = false;
       btn.textContent = "Test Eloverblik connection";
+    }
+  });
+
+  document.getElementById("easee-test-btn").addEventListener("click", async () => {
+    const btn = document.getElementById("easee-test-btn");
+    const out = document.getElementById("easee-test-result");
+    btn.disabled = true;
+    btn.textContent = "Testing…";
+    out.innerHTML = "";
+    try {
+      const res = await fetch("api/easee/diagnose");
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        out.innerHTML = `<div class="diag-output">Error: ${escapeHtml(data.error || res.statusText)}</div>`;
+      } else if (!data.chargers || !data.chargers.length) {
+        out.innerHTML = '<div class="diag-output">Connected, but no chargers came back on this account.</div>';
+      } else {
+        const lines = data.chargers.map((c) => `${c.id} — ${c.name}`).join("\n");
+        out.innerHTML =
+          `<p class="muted">Found ${data.chargers.length} charger(s). Leave <code>easee_charger_id</code> ` +
+          `empty to use the first one, or copy an id in to pick a specific one:</p>` +
+          `<div class="diag-output">${escapeHtml(lines)}</div>`;
+      }
+    } catch (err) {
+      out.innerHTML = `<div class="diag-output">Request failed: ${escapeHtml(String(err))}</div>`;
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "Test Easee connection";
     }
   });
 }

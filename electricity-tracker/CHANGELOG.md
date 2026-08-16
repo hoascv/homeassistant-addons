@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.2.0
+
+- **Optional Easee Home charger support, read-only.** Authenticates with
+  Easee's cloud API using your account email/password (`easee_enabled`) and
+  polls charger state on the same ~5-minute tick as everything else:
+  - a new **EV charging** dashboard card — status, live power, and the
+    current/most recent session's energy and cost against the real price;
+  - session cost is derived by diffing Easee's own per-session energy
+    counter between polls (it resets at the start of each session) and
+    pricing each delta at that hour's rate;
+  - pushes `sensor.electricity_tracker_ev_power` to Home Assistant.
+  - **Never controls the charger** — no start/stop/pause/throttle command is
+    ever called; your existing charging schedule and the Easee app are
+    unaffected by installing this.
+- New `/api/easee/now` and `/api/easee/diagnose` endpoints, and a
+  Settings-panel connection test (lists every charger on the account, to
+  find `easee_charger_id` without guessing).
+
 ## 1.1.0
 
 - **Optional Saveeye Base support.** A Saveeye HAN-port reader publishes live

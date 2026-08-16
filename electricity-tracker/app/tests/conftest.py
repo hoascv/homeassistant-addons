@@ -25,6 +25,11 @@ def _reset_module_state(monkeypatch):
     )
     monkeypatch.setattr(electricityapp, "_saveeye_latest", {"payload": None, "received_at": None})
     monkeypatch.setattr(electricityapp, "_saveeye_status", {"connected": False, "detail": None})
+    monkeypatch.setattr(
+        electricityapp,
+        "_easee_token_cache",
+        {"username": None, "access_token": None, "refresh_token": None, "expires_at": 0.0, "charger_id": None},
+    )
 
 
 @pytest.fixture

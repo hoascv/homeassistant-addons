@@ -19,6 +19,10 @@ Three independent data sources, none of which needs another:
   live instant power and a same-day *estimate* of hourly consumption, over
   MQTT. Fills the gap while Eloverblik catches up; never overrides Eloverblik
   once it has the real number for an hour. See *Setting up Saveeye*, below.
+- **Easee** (optional) — an Easee Home charger, if you have one: read-only
+  monitoring of charging status, live power, and what the current/last
+  charging session cost against the real price. This add-on never starts,
+  stops, or throttles charging — see *Setting up Easee*, below.
 
 ## Setting up prices
 
@@ -100,6 +104,35 @@ meter's tally uses. Marked `"source": "saveeye_estimate"` everywhere it
 appears (API, dashboard chart), and always superseded by Eloverblik's
 measured figure once that hour arrives.
 
+## Setting up Easee (optional, EV charging monitoring)
+
+Read-only. This add-on authenticates with your Easee account credentials
+directly (the same pattern Gym Tracker uses for Garmin) — there's no
+app-generated token to create first.
+
+1. **easee_enabled**: `true`.
+2. **easee_username** / **easee_password**: the email and password you use
+   to log into the Easee app.
+3. **easee_charger_id**: leave empty to use the first charger on the
+   account. If you have more than one, restart the add-on once, then open
+   **Settings → Test Easee connection** in the dashboard (or
+   `/api/easee/diagnose`) to list every charger's id and name, and copy the
+   one you want in.
+4. Restart the add-on. State refreshes on the same ~5-minute tick as
+   everything else — live in the sense of "current", not sub-minute.
+
+What this buys you: an **EV charging** card on the dashboard with live
+status (`CHARGING`, `COMPLETED`, `AWAITING_START`, ...), power, and the
+current/most recent session's energy and cost — the cost is derived by
+diffing Easee's own per-session energy counter between polls and pricing
+each delta at that hour's real rate, the same principle Saveeye's estimate
+uses, just scoped to one appliance's session rather than the whole house. A
+push of `sensor.electricity_tracker_ev_power` to Home Assistant.
+
+Charging energy is already included in your whole-house numbers from
+Eloverblik (and Saveeye, if configured) — Easee's session figures are a
+breakdown of part of that same total, not counted again on top of it.
+
 ## Setting up the full end-user price
 
 Only spot price and VAT (25%) have safe, stable defaults. Everything else —
@@ -146,10 +179,14 @@ actually charges.
   hatched bar and a legend note; hovering any bar shows the breakdown.
 - **kW now** — under the price card, once Saveeye is enabled and reporting:
   live instant power plus what that costs per hour at the current price.
+- **EV charging** — once Easee is enabled: status, live power, and the
+  current/last session's energy and cost.
 - **Settings → Test Eloverblik connection** — a live round-trip to Eloverblik
   with your configured token, listing every metering point it can see.
 - **Settings → Saveeye connection** — live MQTT connection status and the
   most recent reading.
+- **Settings → Test Easee connection** — a live round-trip to Easee with
+  your configured account, listing every charger it can see.
 
 ## Home Assistant sensors
 
@@ -166,6 +203,9 @@ Pushed via the Supervisor API (`homeassistant_api: true`) every sync tick
   pushed once Eloverblik is configured.
 - `sensor.electricity_tracker_power_now` — instant power, Watts. Only pushed
   once Saveeye is enabled and has reported at least once.
+- `sensor.electricity_tracker_ev_power` — EV charging power, Watts.
+  Attributes carry status, session energy, and session cost. Only pushed
+  once Easee is enabled and a charger has been found.
 
 ## Endpoints
 
@@ -182,6 +222,10 @@ Pushed via the Supervisor API (`homeassistant_api: true`) every sync tick
   above).
 - `/api/saveeye/now` — live Saveeye MQTT connection status and the most
   recent telemetry reading.
+- `/api/easee/now` — the current/most recent charging session's live state
+  and cost so far.
+- `/api/easee/diagnose` — live Easee connection test, listing every charger
+  on the account (see Settings, above).
 - `/api/health`, `/api/stats`, `/api/export` — for the Add-on Watchdog and a
   pipeline: liveness, row counts, and a full data dump.
 
@@ -210,3 +254,12 @@ narrows ingress access to specific Home Assistant users on top of
 - `saveeye_mqtt_password` is stored like any other add-on secret
   (`/data/options.json` on the host); it's whatever login you created on the
   Mosquitto broker for this purpose, not a Home Assistant account password.
+- Easee's own `sessionEnergy` field resets at the start of each new charging
+  session, which is what lets a session's cost be attributed by diffing
+  consecutive polls rather than needing Saveeye-style interpolation of an
+  ever-increasing counter — a decrease between two polls is read as "a new
+  session started here," and only samples from that point on count.
+- This add-on only ever reads Easee's state — it never calls any command
+  endpoint (start/stop/pause/resume/set current). Your own charging schedule,
+  the Easee app, and any smart-charging settings you already have are
+  completely unaffected by installing this.
