@@ -77,11 +77,17 @@ def get_hourly_consumption(access_token, metering_point_id, date_from, date_to, 
     """
     d_from = date_from if isinstance(date_from, str) else date_from.strftime("%Y-%m-%d")
     d_to = date_to if isinstance(date_to, str) else date_to.strftime("%Y-%m-%d")
+    # Energinet's own technical description (doc 19/11830-1) documents this
+    # body as a flat {"meteringPointIds": [...]} array. The live API rejects
+    # that with "#20013: No meteringpoints in request conforms to valid
+    # meteringpoint format" — the docs are wrong here. Every working client
+    # (pyeloverblik, nim_eloverblik_api) instead sends this nested shape,
+    # which is what the API actually expects.
     body = _request(
         f"/api/meterdata/gettimeseries/{d_from}/{d_to}/Hour",
         access_token=access_token,
         method="POST",
-        body={"meteringPointIds": [metering_point_id]},
+        body={"meteringPoints": {"meteringPoint": [metering_point_id]}},
         timeout=timeout,
     )
     return _parse_time_series(body)

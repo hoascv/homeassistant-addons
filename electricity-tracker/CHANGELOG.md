@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.0.1
+
+- Fixed consumption sync failing on every real account with
+  `#20013: No meteringpoints in request conforms to valid meteringpoint
+  format.` Energinet's own technical description documents the
+  `GetTimeSeries` request body as `{"meteringPointIds": [...]}`, but the live
+  API actually rejects that and only accepts a nested
+  `{"meteringPoints": {"meteringPoint": [...]}}` shape — confirmed against
+  every working community client. Prices were unaffected; only consumption
+  sync was broken.
+
 ## 1.0.0
 
 - First release. Danish day-ahead electricity spot prices (Energi Data

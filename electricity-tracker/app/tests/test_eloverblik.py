@@ -81,6 +81,23 @@ def _sample_time_series_body():
     }
 
 
+def test_get_hourly_consumption_sends_nested_metering_points_body():
+    """Regression test: the live API rejects the flat {"meteringPointIds": [...]}
+    shape Energinet's own docs describe (error #20013), and only accepts this
+    nested one — see the comment in eloverblik.py."""
+    body = _sample_time_series_body()
+    captured = {}
+
+    def fake_urlopen(req, data=None, timeout=None):
+        captured["body"] = json.loads(data)
+        return _FakeResponse(json.dumps(body).encode())
+
+    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+        eloverblik.get_hourly_consumption("access-token", "5713131111111111", "2026-08-15", "2026-08-16")
+
+    assert captured["body"] == {"meteringPoints": {"meteringPoint": ["5713131111111111"]}}
+
+
 def test_get_hourly_consumption_parses_points_with_correct_offsets():
     body = _sample_time_series_body()
     with patch("urllib.request.urlopen", return_value=_FakeResponse(json.dumps(body).encode())):
