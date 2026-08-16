@@ -4,7 +4,7 @@ const state = {
   today: [],
   tomorrow: [],
   currentDay: "today",
-  consumptionDays: 7,
+  consumptionView: "hourly",
 };
 
 function escapeHtml(str) {
@@ -261,10 +261,48 @@ function aggregateDaily(rows) {
   return [...map.values()].sort((a, b) => a.day.localeCompare(b.day));
 }
 
-function renderConsumptionChart(rows) {
+function renderHourlyChart(rows) {
+  const host = document.getElementById("consumption-chart");
+  if (!rows.length) {
+    host.innerHTML = '<p class="empty-state">No consumption data yet today.</p>';
+    return;
+  }
+
+  const W = 600, H = 160, padBottom = 16, padTop = 4;
+  const max = Math.max(...rows.map((r) => r.kwh), 0.1);
+  const barW = W / rows.length;
+
+  const bars = rows.map((r, i) => {
+    const h = (r.kwh / max) * (H - padTop - padBottom);
+    const x = i * barW;
+    const y = H - padBottom - h;
+    const costStr = r.cost_dkk != null ? `${r.cost_dkk.toFixed(2)} kr` : "cost n/a";
+    const sourceNote = r.source === "saveeye_estimate" ? " (live estimate)" : "";
+    const label = `${hm(r.time_dk)} — ${r.kwh.toFixed(2)} kWh, ${costStr}${sourceNote}`;
+    const estimateClass = r.source === "saveeye_estimate" ? " chart-bar-estimate" : "";
+    return (
+      `<rect class="chart-bar chart-bar-normal${estimateClass}" x="${x.toFixed(1)}" y="${y.toFixed(1)}" ` +
+      `width="${Math.max(1, barW - 0.6).toFixed(1)}" height="${Math.max(1, h).toFixed(1)}" opacity="0.85">` +
+      `<title>${escapeHtml(label)}</title></rect>`
+    );
+  }).join("");
+
+  const labels = rows.map((r, i) => {
+    const hourStr = r.time_dk.slice(11, 13);
+    if (Number(hourStr) % 3 !== 0) return "";
+    const x = i * barW;
+    return `<text class="chart-axis-label" x="${x.toFixed(1)}" y="${H - 4}">${hourStr}</text>`;
+  }).join("");
+
+  host.innerHTML = (
+    `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="Hourly consumption today">` +
+    bars + labels + `</svg>`
+  );
+}
+
+function renderDailyChart(rows) {
   const host = document.getElementById("consumption-chart");
   const daily = aggregateDaily(rows);
-  document.getElementById("consumption-chart-legend").hidden = !rows.some((r) => r.source === "saveeye_estimate");
   if (!daily.length) {
     host.innerHTML = '<p class="empty-state">No consumption data yet.</p>';
     return;
@@ -302,9 +340,19 @@ function renderConsumptionChart(rows) {
   );
 }
 
+function renderConsumptionChart(rows) {
+  document.getElementById("consumption-chart-legend").hidden = !rows.some((r) => r.source === "saveeye_estimate");
+  if (state.consumptionView === "hourly") {
+    renderHourlyChart(rows);
+  } else {
+    renderDailyChart(rows);
+  }
+}
+
 async function loadConsumptionChart() {
+  const days = state.consumptionView === "hourly" ? 1 : state.consumptionView;
   try {
-    const rows = await fetchJSON(`api/consumption?days=${state.consumptionDays}`);
+    const rows = await fetchJSON(`api/consumption?days=${days}`);
     renderConsumptionChart(rows);
   } catch (err) {
     document.getElementById("consumption-chart").innerHTML =
@@ -452,7 +500,7 @@ function wireChartToggles() {
     if (!btn) return;
     document.querySelectorAll("#consumption-range-toggle .seg-btn").forEach((b) => b.classList.remove("seg-on"));
     btn.classList.add("seg-on");
-    state.consumptionDays = Number(btn.dataset.days);
+    state.consumptionView = btn.dataset.view === "hourly" ? "hourly" : Number(btn.dataset.view);
     loadConsumptionChart();
   });
 }

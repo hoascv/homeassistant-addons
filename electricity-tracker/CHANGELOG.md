@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.3.0
+
+- The consumption chart's **Today** view now shows one bar per hour instead
+  of only daily totals — the 7d/14d/30d views stay aggregated to a bar per
+  day. `/api/consumption` was already hourly; this is the dashboard catching
+  up to it. Hours filled in by a Saveeye estimate keep the same hatched
+  styling and legend the daily view already used.
+
 ## 1.2.0
 
 - **Optional Easee Home charger support, read-only.** Authenticates with
