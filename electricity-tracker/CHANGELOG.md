@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.1.0
+
+- **Optional Saveeye Base support.** A Saveeye HAN-port reader publishes live
+  instant power and a cumulative energy counter over MQTT
+  (`saveeye_enabled`); this add-on subscribes directly (no dependency on
+  Saveeye's own community Home Assistant integration) and:
+  - shows live **kW now** on the dashboard, with the cost rate at the
+    current price;
+  - fills in a same-day **hourly consumption estimate** for any hour
+    Eloverblik hasn't reported yet, by interpolating the meter's cumulative
+    counter at each hour boundary — the same principle a physical meter's
+    tally uses. Never overrides Eloverblik's measured figure once an hour
+    has one; marked `"source": "saveeye_estimate"` everywhere it appears.
+  - pushes `sensor.electricity_tracker_power_now` to Home Assistant.
+- New `/api/saveeye/now` endpoint and a Settings-panel status view (live
+  connection state + most recent reading) — same role
+  `/api/eloverblik/diagnose` plays for Eloverblik.
+- Needs an MQTT broker between the Base and this add-on — the Home Assistant
+  "Mosquitto broker" add-on is the documented path. See DOCS.md's *Setting
+  up Saveeye* for the full walkthrough, including which hostname is correct
+  from which side (the physical reader needs your LAN address; this add-on
+  needs `core-mosquitto`, the two are not interchangeable).
+
 ## 1.0.1
 
 - Fixed consumption sync failing on every real account with

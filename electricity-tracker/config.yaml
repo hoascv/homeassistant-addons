@@ -1,5 +1,5 @@
 name: "Electricity Tracker"
-version: "1.0.1"
+version: "1.1.0"
 slug: "electricity-tracker"
 description: "Danish electricity spot prices and your own smart-meter consumption, combined into what you actually pay"
 url: "https://github.com/hoascv/homeassistant-addons/tree/main/electricity-tracker"
@@ -55,6 +55,26 @@ options:
   eloverblik_refresh_token: ""
   eloverblik_metering_point: ""
   eloverblik_backfill_days: 30
+  # A Saveeye Base HAN-port reader, if you have one: live instant power and
+  # same-day hourly consumption, filling the gap while Eloverblik's official
+  # figures are still 1-3 days behind. Off by default. Needs an MQTT broker —
+  # the Home Assistant "Mosquitto broker" add-on is the easy path — with the
+  # Saveeye app's own MQTT settings pointed at your Home Assistant host's LAN
+  # address (not core-mosquitto — that name only resolves inside Supervisor's
+  # own network, which the physical Base reader is not on). See DOCS.md.
+  saveeye_enabled: false
+  # This add-on's own connection to that broker, reached from inside
+  # Supervisor — core-mosquitto is the official Mosquitto broker add-on's
+  # fixed internal hostname, correct as long as that's the broker in use.
+  saveeye_mqtt_host: "core-mosquitto"
+  saveeye_mqtt_port: 1883
+  saveeye_mqtt_username: ""
+  saveeye_mqtt_password: ""
+  saveeye_mqtt_topic: "saveeye/telemetry"
+  # Empty accepts telemetry from any device on the topic — fine for the
+  # common case of one Base reader. Set this (from /api/saveeye/now once
+  # you're receiving telemetry) only if more than one ever publishes here.
+  saveeye_device_serial: ""
   restrict_to_user_ids: ""
   api_token: ""
 schema:
@@ -74,5 +94,12 @@ schema:
   eloverblik_refresh_token: "password?"
   eloverblik_metering_point: "str?"
   eloverblik_backfill_days: "int(1,730)"
+  saveeye_enabled: "bool"
+  saveeye_mqtt_host: "str"
+  saveeye_mqtt_port: "int(1,65535)"
+  saveeye_mqtt_username: "str?"
+  saveeye_mqtt_password: "password?"
+  saveeye_mqtt_topic: "str"
+  saveeye_device_serial: "str?"
   restrict_to_user_ids: "str?"
   api_token: "str?"

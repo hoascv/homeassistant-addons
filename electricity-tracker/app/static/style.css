@@ -99,6 +99,24 @@ code {
 .price-normal { color: var(--text); }
 .price-expensive { color: var(--danger); }
 
+.power-now-row {
+  display: flex; align-items: center; gap: 0.4rem; margin-top: 0.7rem;
+  padding-top: 0.6rem; border-top: 1px dashed var(--border);
+  font-size: 0.85rem; font-weight: 600;
+}
+.power-now-dot {
+  width: 0.5rem; height: 0.5rem; border-radius: 50%; background: var(--success);
+  box-shadow: 0 0 0 3px var(--success-soft); flex-shrink: 0;
+}
+
+.chart-legend {
+  display: flex; gap: 1rem; margin: 0.5rem 0 0; font-size: 0.72rem; color: var(--text-muted);
+}
+.chart-legend span { display: inline-flex; align-items: center; gap: 0.3rem; }
+.legend-swatch { width: 0.6rem; height: 0.6rem; border-radius: 2px; display: inline-block; }
+.legend-swatch-measured { background: var(--accent); }
+.legend-swatch-estimate { background: var(--accent); opacity: 0.4; background-image: repeating-linear-gradient(45deg, transparent, transparent 2px, var(--surface) 2px, var(--surface) 3px); }
+
 .mini-stats { display: flex; gap: 0.6rem; margin: 0.9rem 0 0.1rem; flex-wrap: wrap; }
 .mini-stats-4 .mini-stat { min-width: calc(25% - 0.5rem); }
 .mini-stat {
@@ -126,6 +144,7 @@ code {
 .chart-bar-cheap { fill: var(--success); }
 .chart-bar-normal { fill: var(--accent); }
 .chart-bar-expensive { fill: var(--danger); }
+.chart-bar-estimate { stroke: var(--accent); stroke-width: 1; stroke-dasharray: 2 1.5; }
 .chart-axis-label { font-size: 8px; fill: var(--text-muted); }
 
 .empty-state { color: var(--text-muted); font-size: 0.85rem; text-align: center; padding: 0.5rem; line-height: 1.5; }

@@ -45,7 +45,7 @@ def test_health(client):
 def test_stats_empty_db(client):
     res = client.get("/api/stats")
     data = res.get_json()
-    assert data["counts"] == {"prices": 0, "consumption": 0}
+    assert data["counts"] == {"prices": 0, "consumption": 0, "saveeye_samples": 0}
     assert data["total"] == 0
 
 
@@ -86,4 +86,4 @@ def test_consumption_empty_without_metering_point(client):
 
 def test_export_shape(client):
     data = client.get("/api/export").get_json()
-    assert set(data["tables"].keys()) == {"prices", "consumption"}
+    assert set(data["tables"].keys()) == {"prices", "consumption", "saveeye_samples"}

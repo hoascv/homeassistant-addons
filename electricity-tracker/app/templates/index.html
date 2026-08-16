@@ -31,6 +31,11 @@
       <div class="mini-stat"><span class="mini-value" id="cheapest-today">–</span><span class="mini-label">Cheapest today</span></div>
       <div class="mini-stat"><span class="mini-value" id="priciest-today">–</span><span class="mini-label">Priciest today</span></div>
     </div>
+    <div class="power-now-row" id="power-now-row" hidden>
+      <span class="power-now-dot" id="power-now-dot"></span>
+      <span id="power-now-value">–</span>
+      <span class="muted" id="power-now-rate"></span>
+    </div>
   </section>
 
   <!-- Price curve -->
@@ -82,6 +87,10 @@
       </div>
     </div>
     <div id="consumption-chart" class="chart-host"></div>
+    <p class="chart-legend" id="consumption-chart-legend" hidden>
+      <span><span class="legend-swatch legend-swatch-measured"></span>Measured (Eloverblik)</span>
+      <span><span class="legend-swatch legend-swatch-estimate"></span>Live estimate (Saveeye)</span>
+    </p>
   </section>
 
   <footer class="foot">
@@ -107,6 +116,9 @@
     <h3>Eloverblik connection</h3>
     <button type="button" class="btn-secondary full" id="eloverblik-test-btn">Test Eloverblik connection</button>
     <div id="eloverblik-test-result"></div>
+
+    <h3>Saveeye connection</h3>
+    <div id="saveeye-status" class="diag-output">saveeye_enabled is off.</div>
   </div>
 </div>
 

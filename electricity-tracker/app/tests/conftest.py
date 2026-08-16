@@ -23,6 +23,8 @@ def _reset_module_state(monkeypatch):
         "_eloverblik_token_cache",
         {"refresh_token": None, "access_token": None, "expires_at": 0.0},
     )
+    monkeypatch.setattr(electricityapp, "_saveeye_latest", {"payload": None, "received_at": None})
+    monkeypatch.setattr(electricityapp, "_saveeye_status", {"connected": False, "detail": None})
 
 
 @pytest.fixture

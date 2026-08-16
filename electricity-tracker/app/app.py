@@ -16,8 +16,9 @@ from flask import Flask, Response, g, jsonify, render_template, request
 
 import energidataservice
 import eloverblik
+import saveeye
 
-APP_VERSION = "1.0.1"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.1.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("ELECTRICITY_DB_PATH", "/data/electricity.db")
 OPTIONS_PATH = os.environ.get("ELECTRICITY_OPTIONS_PATH", "/data/options.json")
@@ -181,6 +182,22 @@ def get_eloverblik_config(options):
     }
 
 
+def get_saveeye_config(options):
+    try:
+        port = int(options.get("saveeye_mqtt_port", 1883))
+    except (TypeError, ValueError):
+        port = 1883
+    return {
+        "enabled": bool(options.get("saveeye_enabled", False)),
+        "mqtt_host": (options.get("saveeye_mqtt_host") or "core-mosquitto").strip(),
+        "mqtt_port": port,
+        "mqtt_username": (options.get("saveeye_mqtt_username") or "").strip() or None,
+        "mqtt_password": options.get("saveeye_mqtt_password") or None,
+        "mqtt_topic": (options.get("saveeye_mqtt_topic") or saveeye.DEFAULT_TOPIC).strip(),
+        "device_serial": (options.get("saveeye_device_serial") or "").strip() or None,
+    }
+
+
 # --- Database ---
 
 
@@ -250,6 +267,17 @@ def init_db():
         CREATE TABLE IF NOT EXISTS app_state (
             key TEXT PRIMARY KEY,
             value TEXT
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS saveeye_samples (
+            ts_utc TEXT NOT NULL,          -- when this add-on received the telemetry, UTC ISO
+            device_serial TEXT NOT NULL,
+            instant_power_w REAL,
+            cumulative_wh REAL,            -- the meter's own ever-increasing counter
+            PRIMARY KEY (ts_utc, device_serial)
         )
         """
     )
@@ -393,9 +421,54 @@ def consumption_with_cost(conn, start_utc, end_utc, metering_point, price_area, 
     return out
 
 
-def _consumption_totals(conn, start_local, end_local, metering_point, price_area, opts):
+def combined_consumption_with_cost(
+    conn, start_local, end_local, metering_point, price_area, opts, saveeye_device_serial=None
+):
+    """Eloverblik's measured hours, with any hour in range Eloverblik hasn't
+    reported yet filled in from Saveeye's live cumulative counter, if
+    configured — a same-day estimate for the 1-3 days Eloverblik typically
+    lags, clearly marked `"source": "saveeye_estimate"` rather than presented
+    as equivalent to a measured reading. Eloverblik always wins once it has
+    the hour; nothing here ever overrides a measured row.
+    """
     rows = consumption_with_cost(
         conn, start_local.astimezone(timezone.utc), end_local.astimezone(timezone.utc), metering_point, price_area, opts
+    )
+    for row in rows:
+        row["source"] = "eloverblik"
+
+    if not saveeye_device_serial:
+        return rows
+
+    covered = {row["time_dk"] for row in rows}
+    estimates = saveeye_hourly_kwh(conn, start_local, end_local, saveeye_device_serial)
+    hourly_totals = _hourly_totals(quarter_prices_with_total(conn, start_local, end_local, price_area, opts))
+
+    for hour_key, kwh in estimates.items():
+        if hour_key in covered:
+            continue
+        price = hourly_totals.get(hour_key)
+        cost = round(kwh * price, 4) if price is not None else None
+        time_utc = datetime.fromisoformat(hour_key).replace(tzinfo=LOCAL_TZ).astimezone(timezone.utc).isoformat()
+        rows.append(
+            {
+                "time_utc": time_utc,
+                "time_dk": hour_key,
+                "kwh": kwh,
+                "quality": None,
+                "price_dkk_kwh": round(price, 4) if price is not None else None,
+                "cost_dkk": cost,
+                "source": "saveeye_estimate",
+            }
+        )
+
+    rows.sort(key=lambda r: r["time_dk"])
+    return rows
+
+
+def _consumption_totals(conn, start_local, end_local, metering_point, price_area, opts, saveeye_device_serial=None):
+    rows = combined_consumption_with_cost(
+        conn, start_local, end_local, metering_point, price_area, opts, saveeye_device_serial
     )
     kwh = round(sum(r["kwh"] for r in rows), 3)
     costed = [r["cost_dkk"] for r in rows if r["cost_dkk"] is not None]
@@ -403,19 +476,25 @@ def _consumption_totals(conn, start_local, end_local, metering_point, price_area
     return kwh, cost
 
 
-def consumption_summary(conn, now_local, metering_point, price_area, opts):
+def consumption_summary(conn, now_local, metering_point, price_area, opts, saveeye_device_serial=None):
     today_start = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
     yesterday_start = today_start - timedelta(days=1)
     week_start = today_start - timedelta(days=7)
     month_start = today_start.replace(day=1)
     tomorrow_start = today_start + timedelta(days=1)
 
-    today_kwh, today_cost = _consumption_totals(conn, today_start, tomorrow_start, metering_point, price_area, opts)
-    yesterday_kwh, yesterday_cost = _consumption_totals(
-        conn, yesterday_start, today_start, metering_point, price_area, opts
+    today_kwh, today_cost = _consumption_totals(
+        conn, today_start, tomorrow_start, metering_point, price_area, opts, saveeye_device_serial
     )
-    week_kwh, week_cost = _consumption_totals(conn, week_start, tomorrow_start, metering_point, price_area, opts)
-    month_kwh, month_cost = _consumption_totals(conn, month_start, tomorrow_start, metering_point, price_area, opts)
+    yesterday_kwh, yesterday_cost = _consumption_totals(
+        conn, yesterday_start, today_start, metering_point, price_area, opts, saveeye_device_serial
+    )
+    week_kwh, week_cost = _consumption_totals(
+        conn, week_start, tomorrow_start, metering_point, price_area, opts, saveeye_device_serial
+    )
+    month_kwh, month_cost = _consumption_totals(
+        conn, month_start, tomorrow_start, metering_point, price_area, opts, saveeye_device_serial
+    )
 
     return {
         "today_kwh": today_kwh,
@@ -500,6 +579,146 @@ def sync_consumption(conn, options, today_local=None):
     _log(f"consumption sync: {len(rows)} rows")
 
 
+# --- Saveeye (live MQTT telemetry, optional) ---
+
+_saveeye_lock = threading.Lock()
+_saveeye_latest = {"payload": None, "received_at": None}
+_saveeye_status = {"connected": False, "detail": None}
+_saveeye_client = None
+
+
+def _handle_saveeye_telemetry(parsed):
+    """Runs on the MQTT client's own thread — just records the latest
+    reading. Persisting to SQLite happens on the background loop's thread
+    instead, since sqlite3 connections are not safe to share across threads."""
+    with _saveeye_lock:
+        _saveeye_latest["payload"] = parsed
+        _saveeye_latest["received_at"] = _now_iso()
+
+
+def _handle_saveeye_status(connected, detail):
+    with _saveeye_lock:
+        _saveeye_status["connected"] = connected
+        _saveeye_status["detail"] = detail
+    _log(f"Saveeye MQTT: {detail}")
+
+
+def get_saveeye_latest():
+    with _saveeye_lock:
+        payload = dict(_saveeye_latest["payload"]) if _saveeye_latest["payload"] else None
+        return payload, _saveeye_latest["received_at"]
+
+
+def get_saveeye_status():
+    with _saveeye_lock:
+        return dict(_saveeye_status)
+
+
+def start_saveeye_client(options):
+    """Starts the background MQTT subscriber if saveeye_enabled. A no-op
+    (returns None) otherwise — callers should treat that as "not configured",
+    not as an error."""
+    global _saveeye_client
+    cfg = get_saveeye_config(options)
+    if not cfg["enabled"]:
+        return None
+    _saveeye_client = saveeye.SaveeyeClient(
+        host=cfg["mqtt_host"],
+        port=cfg["mqtt_port"],
+        topic=cfg["mqtt_topic"],
+        on_telemetry=_handle_saveeye_telemetry,
+        on_status=_handle_saveeye_status,
+        username=cfg["mqtt_username"],
+        password=cfg["mqtt_password"],
+        device_serial=cfg["device_serial"],
+    )
+    _saveeye_client.start()
+    _log(f"Saveeye MQTT client starting: {cfg['mqtt_host']}:{cfg['mqtt_port']} topic={cfg['mqtt_topic']}")
+    return _saveeye_client
+
+
+def _persist_saveeye_sample(conn):
+    """Once per background-loop tick, if a newer telemetry reading has
+    arrived than the last one written, appends it to saveeye_samples.
+
+    5-minute granularity (the tick interval) is deliberately coarse: this
+    data only needs to bracket hour boundaries closely enough to interpolate
+    a hourly consumption estimate from, not to plot a smooth live power
+    curve — that part reads straight from the in-memory latest reading.
+    """
+    payload, received_at = get_saveeye_latest()
+    if not payload or payload.get("cumulative_wh") is None:
+        return
+    device_serial = payload["device_serial"]
+    last = conn.execute(
+        "SELECT ts_utc FROM saveeye_samples WHERE device_serial = ? ORDER BY ts_utc DESC LIMIT 1",
+        (device_serial,),
+    ).fetchone()
+    ts = received_at or _now_iso()
+    if last and last["ts_utc"] >= ts:
+        return
+    conn.execute(
+        "INSERT OR REPLACE INTO saveeye_samples (ts_utc, device_serial, instant_power_w, cumulative_wh) "
+        "VALUES (?, ?, ?, ?)",
+        (ts, device_serial, payload.get("instant_power_w"), payload["cumulative_wh"]),
+    )
+    conn.commit()
+
+
+def _interp_series(samples, target_ts):
+    """Linear interpolation of `samples` (sorted ascending (epoch_seconds,
+    value) pairs) at `target_ts`. Returns None rather than extrapolating
+    when `target_ts` falls outside the sampled range — an hour not actually
+    bracketed by real readings gets no estimate, not a guessed one."""
+    if len(samples) < 2 or target_ts < samples[0][0] or target_ts > samples[-1][0]:
+        return None
+    for (t0, v0), (t1, v1) in zip(samples, samples[1:]):
+        if t0 <= target_ts <= t1:
+            if t1 == t0:
+                return v0
+            frac = (target_ts - t0) / (t1 - t0)
+            return v0 + frac * (v1 - v0)
+    return None
+
+
+def saveeye_hourly_kwh(conn, start_local, end_local, device_serial):
+    """Same-day-ish hourly consumption for [start_local, end_local), derived
+    from Saveeye's cumulative energy counter by interpolating its value at
+    each hour boundary and taking the difference. Only hours actually
+    bracketed by real samples on both sides get an estimate; a gap (add-on
+    just started, broker down for a while) is simply missing from the
+    result, not filled in with a guess. Returns {naive local hour ISO: kwh}.
+    """
+    if not device_serial:
+        return {}
+    query_start = (start_local - timedelta(hours=1)).astimezone(timezone.utc).isoformat()
+    query_end = (end_local + timedelta(hours=1)).astimezone(timezone.utc).isoformat()
+    rows = conn.execute(
+        "SELECT ts_utc, cumulative_wh FROM saveeye_samples "
+        "WHERE device_serial = ? AND ts_utc >= ? AND ts_utc <= ? ORDER BY ts_utc",
+        (device_serial, query_start, query_end),
+    ).fetchall()
+    samples = [
+        (datetime.fromisoformat(r["ts_utc"]).timestamp(), r["cumulative_wh"])
+        for r in rows
+        if r["cumulative_wh"] is not None
+    ]
+    if len(samples) < 2:
+        return {}
+
+    out = {}
+    hour = start_local.replace(minute=0, second=0, microsecond=0)
+    while hour < end_local:
+        boundary_start = hour.astimezone(timezone.utc).timestamp()
+        boundary_end = (hour + timedelta(hours=1)).astimezone(timezone.utc).timestamp()
+        v_start = _interp_series(samples, boundary_start)
+        v_end = _interp_series(samples, boundary_end)
+        if v_start is not None and v_end is not None and v_end >= v_start:
+            out[hour.replace(tzinfo=None).isoformat()] = round((v_end - v_start) / 1000.0, 4)
+        hour += timedelta(hours=1)
+    return out
+
+
 # --- Home Assistant sensors ---
 
 
@@ -557,9 +776,13 @@ def publish_sensors(conn, options):
             },
         )
 
+    saveeye_cfg = get_saveeye_config(options)
+
     cfg = get_eloverblik_config(options)
     if cfg["metering_point"]:
-        summary = consumption_summary(conn, now_local, cfg["metering_point"], opts["price_area"], opts)
+        summary = consumption_summary(
+            conn, now_local, cfg["metering_point"], opts["price_area"], opts, saveeye_cfg["device_serial"]
+        )
         state = summary["today_kwh"] if summary["today_kwh"] is not None else "unknown"
         push_sensor(
             "sensor.electricity_tracker_consumption_today",
@@ -571,6 +794,24 @@ def publish_sensors(conn, options):
                 **summary,
             },
         )
+
+    if saveeye_cfg["enabled"]:
+        payload, received_at = get_saveeye_latest()
+        if payload and payload.get("instant_power_w") is not None:
+            push_sensor(
+                "sensor.electricity_tracker_power_now",
+                payload["instant_power_w"],
+                {
+                    "friendly_name": "Electricity power now",
+                    "icon": "mdi:flash",
+                    "unit_of_measurement": "W",
+                    "device_class": "power",
+                    "state_class": "measurement",
+                    "source": "saveeye",
+                    "device_serial": payload["device_serial"],
+                    "received_at": received_at,
+                },
+            )
 
 
 # --- Background loop ---
@@ -590,6 +831,7 @@ def _background_loop():
                 if now - last_consumption_sync >= CONSUMPTION_SYNC_INTERVAL_SECONDS:
                     sync_consumption(conn, options)
                     last_consumption_sync = now
+                _persist_saveeye_sample(conn)
                 if SUPERVISOR_TOKEN:
                     publish_sensors(conn, options)
             finally:
@@ -628,9 +870,17 @@ def api_summary():
     priciest_today = max(hourly_today.items(), key=lambda kv: kv[1], default=(None, None))
 
     cfg = get_eloverblik_config(options)
+    saveeye_cfg = get_saveeye_config(options)
     consumption = None
     if cfg["metering_point"]:
-        consumption = consumption_summary(db, now_local, cfg["metering_point"], opts["price_area"], opts)
+        consumption = consumption_summary(
+            db, now_local, cfg["metering_point"], opts["price_area"], opts, saveeye_cfg["device_serial"]
+        )
+
+    saveeye_now = None
+    if saveeye_cfg["enabled"]:
+        payload, received_at = get_saveeye_latest()
+        saveeye_now = {"payload": payload, "received_at": received_at, **get_saveeye_status()}
 
     return jsonify(
         {
@@ -648,6 +898,7 @@ def api_summary():
             else None,
             "consumption": consumption,
             "eloverblik_configured": bool(cfg["refresh_token"] and cfg["metering_point"]),
+            "saveeye": saveeye_now,
             "last_price_sync": _get_app_state(db, "last_price_sync"),
             "last_consumption_sync": _get_app_state(db, "last_consumption_sync"),
         }
@@ -675,16 +926,30 @@ def api_consumption():
     cfg = get_eloverblik_config(options)
     if not cfg["metering_point"]:
         return jsonify([])
+    saveeye_cfg = get_saveeye_config(options)
     days = request.args.get("days", default=14, type=int) or 14
     days = min(90, max(1, days))
     now_local = datetime.now(LOCAL_TZ)
     start = now_local.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=days - 1)
     end = now_local.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
     return jsonify(
-        consumption_with_cost(
-            db, start.astimezone(timezone.utc), end.astimezone(timezone.utc), cfg["metering_point"], opts["price_area"], opts
+        combined_consumption_with_cost(
+            db, start, end, cfg["metering_point"], opts["price_area"], opts, saveeye_cfg["device_serial"]
         )
     )
+
+
+@app.route("/api/saveeye/now")
+def api_saveeye_now():
+    """Live instant power/energy reading plus MQTT connection status — the
+    Settings panel's "test" surface for Saveeye, the same role
+    /api/eloverblik/diagnose plays for Eloverblik."""
+    options = _read_options()
+    cfg = get_saveeye_config(options)
+    if not cfg["enabled"]:
+        return jsonify({"enabled": False})
+    payload, received_at = get_saveeye_latest()
+    return jsonify({"enabled": True, "payload": payload, "received_at": received_at, **get_saveeye_status()})
 
 
 @app.route("/api/eloverblik/diagnose")
@@ -719,7 +984,7 @@ def api_health():
     return jsonify({"ok": True, "version": APP_VERSION})
 
 
-TRACKED_TABLES = ("prices", "consumption")
+TRACKED_TABLES = ("prices", "consumption", "saveeye_samples")
 
 
 @app.route("/api/stats")
@@ -777,6 +1042,7 @@ if __name__ == "__main__":
     signal.signal(signal.SIGTERM, _handle_shutdown_signal)
     init_db()
     _log(f"starting Electricity Tracker {APP_VERSION}")
+    start_saveeye_client(_read_options())
     threading.Thread(target=_background_loop, daemon=True).start()
     port = int(os.environ.get("ELECTRICITY_PORT", "8099"))
     _log(f"serving on 0.0.0.0:{port} (waitress)")

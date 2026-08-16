@@ -89,6 +89,30 @@ function renderNow(data) {
     : "–";
 
   document.getElementById("price-area-pill").textContent = data.price_area || "–";
+
+  renderPowerNow(data.saveeye, now);
+}
+
+function renderPowerNow(saveeye, currentPrice) {
+  const row = document.getElementById("power-now-row");
+  const valueEl = document.getElementById("power-now-value");
+  const rateEl = document.getElementById("power-now-rate");
+
+  const watts = saveeye && saveeye.payload ? saveeye.payload.instant_power_w : null;
+  if (watts == null) {
+    row.hidden = true;
+    return;
+  }
+  row.hidden = false;
+  const kw = watts / 1000;
+  valueEl.textContent = `${kw.toFixed(2)} kW now`;
+  document.getElementById("power-now-dot").style.background = saveeye.connected ? "var(--success)" : "var(--text-muted)";
+  if (currentPrice) {
+    const rate = kw * currentPrice.total_dkk_kwh;
+    rateEl.textContent = `≈ ${rate.toFixed(2)} kr/h at this rate`;
+  } else {
+    rateEl.textContent = "";
+  }
 }
 
 // --- Price curve chart ---
@@ -193,10 +217,11 @@ function aggregateDaily(rows) {
   const map = new Map();
   for (const r of rows) {
     const day = r.time_dk.slice(0, 10);
-    const entry = map.get(day) || { day, kwh: 0, cost: 0, costKnown: true };
+    const entry = map.get(day) || { day, kwh: 0, cost: 0, costKnown: true, hasEstimate: false };
     entry.kwh += r.kwh;
     if (r.cost_dkk != null) entry.cost += r.cost_dkk;
     else entry.costKnown = false;
+    if (r.source === "saveeye_estimate") entry.hasEstimate = true;
     map.set(day, entry);
   }
   return [...map.values()].sort((a, b) => a.day.localeCompare(b.day));
@@ -205,6 +230,7 @@ function aggregateDaily(rows) {
 function renderConsumptionChart(rows) {
   const host = document.getElementById("consumption-chart");
   const daily = aggregateDaily(rows);
+  document.getElementById("consumption-chart-legend").hidden = !rows.some((r) => r.source === "saveeye_estimate");
   if (!daily.length) {
     host.innerHTML = '<p class="empty-state">No consumption data yet.</p>';
     return;
@@ -219,9 +245,11 @@ function renderConsumptionChart(rows) {
     const x = i * barW;
     const y = H - padBottom - h;
     const costStr = d.costKnown ? `${d.cost.toFixed(2)} kr` : "cost n/a";
-    const label = `${d.day} — ${d.kwh.toFixed(2)} kWh, ${costStr}`;
+    const estimateNote = d.hasEstimate ? " (partly a live estimate)" : "";
+    const label = `${d.day} — ${d.kwh.toFixed(2)} kWh, ${costStr}${estimateNote}`;
+    const estimateClass = d.hasEstimate ? " chart-bar-estimate" : "";
     return (
-      `<rect class="chart-bar chart-bar-normal" x="${x.toFixed(1)}" y="${y.toFixed(1)}" ` +
+      `<rect class="chart-bar chart-bar-normal${estimateClass}" x="${x.toFixed(1)}" y="${y.toFixed(1)}" ` +
       `width="${Math.max(1, barW - 1).toFixed(1)}" height="${Math.max(1, h).toFixed(1)}" opacity="0.85">` +
       `<title>${escapeHtml(label)}</title></rect>`
     );
@@ -278,12 +306,42 @@ async function loadSummary() {
 
 // --- Settings sheet ---
 
+async function refreshSaveeyeStatus() {
+  const out = document.getElementById("saveeye-status");
+  try {
+    const data = await fetchJSON("api/saveeye/now");
+    if (!data.enabled) {
+      out.textContent = "saveeye_enabled is off.";
+    } else if (!data.payload) {
+      out.textContent = `Enabled, waiting for the first message${data.detail ? ` (${data.detail})` : ""}...`;
+    } else {
+      const w = data.payload.instant_power_w;
+      out.textContent =
+        `${data.connected ? "Connected" : "Disconnected"} — device ${data.payload.device_serial}\n` +
+        `Instant power: ${w != null ? `${w} W` : "n/a"}\n` +
+        `Last message: ${relTime(data.received_at) || data.received_at}`;
+    }
+  } catch (err) {
+    out.textContent = `Could not reach /api/saveeye/now: ${err}`;
+  }
+}
+
+let _saveeyeStatusInterval = null;
+
 function wireSettingsSheet() {
   const backdrop = document.getElementById("settings-backdrop");
-  document.getElementById("settings-open-btn").addEventListener("click", () => backdrop.classList.add("open"));
-  document.getElementById("settings-close-btn").addEventListener("click", () => backdrop.classList.remove("open"));
+  document.getElementById("settings-open-btn").addEventListener("click", () => {
+    backdrop.classList.add("open");
+    refreshSaveeyeStatus();
+    _saveeyeStatusInterval = setInterval(refreshSaveeyeStatus, 10000);
+  });
+  const closeSettings = () => {
+    backdrop.classList.remove("open");
+    clearInterval(_saveeyeStatusInterval);
+  };
+  document.getElementById("settings-close-btn").addEventListener("click", closeSettings);
   backdrop.addEventListener("click", (e) => {
-    if (e.target === backdrop) backdrop.classList.remove("open");
+    if (e.target === backdrop) closeSettings();
   });
 
   document.getElementById("eloverblik-test-btn").addEventListener("click", async () => {
