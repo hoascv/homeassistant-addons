@@ -19,7 +19,7 @@ from flask import Flask, Response, g, jsonify, render_template, request, send_fi
 
 import garmin_client
 
-APP_VERSION = "1.35.2"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.36.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("GYM_DB_PATH", "/data/gym.db")
 OPTIONS_PATH = os.environ.get("GYM_OPTIONS_PATH", "/data/options.json")
@@ -374,6 +374,52 @@ def init_db():
         )
         """
     )
+    # What's typed into the scale itself (age, sex, activity level) — kept for
+    # reference only, never used in a local calculation, since the scale's own
+    # bioimpedance formula is proprietary and unavailable to this app.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS profile (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            sex TEXT CHECK (sex IN ('male', 'female')),
+            age INTEGER,
+            activity_level INTEGER CHECK (activity_level BETWEEN 1 AND 5),
+            activity_level_set_at TEXT,
+            updated_at TEXT
+        )
+        """
+    )
+    # Paired body-fat readings (old scale setting vs. corrected setting) taken
+    # back-to-back, used to derive the empirical offset applied to historical
+    # weigh-ins recorded under the wrong setting.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS bf_calibration_readings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            recorded_at TEXT NOT NULL,
+            old_bf_pct REAL NOT NULL,
+            new_bf_pct REAL NOT NULL,
+            notes TEXT
+        )
+        """
+    )
+    # One row per bulk body-fat correction applied to weight_logs. Exists so a
+    # later change to the calibration set can't silently reinterpret a past
+    # correction, and so a correction can be undone: weight_logs.bf_correction_id
+    # points back here.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS bf_correction_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            applied_at TEXT NOT NULL,
+            cutoff_ts TEXT NOT NULL,
+            offset_pct REAL NOT NULL,
+            reading_count INTEGER NOT NULL,
+            rows_affected INTEGER NOT NULL,
+            reverted_at TEXT
+        )
+        """
+    )
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS exercises (
@@ -666,6 +712,9 @@ TRACKED_TABLES = {
     "routine_steps": "id",
     "goal": "id",
     "goal_history": "id",
+    "profile": "id",
+    "bf_calibration_readings": "id",
+    "bf_correction_events": "id",
     "garmin_daily": "day",
     "garmin_activities": "activity_id",
     "exercise_images": "exercise_id",
@@ -798,6 +847,13 @@ def _migrate_columns(conn):
         conn.execute(
             "UPDATE weight_logs SET ts_exact = 0 WHERE ts = ? AND notes = 'Starting weight'",
             (f"{SEED_START_DATE}T08:00:00",),
+        )
+    if "body_fat_pct_raw" not in weight_cols:
+        conn.execute("ALTER TABLE weight_logs ADD COLUMN body_fat_pct_raw REAL")
+    if "bf_correction_id" not in weight_cols:
+        conn.execute(
+            "ALTER TABLE weight_logs ADD COLUMN bf_correction_id INTEGER "
+            "REFERENCES bf_correction_events(id)"
         )
 
     workout_cols = {row[1] for row in conn.execute("PRAGMA table_info(workout_logs)")}
@@ -1531,6 +1587,20 @@ def _get_goal(conn):
     return dict(row) if row else dict(SEED_GOAL, id=1)
 
 
+def _get_profile(conn):
+    row = conn.execute("SELECT * FROM profile WHERE id = 1").fetchone()
+    if row:
+        return dict(row)
+    return {
+        "id": 1,
+        "sex": None,
+        "age": None,
+        "activity_level": None,
+        "activity_level_set_at": None,
+        "updated_at": None,
+    }
+
+
 def _weight_progress(conn):
     """Everything the home screen needs to render goal progress, derived
     from the weight log plus the goal row."""
@@ -1538,7 +1608,8 @@ def _weight_progress(conn):
     logs = [
         dict(r)
         for r in conn.execute(
-            "SELECT id, ts, weight_kg, body_fat_pct, notes, device FROM weight_logs ORDER BY ts ASC, id ASC"
+            "SELECT id, ts, weight_kg, body_fat_pct, body_fat_pct_raw, bf_correction_id, "
+            "notes, device FROM weight_logs ORDER BY ts ASC, id ASC"
         )
     ]
     latest = logs[-1] if logs else None
@@ -2405,6 +2476,200 @@ def api_goal_history():
         "SELECT * FROM goal_history ORDER BY changed_at ASC, id ASC"
     ).fetchall()
     return jsonify([dict(r) for r in rows])
+
+
+# --- Routes: profile ---
+
+
+@app.route("/api/profile")
+def api_profile():
+    return jsonify(_get_profile(get_db()))
+
+
+@app.route("/api/profile", methods=["PUT"])
+def api_update_profile():
+    data = request.get_json(force=True, silent=True) or {}
+
+    sex = data.get("sex") or None
+    if sex is not None and sex not in ("male", "female"):
+        return jsonify({"error": "sex must be 'male' or 'female'"}), 400
+
+    age = data.get("age")
+    if age is not None and age != "":
+        try:
+            age = int(age)
+        except (TypeError, ValueError):
+            return jsonify({"error": "age must be a number"}), 400
+        if not (0 <= age <= 120):
+            return jsonify({"error": "age out of range"}), 400
+    else:
+        age = None
+
+    activity_level = data.get("activity_level")
+    if activity_level is not None and activity_level != "":
+        try:
+            activity_level = int(activity_level)
+        except (TypeError, ValueError):
+            return jsonify({"error": "activity_level must be a number"}), 400
+        if not (1 <= activity_level <= 5):
+            return jsonify({"error": "activity_level must be between 1 and 5"}), 400
+    else:
+        activity_level = None
+
+    activity_level_set_at = (data.get("activity_level_set_at") or "").strip() or None
+    if activity_level_set_at is not None:
+        try:
+            date.fromisoformat(activity_level_set_at)
+        except ValueError:
+            return jsonify({"error": "activity_level_set_at must be YYYY-MM-DD"}), 400
+
+    db = get_db()
+    db.execute(
+        "INSERT INTO profile (id, sex, age, activity_level, activity_level_set_at, updated_at) "
+        "VALUES (1, ?, ?, ?, ?, ?) "
+        "ON CONFLICT(id) DO UPDATE SET sex = excluded.sex, age = excluded.age, "
+        "activity_level = excluded.activity_level, "
+        "activity_level_set_at = excluded.activity_level_set_at, updated_at = excluded.updated_at",
+        (sex, age, activity_level, activity_level_set_at, _now_ts()),
+    )
+    db.commit()
+    return jsonify({"status": "updated", "profile": _get_profile(db)})
+
+
+# --- Routes: body-fat calibration + correction ---
+
+
+def _bf_calibration_summary(conn):
+    readings = [
+        dict(r)
+        for r in conn.execute(
+            "SELECT id, recorded_at, old_bf_pct, new_bf_pct, notes "
+            "FROM bf_calibration_readings ORDER BY recorded_at ASC, id ASC"
+        )
+    ]
+    deltas = [r["new_bf_pct"] - r["old_bf_pct"] for r in readings]
+    offset_pct = round(sum(deltas) / len(deltas), 2) if deltas else None
+    spread_pct = round(max(deltas) - min(deltas), 2) if deltas else None
+    return {
+        "readings": readings,
+        "offset_pct": offset_pct,
+        "count": len(readings),
+        "spread_pct": spread_pct,
+    }
+
+
+@app.route("/api/bf-calibration")
+def api_bf_calibration():
+    return jsonify(_bf_calibration_summary(get_db()))
+
+
+@app.route("/api/bf-calibration", methods=["POST"])
+def api_add_bf_calibration():
+    data = request.get_json(force=True, silent=True) or {}
+    try:
+        old_bf = float(data.get("old_bf_pct"))
+        new_bf = float(data.get("new_bf_pct"))
+    except (TypeError, ValueError):
+        return jsonify({"error": "old_bf_pct and new_bf_pct must be numbers"}), 400
+    if not (0 <= old_bf <= 100) or not (0 <= new_bf <= 100):
+        return jsonify({"error": "old_bf_pct and new_bf_pct must be between 0 and 100"}), 400
+    notes = (data.get("notes") or "").strip() or None
+
+    db = get_db()
+    db.execute(
+        "INSERT INTO bf_calibration_readings (recorded_at, old_bf_pct, new_bf_pct, notes) "
+        "VALUES (?, ?, ?, ?)",
+        (_now_ts(), old_bf, new_bf, notes),
+    )
+    db.commit()
+    return jsonify({"status": "created", **_bf_calibration_summary(db)}), 201
+
+
+@app.route("/api/bf-calibration/<int:reading_id>", methods=["DELETE"])
+def api_delete_bf_calibration(reading_id):
+    db = get_db()
+    cur = db.execute("DELETE FROM bf_calibration_readings WHERE id = ?", (reading_id,))
+    db.commit()
+    if cur.rowcount == 0:
+        return jsonify({"error": "no such calibration reading"}), 404
+    return jsonify(_bf_calibration_summary(db))
+
+
+@app.route("/api/bf-correction/apply", methods=["POST"])
+def api_apply_bf_correction():
+    data = request.get_json(force=True, silent=True) or {}
+    cutoff_date = (data.get("cutoff_date") or "").strip()
+    try:
+        date.fromisoformat(cutoff_date)
+    except ValueError:
+        return jsonify({"error": "cutoff_date must be YYYY-MM-DD"}), 400
+    cutoff_ts = f"{cutoff_date}T00:00:00"
+
+    db = get_db()
+    summary = _bf_calibration_summary(db)
+    offset_pct = data.get("offset_pct")
+    if offset_pct is not None and offset_pct != "":
+        try:
+            offset_pct = float(offset_pct)
+        except (TypeError, ValueError):
+            return jsonify({"error": "offset_pct must be a number"}), 400
+    else:
+        offset_pct = summary["offset_pct"]
+    if offset_pct is None:
+        return jsonify({"error": "no calibration readings yet — enter some, or supply offset_pct"}), 400
+    if not (-50 <= offset_pct <= 50):
+        return jsonify({"error": "offset_pct out of range"}), 400
+
+    cur = db.execute(
+        "INSERT INTO bf_correction_events (applied_at, cutoff_ts, offset_pct, reading_count, rows_affected) "
+        "VALUES (?, ?, ?, ?, 0)",
+        (_now_ts(), cutoff_ts, offset_pct, summary["count"]),
+    )
+    event_id = cur.lastrowid
+    updated = db.execute(
+        "UPDATE weight_logs SET body_fat_pct_raw = body_fat_pct, "
+        "body_fat_pct = MAX(0, MIN(100, body_fat_pct + ?)), bf_correction_id = ? "
+        "WHERE ts < ? AND body_fat_pct IS NOT NULL AND bf_correction_id IS NULL",
+        (offset_pct, event_id, cutoff_ts),
+    )
+    db.execute(
+        "UPDATE bf_correction_events SET rows_affected = ? WHERE id = ?",
+        (updated.rowcount, event_id),
+    )
+    db.commit()
+    event = dict(db.execute("SELECT * FROM bf_correction_events WHERE id = ?", (event_id,)).fetchone())
+    return jsonify({"status": "applied", "event": event, "rows_affected": updated.rowcount})
+
+
+@app.route("/api/bf-correction/events")
+def api_bf_correction_events():
+    rows = get_db().execute(
+        "SELECT * FROM bf_correction_events ORDER BY applied_at DESC, id DESC"
+    ).fetchall()
+    return jsonify([dict(r) for r in rows])
+
+
+@app.route("/api/bf-correction/<int:event_id>/revert", methods=["POST"])
+def api_revert_bf_correction(event_id):
+    db = get_db()
+    event = db.execute("SELECT * FROM bf_correction_events WHERE id = ?", (event_id,)).fetchone()
+    if event is None:
+        return jsonify({"error": "no such correction event"}), 404
+    if event["reverted_at"] is not None:
+        return jsonify({"status": "already reverted", "event": dict(event)})
+
+    cur = db.execute(
+        "UPDATE weight_logs SET body_fat_pct = body_fat_pct_raw, body_fat_pct_raw = NULL, "
+        "bf_correction_id = NULL WHERE bf_correction_id = ?",
+        (event_id,),
+    )
+    db.execute(
+        "UPDATE bf_correction_events SET reverted_at = ? WHERE id = ?",
+        (_now_ts(), event_id),
+    )
+    db.commit()
+    updated_event = dict(db.execute("SELECT * FROM bf_correction_events WHERE id = ?", (event_id,)).fetchone())
+    return jsonify({"status": "reverted", "event": updated_event, "rows_reverted": cur.rowcount})
 
 
 # --- Routes: exercises + workouts ---

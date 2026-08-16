@@ -1601,7 +1601,9 @@ async function loadWeightHistory() {
   const logs = (data.logs || []).slice().reverse();
   list.innerHTML = logs
     .map((l) => {
-      const bf = l.body_fat_pct != null ? ` · ${l.body_fat_pct}% bf` : "";
+      const bfCorrected = l.bf_correction_id != null && l.body_fat_pct_raw != null
+        ? ` (was ${l.body_fat_pct_raw}%)` : "";
+      const bf = l.body_fat_pct != null ? ` · ${l.body_fat_pct}% bf${bfCorrected}` : "";
       const device = l.device ? ` · ⚖ ${escapeHtml(l.device)}` : "";
       const note = l.notes ? ` · ${escapeHtml(l.notes)}` : "";
       return `
@@ -2829,6 +2831,15 @@ async function loadSettings() {
   document.getElementById("goal-form-start-weight").value = goal.start_weight_kg != null ? goal.start_weight_kg : "";
 
   try {
+    window._profile = await fetchJSON("api/profile");
+  } catch (e) { window._profile = {}; }
+  const profile = window._profile;
+  document.getElementById("profile-form-sex").value = profile.sex || "";
+  document.getElementById("profile-form-age").value = profile.age != null ? profile.age : "";
+  document.getElementById("profile-form-activity").value = profile.activity_level != null ? profile.activity_level : "";
+  document.getElementById("profile-form-since").value = profile.activity_level_set_at || "";
+
+  try {
     const dbg = await fetchJSON("api/debug");
     document.getElementById("user-id").textContent = dbg.ingress_user_id || "(unknown — open through Home Assistant)";
   } catch (e) { /* ignore */ }
@@ -2851,6 +2862,181 @@ document.getElementById("goal-form").addEventListener("submit", async (e) => {
     });
     result.textContent = "Goal saved.";
   } catch (err) { result.textContent = err.message; }
+});
+
+document.getElementById("profile-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const result = document.getElementById("profile-form-result");
+  const payload = {
+    sex: document.getElementById("profile-form-sex").value,
+    age: document.getElementById("profile-form-age").value,
+    activity_level: document.getElementById("profile-form-activity").value,
+    activity_level_set_at: document.getElementById("profile-form-since").value,
+  };
+  try {
+    const res = await fetchJSON("api/profile", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    window._profile = res.profile;
+    result.textContent = "Profile saved.";
+  } catch (err) { result.textContent = err.message; }
+});
+
+document.getElementById("profile-calibration-btn").addEventListener("click", () => {
+  openSheet("calibration-backdrop");
+  loadCalibration();
+});
+document.getElementById("calibration-close-btn").addEventListener("click", () => {
+  closeSheet("calibration-backdrop");
+});
+
+// --- Body-fat calibration ---------------------------------------------------
+
+function renderCalibSummary(summary) {
+  const el = document.getElementById("calib-offset-summary");
+  if (!summary.count) {
+    el.textContent = "No readings yet.";
+  } else {
+    const sign = summary.offset_pct > 0 ? "+" : "";
+    el.textContent = `Offset: ${sign}${summary.offset_pct}pp (from ${summary.count} reading${summary.count === 1 ? "" : "s"}, spread ${summary.spread_pct}pp)`;
+  }
+  document.getElementById("calib-apply-offset").placeholder = summary.offset_pct != null ? summary.offset_pct : "";
+  const cutoff = document.getElementById("calib-apply-cutoff");
+  if (!cutoff.value && window._profile && window._profile.activity_level_set_at) {
+    cutoff.value = window._profile.activity_level_set_at;
+  }
+  updateCalibPreview();
+}
+
+function renderCalibHistory(readings) {
+  const list = document.getElementById("calib-history");
+  list.innerHTML = readings
+    .slice()
+    .reverse()
+    .map((r) => {
+      const note = r.notes ? ` · ${escapeHtml(r.notes)}` : "";
+      return `
+        <li data-id="${r.id}">
+          <div class="list-main">
+            <div class="list-title">${r.old_bf_pct}% → ${r.new_bf_pct}%</div>
+            <div class="list-sub">${escapeHtml(fmtDate(r.recorded_at))}${note}</div>
+          </div>
+          <button type="button" class="list-del calib-del" data-id="${r.id}" aria-label="Delete">✕</button>
+        </li>`;
+    })
+    .join("");
+}
+
+async function loadCalibration() {
+  if (!window._weightLogs) await loadWeightHistory();
+  let summary;
+  try { summary = await fetchJSON("api/bf-calibration"); } catch (e) { return; }
+  renderCalibSummary(summary);
+  renderCalibHistory(summary.readings || []);
+  loadCalibEvents();
+}
+
+function updateCalibPreview() {
+  const cutoff = document.getElementById("calib-apply-cutoff").value;
+  const preview = document.getElementById("calib-apply-preview");
+  if (!cutoff) { preview.textContent = ""; return; }
+  const cutoffTs = `${cutoff}T00:00:00`;
+  const logs = window._weightLogs || [];
+  const n = logs.filter((l) => l.ts < cutoffTs && l.body_fat_pct != null && l.bf_correction_id == null).length;
+  preview.textContent = `${n} historical entr${n === 1 ? "y" : "ies"} will be corrected.`;
+}
+document.getElementById("calib-apply-cutoff").addEventListener("change", updateCalibPreview);
+
+document.getElementById("calib-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const payload = {
+    old_bf_pct: document.getElementById("calib-form-old").value,
+    new_bf_pct: document.getElementById("calib-form-new").value,
+    notes: document.getElementById("calib-form-notes").value,
+  };
+  try {
+    const summary = await fetchJSON("api/bf-calibration", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    renderCalibSummary(summary);
+    renderCalibHistory(summary.readings || []);
+    e.target.reset();
+  } catch (err) { toast(err.message); }
+});
+
+document.getElementById("calib-history").addEventListener("click", async (e) => {
+  const del = e.target.closest(".calib-del");
+  if (!del) return;
+  if (!confirm("Delete this calibration reading?")) return;
+  try {
+    const summary = await fetchJSON(`api/bf-calibration/${del.dataset.id}`, { method: "DELETE" });
+    renderCalibSummary(summary);
+    renderCalibHistory(summary.readings || []);
+  } catch (err) { toast(err.message); }
+});
+
+document.getElementById("calib-apply-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const result = document.getElementById("calib-apply-result");
+  const cutoff = document.getElementById("calib-apply-cutoff").value;
+  const offsetOverride = document.getElementById("calib-apply-offset").value;
+  const preview = document.getElementById("calib-apply-preview").textContent;
+  if (!confirm(`Apply this correction? ${preview}`)) return;
+  const payload = { cutoff_date: cutoff };
+  if (offsetOverride !== "") payload.offset_pct = offsetOverride;
+  try {
+    const res = await fetchJSON("api/bf-correction/apply", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    result.textContent = `Corrected ${res.rows_affected} entr${res.rows_affected === 1 ? "y" : "ies"}.`;
+    await loadWeightHistory();
+    updateCalibPreview();
+    loadCalibEvents();
+  } catch (err) { result.textContent = err.message; }
+});
+
+function renderCalibEvents(events) {
+  const list = document.getElementById("calib-events");
+  list.innerHTML = events
+    .map((ev) => {
+      const sign = ev.offset_pct > 0 ? "+" : "";
+      const status = ev.reverted_at
+        ? `<span class="list-sub">Reverted</span>`
+        : `<button type="button" class="link-btn calib-revert" data-id="${ev.id}">Revert</button>`;
+      return `
+        <li data-id="${ev.id}">
+          <div class="list-main">
+            <div class="list-title">${sign}${ev.offset_pct}pp on ${ev.rows_affected} entr${ev.rows_affected === 1 ? "y" : "ies"}</div>
+            <div class="list-sub">before ${escapeHtml(fmtDate(ev.cutoff_ts))} · applied ${escapeHtml(fmtDate(ev.applied_at))}</div>
+          </div>
+          ${status}
+        </li>`;
+    })
+    .join("");
+}
+
+async function loadCalibEvents() {
+  let events;
+  try { events = await fetchJSON("api/bf-correction/events"); } catch (e) { return; }
+  renderCalibEvents(events);
+}
+
+document.getElementById("calib-events").addEventListener("click", async (e) => {
+  const revert = e.target.closest(".calib-revert");
+  if (!revert) return;
+  if (!confirm("Revert this correction? Affected entries go back to their original values.")) return;
+  try {
+    await fetchJSON(`api/bf-correction/${revert.dataset.id}/revert`, { method: "POST" });
+    await loadWeightHistory();
+    updateCalibPreview();
+    loadCalibEvents();
+  } catch (err) { toast(err.message); }
 });
 
 document.getElementById("restore-input").addEventListener("change", async (e) => {

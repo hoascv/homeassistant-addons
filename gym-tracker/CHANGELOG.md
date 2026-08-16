@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.36.0
+
+- **Added a Profile section** (Settings → Profile) to record the age, sex,
+  and activity level set on your scale — for reference, since the app never
+  reimplements a scale's own body-fat formula.
+- **Added a body-fat calibration tool.** If you've changed your scale's
+  activity-level setting, enter a few back-to-back readings (old setting vs.
+  new) and the app computes the average offset between them, with a spread so
+  you can judge how consistent it is.
+- **Added a reversible bulk correction** for historical body-fat % entries
+  recorded under the old setting: pick a cutoff date, apply the calibrated
+  offset, and every affected entry shows its original value alongside the
+  corrected one. Correction history is kept, and any correction can be
+  reverted.
+
 ## 1.35.2
 
 - **The daily-completion quote toast stays up 2x as long** — up to 14s for a

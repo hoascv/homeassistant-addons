@@ -493,6 +493,56 @@
   </div>
 </div>
 
+<!-- Body-fat calibration sheet -->
+<div class="sheet-backdrop" id="calibration-backdrop">
+  <div class="sheet sheet-full">
+    <h2>Body-fat calibration</h2>
+    <p class="sheet-subtext">
+      If you've changed your scale's activity-level setting, weigh yourself
+      back-to-back on the old and the new setting a few times below. The
+      average difference is the offset applied to your historical readings.
+    </p>
+
+    <p class="result-line" id="calib-offset-summary">No readings yet.</p>
+
+    <form id="calib-form" class="inline-form">
+      <div class="field-row">
+        <label>Old setting BF (%)<input type="number" step="0.1" id="calib-form-old" required></label>
+        <label>New setting BF (%)<input type="number" step="0.1" id="calib-form-new" required></label>
+      </div>
+      <label class="full-label">Note<input type="text" id="calib-form-notes" placeholder="optional"></label>
+      <div class="form-actions">
+        <button type="submit" class="btn-primary">Add reading</button>
+      </div>
+    </form>
+    <ul class="history-list" id="calib-history"></ul>
+
+    <h3 class="subhead">Apply correction</h3>
+    <p class="sheet-subtext">
+      Shifts historical body-fat % readings recorded before the date below by
+      the offset above. Reversible — see correction history underneath.
+    </p>
+    <form id="calib-apply-form" class="inline-form">
+      <div class="field-row">
+        <label>Correct entries before<input type="date" id="calib-apply-cutoff" required></label>
+        <label>Offset (pp)<input type="number" step="0.1" id="calib-apply-offset"></label>
+      </div>
+      <p class="result-line" id="calib-apply-preview"></p>
+      <div class="form-actions">
+        <button type="submit" class="btn-primary" id="calib-apply-btn">Apply correction</button>
+      </div>
+      <p class="result-line" id="calib-apply-result"></p>
+    </form>
+
+    <h3 class="subhead">Correction history</h3>
+    <ul class="history-list" id="calib-events"></ul>
+
+    <div class="sheet-actions">
+      <button type="button" class="btn-secondary" id="calibration-close-btn">Close</button>
+    </div>
+  </div>
+</div>
+
 <!-- Settings sheet -->
 <div class="sheet-backdrop" id="settings-backdrop">
   <div class="sheet sheet-full">
@@ -512,6 +562,28 @@
         <button type="submit" class="btn-primary">Save goal</button>
       </div>
       <p class="result-line" id="goal-form-result"></p>
+    </form>
+
+    <h3 class="subhead">Profile</h3>
+    <p class="sheet-subtext">What's set on the scale itself. Not used in any calculation here — for reference, and to prefill the calibration tool.</p>
+    <form id="profile-form" class="inline-form">
+      <div class="field-row">
+        <label>Sex<select id="profile-form-sex">
+          <option value="">–</option>
+          <option value="male">Male</option>
+          <option value="female">Female</option>
+        </select></label>
+        <label>Age<input type="number" step="1" min="0" max="120" id="profile-form-age"></label>
+      </div>
+      <div class="field-row">
+        <label>Activity level (1-5)<input type="number" step="1" min="1" max="5" id="profile-form-activity"></label>
+        <label>Set on scale since<input type="date" id="profile-form-since"></label>
+      </div>
+      <div class="form-actions">
+        <button type="submit" class="btn-primary">Save profile</button>
+        <button type="button" class="btn-secondary" id="profile-calibration-btn">Body-fat calibration…</button>
+      </div>
+      <p class="result-line" id="profile-form-result"></p>
     </form>
 
     <h3 class="subhead">Backup &amp; restore</h3>
