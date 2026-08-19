@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.4.1
+
+- Fixed the price chart's colors: the "cheap"/"expensive" tiers were swapped
+  (the most expensive third of the day rendered blue/"normal" and the middle
+  third rendered red/"expensive"), and separately the chart's own min/max
+  calculation artificially floored the minimum at 0 DKK/kWh — since real
+  prices never get close to that, the cheap-price threshold sat below every
+  actual price and no bar ever qualified as cheap. Both together made the
+  chart's colors close to arbitrary. Also means the chart now uses its full
+  vertical range instead of only the top ~60%, so hour-to-hour differences
+  read more clearly.
+- **Settings → Saveeye connection** now also shows the cumulative energy
+  reading and how many samples have been persisted — the two numbers that
+  actually determine whether an hourly estimate can be computed, previously
+  invisible even though the live power reading looked fine. Diagnoses a real
+  gap: a meter that reports live power but never sends the cumulative energy
+  counter over MQTT will show a working "kW now" tile forever while
+  consumption stays at zero, with nothing on the page saying why.
+
 ## 1.4.0
 
 - **Live partial-hour Saveeye estimate.** Previously, the hourly estimate

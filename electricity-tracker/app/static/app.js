@@ -120,8 +120,8 @@ function renderPowerNow(saveeye, currentPrice) {
 function tierClass(value, min, max) {
   const range = max - min || 1;
   if (value <= min + range / 3) return "chart-bar-cheap";
-  if (value >= max - range / 3) return "chart-bar-normal";
-  return "chart-bar-expensive";
+  if (value >= max - range / 3) return "chart-bar-expensive";
+  return "chart-bar-normal";
 }
 
 function renderPriceChart(rows, highlightKey) {
@@ -136,7 +136,7 @@ function renderPriceChart(rows, highlightKey) {
 
   const W = 600, H = 160, padBottom = 16, padTop = 4;
   const values = rows.map((r) => r.total_dkk_kwh);
-  const min = Math.min(...values, 0);
+  const min = Math.min(...values);
   const max = Math.max(...values, min + 0.01);
   const range = max - min;
   const barW = W / rows.length;
@@ -400,15 +400,27 @@ async function refreshSaveeyeStatus() {
     const data = await fetchJSON("api/saveeye/now");
     if (!data.enabled) {
       out.textContent = "saveeye_enabled is off.";
-    } else if (!data.payload) {
-      out.textContent = `Enabled, waiting for the first message${data.detail ? ` (${data.detail})` : ""}...`;
-    } else {
-      const w = data.payload.instant_power_w;
-      out.textContent =
-        `${data.connected ? "Connected" : "Disconnected"} — device ${data.payload.device_serial}\n` +
-        `Instant power: ${w != null ? `${w} W` : "n/a"}\n` +
-        `Last message: ${relTime(data.received_at) || data.received_at}`;
+      return;
     }
+    if (!data.payload) {
+      out.textContent = `Enabled, waiting for the first message${data.detail ? ` (${data.detail})` : ""}...`;
+      return;
+    }
+    const w = data.payload.instant_power_w;
+    const cum = data.payload.cumulative_wh;
+    let storedCount = "?";
+    try {
+      const stats = await fetchJSON("api/stats");
+      storedCount = stats.counts && stats.counts.saveeye_samples != null ? stats.counts.saveeye_samples : "?";
+    } catch (_) {
+      // best-effort — the status line still works without it
+    }
+    out.textContent =
+      `${data.connected ? "Connected" : "Disconnected"} — device ${data.payload.device_serial}\n` +
+      `Instant power: ${w != null ? `${w} W` : "n/a"}\n` +
+      `Cumulative energy: ${cum != null ? `${cum} Wh` : "MISSING — this device's telemetry has no energy counter, only power"}\n` +
+      `Samples stored (needed for hourly kWh): ${storedCount}\n` +
+      `Last message: ${relTime(data.received_at) || data.received_at}`;
   } catch (err) {
     out.textContent = `Could not reach /api/saveeye/now: ${err}`;
   }
