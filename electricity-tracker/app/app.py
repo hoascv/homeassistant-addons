@@ -19,7 +19,7 @@ import eloverblik
 import saveeye
 import easee
 
-APP_VERSION = "1.4.2"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.5.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("ELECTRICITY_DB_PATH", "/data/electricity.db")
 OPTIONS_PATH = os.environ.get("ELECTRICITY_OPTIONS_PATH", "/data/options.json")

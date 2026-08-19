@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.5.0
+
+- **Redesigned all three charts** (price, hourly consumption, daily
+  consumption) from a flat multi-color bar field to a single smooth line
+  with a soft gradient-wash area beneath it — a calmer, less "candy-striped"
+  read, applying the dataviz skill's mark specs (thin 2px line, ~25%→0%
+  opacity wash, per-point hover, sparse axis labels) through one shared
+  renderer all three now use. Cheapest/priciest and "live estimate" hours
+  are now small dot markers on the line instead of whole-bar coloring/hatch.
+- Fixed the "now" marker landing on the chart's first (00:00) point
+  regardless of the actual time. `.find()` on an ascending array with a
+  "time ≤ now" test always matches index 0 first — trivially true for every
+  earlier row — so it never found the *most recent* row, only the earliest.
+  This existed since the original bar chart too; a subtle opacity
+  difference on a bar hid it, a misplaced dashed line on a smooth curve did
+  not.
+- Verified this release with an actual browser render (headless Chrome
+  through a local proxy that supplies the ingress auth header) against
+  seeded data spanning all three consumption sources
+  (eloverblik/saveeye_estimate/saveeye_partial), not just by reading the code.
+
 ## 1.4.2
 
 - Fixed the actual reason Saveeye consumption never showed up even with

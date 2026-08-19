@@ -115,14 +115,116 @@ function renderPowerNow(saveeye, currentPrice) {
   }
 }
 
-// --- Price curve chart ---
+// --- Shared chart primitives: a smooth line + soft gradient-wash area ---
 
-function tierClass(value, min, max) {
-  const range = max - min || 1;
-  if (value <= min + range / 3) return "chart-bar-cheap";
-  if (value >= max - range / 3) return "chart-bar-expensive";
-  return "chart-bar-normal";
+// Catmull-Rom through every point, converted to cubic Bezier segments (the
+// standard 1/6-tension form) — a natural curve with no manual tangent math
+// at each call site.
+function smoothLinePath(points) {
+  if (points.length === 1) {
+    // A single point still needs a valid path (a bare "M" is legal SVG and
+    // draws nothing) — the area path built on top of it degrades to a
+    // harmless zero-width sliver rather than malformed "L" with no "M".
+    return `M${points[0][0].toFixed(2)},${points[0][1].toFixed(2)}`;
+  }
+  if (points.length === 0) return "";
+  if (points.length === 2) {
+    return `M${points[0][0].toFixed(2)},${points[0][1].toFixed(2)} L${points[1][0].toFixed(2)},${points[1][1].toFixed(2)}`;
+  }
+  let d = `M${points[0][0].toFixed(2)},${points[0][1].toFixed(2)}`;
+  for (let i = 0; i < points.length - 1; i++) {
+    const p0 = points[i - 1] || points[i];
+    const p1 = points[i];
+    const p2 = points[i + 1];
+    const p3 = points[i + 2] || p2;
+    const c1x = p1[0] + (p2[0] - p0[0]) / 6;
+    const c1y = p1[1] + (p2[1] - p0[1]) / 6;
+    const c2x = p2[0] - (p3[0] - p1[0]) / 6;
+    const c2y = p2[1] - (p3[1] - p1[1]) / 6;
+    d += ` C${c1x.toFixed(2)},${c1y.toFixed(2)} ${c2x.toFixed(2)},${c2y.toFixed(2)} ${p2[0].toFixed(2)},${p2[1].toFixed(2)}`;
+  }
+  return d;
 }
+
+// One shared renderer for the price curve and both consumption views — same
+// shape (a time series), same treatment (smooth line, soft area wash,
+// per-point hover, sparse axis labels), differing only in baseline,
+// tooltip text, and which optional markers apply.
+function renderSmoothChart(host, rows, opts) {
+  if (!rows || !rows.length) {
+    host.innerHTML = `<p class="empty-state">${opts.emptyText}</p>`;
+    return null;
+  }
+
+  const W = 600, H = 160, padTop = 14, padBottom = 20, padX = 3;
+  const values = rows.map(opts.valueOf);
+  const min = opts.baseline === "zero" ? 0 : Math.min(...values);
+  const max = Math.max(...values, min + 0.01);
+  const range = max - min;
+  const innerW = W - padX * 2;
+  const stepX = rows.length > 1 ? innerW / (rows.length - 1) : 0;
+
+  const points = rows.map((r, i) => [
+    padX + i * stepX,
+    padTop + (1 - (opts.valueOf(r) - min) / range) * (H - padTop - padBottom),
+  ]);
+
+  const linePath = smoothLinePath(points);
+  const baselineY = H - padBottom;
+  const last = points[points.length - 1];
+  const first = points[0];
+  const areaPath = `${linePath} L${last[0].toFixed(2)},${baselineY} L${first[0].toFixed(2)},${baselineY} Z`;
+
+  let extras = "";
+  if (opts.nowIndex != null && opts.nowIndex >= 0) {
+    const [nx, ny] = points[opts.nowIndex];
+    extras +=
+      `<line class="chart-now-line" x1="${nx.toFixed(2)}" y1="${padTop}" x2="${nx.toFixed(2)}" y2="${baselineY}"/>` +
+      `<circle class="chart-now-dot" cx="${nx.toFixed(2)}" cy="${ny.toFixed(2)}" r="3"/>`;
+  }
+
+  if (opts.extremeDots) {
+    let minIdx = 0, maxIdx = 0;
+    rows.forEach((r, i) => {
+      if (opts.valueOf(r) < opts.valueOf(rows[minIdx])) minIdx = i;
+      if (opts.valueOf(r) > opts.valueOf(rows[maxIdx])) maxIdx = i;
+    });
+    extras +=
+      `<circle class="chart-dot chart-dot-cheap" cx="${points[minIdx][0].toFixed(2)}" cy="${points[minIdx][1].toFixed(2)}" r="2.6"/>` +
+      `<circle class="chart-dot chart-dot-expensive" cx="${points[maxIdx][0].toFixed(2)}" cy="${points[maxIdx][1].toFixed(2)}" r="2.6"/>`;
+  }
+
+  if (opts.markerTest) {
+    rows.forEach((r, i) => {
+      if (!opts.markerTest(r)) return;
+      extras += `<circle class="chart-dot chart-dot-estimate" cx="${points[i][0].toFixed(2)}" cy="${points[i][1].toFixed(2)}" r="2.4"/>`;
+    });
+  }
+
+  const hitTargets = rows.map((r, i) => (
+    `<circle class="chart-hit" cx="${points[i][0].toFixed(2)}" cy="${points[i][1].toFixed(2)}" r="7">` +
+    `<title>${escapeHtml(opts.tooltipOf(r))}</title></circle>`
+  )).join("");
+
+  const labels = rows.map((r, i) => {
+    const text = opts.axisLabelOf(r, i);
+    return text ? `<text class="chart-axis-label" x="${points[i][0].toFixed(2)}" y="${H - 4}">${text}</text>` : "";
+  }).join("");
+
+  host.innerHTML = (
+    `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="${escapeHtml(opts.ariaLabel)}">` +
+    `<defs><linearGradient id="${opts.gradientId}" x1="0" y1="0" x2="0" y2="1">` +
+    `<stop offset="0%" class="chart-area-stop-top"/><stop offset="100%" class="chart-area-stop-bottom"/>` +
+    `</linearGradient></defs>` +
+    `<path class="chart-area" d="${areaPath}" fill="url(#${opts.gradientId})"/>` +
+    `<path class="chart-line" d="${linePath}"/>` +
+    extras + hitTargets + labels +
+    `</svg>`
+  );
+  return { points };
+}
+
+// --- Price curve chart ---
 
 function renderPriceChart(rows, highlightKey) {
   const host = document.getElementById("price-chart");
@@ -134,40 +236,22 @@ function renderPriceChart(rows, highlightKey) {
   }
   empty.hidden = true;
 
-  const W = 600, H = 160, padBottom = 16, padTop = 4;
-  const values = rows.map((r) => r.total_dkk_kwh);
-  const min = Math.min(...values);
-  const max = Math.max(...values, min + 0.01);
-  const range = max - min;
-  const barW = W / rows.length;
-
-  const bars = rows.map((r, i) => {
-    const h = ((r.total_dkk_kwh - min) / range) * (H - padTop - padBottom);
-    const x = i * barW;
-    const y = H - padBottom - h;
-    const cls = tierClass(r.total_dkk_kwh, min, max);
-    const isNow = highlightKey && r.time_dk === highlightKey;
-    const label = `${hm(r.time_dk)} — ${r.total_dkk_kwh.toFixed(2)} DKK/kWh`;
-    return (
-      `<rect class="chart-bar ${cls}" x="${x.toFixed(1)}" y="${y.toFixed(1)}" ` +
-      `width="${Math.max(1, barW - 0.6).toFixed(1)}" height="${Math.max(1, h).toFixed(1)}" ` +
-      `opacity="${isNow ? 1 : 0.8}">` +
-      `<title>${escapeHtml(label)}</title></rect>`
-    );
-  }).join("");
-
-  const labels = rows.map((r, i) => {
-    const hourStr = r.time_dk.slice(11, 13);
-    const minStr = r.time_dk.slice(14, 16);
-    if (minStr !== "00" || Number(hourStr) % 3 !== 0) return "";
-    const x = i * barW;
-    return `<text class="chart-axis-label" x="${x.toFixed(1)}" y="${H - 4}">${hourStr}</text>`;
-  }).join("");
-
-  host.innerHTML = (
-    `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="Electricity price today">` +
-    bars + labels + `</svg>`
-  );
+  const nowIndex = highlightKey ? rows.findIndex((r) => r.time_dk === highlightKey) : -1;
+  renderSmoothChart(host, rows, {
+    valueOf: (r) => r.total_dkk_kwh,
+    tooltipOf: (r) => `${hm(r.time_dk)} — ${r.total_dkk_kwh.toFixed(2)} DKK/kWh`,
+    axisLabelOf: (r) => {
+      const hourStr = r.time_dk.slice(11, 13);
+      const minStr = r.time_dk.slice(14, 16);
+      return minStr === "00" && Number(hourStr) % 3 === 0 ? hourStr : "";
+    },
+    emptyText: "No price data yet.",
+    ariaLabel: "Electricity price today",
+    gradientId: "price-area-gradient",
+    baseline: "min",
+    nowIndex,
+    extremeDots: true,
+  });
 }
 
 function currentDayRows() {
@@ -176,9 +260,19 @@ function currentDayRows() {
 
 function refreshChart(nowLocalIso) {
   const rows = currentDayRows();
-  const highlight = state.currentDay === "today" && nowLocalIso
-    ? rows.find((r) => r.time_dk <= nowLocalIso.slice(0, 16) + ":00")?.time_dk
-    : null;
+  // Last (most recent) row at or before now — not the first: `rows` is
+  // ascending and every earlier row also satisfies "<= now", so a plain
+  // .find() always matched index 0 regardless of the actual time.
+  let highlight = null;
+  if (state.currentDay === "today" && nowLocalIso) {
+    const nowKey = nowLocalIso.slice(0, 16) + ":00";
+    for (let i = rows.length - 1; i >= 0; i--) {
+      if (rows[i].time_dk <= nowKey) {
+        highlight = rows[i].time_dk;
+        break;
+      }
+    }
+  }
   renderPriceChart(rows, highlight);
   document.getElementById("curve-day-note").textContent =
     rows.length ? `(${rows.length / 4}h)` : "";
@@ -267,82 +361,41 @@ function aggregateDaily(rows) {
 
 function renderHourlyChart(rows) {
   const host = document.getElementById("consumption-chart");
-  if (!rows.length) {
-    host.innerHTML = '<p class="empty-state">No consumption data yet today.</p>';
-    return;
-  }
-
-  const W = 600, H = 160, padBottom = 16, padTop = 4;
-  const max = Math.max(...rows.map((r) => r.kwh), 0.1);
-  const barW = W / rows.length;
-
-  const bars = rows.map((r, i) => {
-    const h = (r.kwh / max) * (H - padTop - padBottom);
-    const x = i * barW;
-    const y = H - padBottom - h;
-    const costStr = r.cost_dkk != null ? `${r.cost_dkk.toFixed(2)} kr` : "cost n/a";
-    const sourceNote = r.source === "saveeye_partial" ? " (live, hour in progress)"
-      : r.source === "saveeye_estimate" ? " (live estimate)" : "";
-    const label = `${hm(r.time_dk)} — ${r.kwh.toFixed(2)} kWh, ${costStr}${sourceNote}`;
-    const estimateClass = isSaveeyeSource(r.source) ? " chart-bar-estimate" : "";
-    return (
-      `<rect class="chart-bar chart-bar-normal${estimateClass}" x="${x.toFixed(1)}" y="${y.toFixed(1)}" ` +
-      `width="${Math.max(1, barW - 0.6).toFixed(1)}" height="${Math.max(1, h).toFixed(1)}" opacity="0.85">` +
-      `<title>${escapeHtml(label)}</title></rect>`
-    );
-  }).join("");
-
-  const labels = rows.map((r, i) => {
-    const hourStr = r.time_dk.slice(11, 13);
-    if (Number(hourStr) % 3 !== 0) return "";
-    const x = i * barW;
-    return `<text class="chart-axis-label" x="${x.toFixed(1)}" y="${H - 4}">${hourStr}</text>`;
-  }).join("");
-
-  host.innerHTML = (
-    `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="Hourly consumption today">` +
-    bars + labels + `</svg>`
-  );
+  renderSmoothChart(host, rows, {
+    valueOf: (r) => r.kwh,
+    tooltipOf: (r) => {
+      const costStr = r.cost_dkk != null ? `${r.cost_dkk.toFixed(2)} kr` : "cost n/a";
+      const sourceNote = r.source === "saveeye_partial" ? " (live, hour in progress)"
+        : r.source === "saveeye_estimate" ? " (live estimate)" : "";
+      return `${hm(r.time_dk)} — ${r.kwh.toFixed(2)} kWh, ${costStr}${sourceNote}`;
+    },
+    axisLabelOf: (r) => (Number(r.time_dk.slice(11, 13)) % 3 === 0 ? r.time_dk.slice(11, 13) : ""),
+    emptyText: "No consumption data yet today.",
+    ariaLabel: "Hourly consumption today",
+    gradientId: "hourly-area-gradient",
+    baseline: "zero",
+    markerTest: (r) => isSaveeyeSource(r.source),
+  });
 }
 
 function renderDailyChart(rows) {
   const host = document.getElementById("consumption-chart");
   const daily = aggregateDaily(rows);
-  if (!daily.length) {
-    host.innerHTML = '<p class="empty-state">No consumption data yet.</p>';
-    return;
-  }
-
-  const W = 600, H = 160, padBottom = 16, padTop = 4;
-  const max = Math.max(...daily.map((d) => d.kwh), 0.1);
-  const barW = W / daily.length;
-
-  const bars = daily.map((d, i) => {
-    const h = (d.kwh / max) * (H - padTop - padBottom);
-    const x = i * barW;
-    const y = H - padBottom - h;
-    const costStr = d.costKnown ? `${d.cost.toFixed(2)} kr` : "cost n/a";
-    const estimateNote = d.hasEstimate ? " (partly a live estimate)" : "";
-    const label = `${d.day} — ${d.kwh.toFixed(2)} kWh, ${costStr}${estimateNote}`;
-    const estimateClass = d.hasEstimate ? " chart-bar-estimate" : "";
-    return (
-      `<rect class="chart-bar chart-bar-normal${estimateClass}" x="${x.toFixed(1)}" y="${y.toFixed(1)}" ` +
-      `width="${Math.max(1, barW - 1).toFixed(1)}" height="${Math.max(1, h).toFixed(1)}" opacity="0.85">` +
-      `<title>${escapeHtml(label)}</title></rect>`
-    );
-  }).join("");
-
-  const step = Math.ceil(daily.length / 10);
-  const labels = daily.map((d, i) => {
-    if (i % step !== 0) return "";
-    const x = i * barW;
-    return `<text class="chart-axis-label" x="${x.toFixed(1)}" y="${H - 4}">${d.day.slice(5)}</text>`;
-  }).join("");
-
-  host.innerHTML = (
-    `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="Daily consumption">` +
-    bars + labels + `</svg>`
-  );
+  const step = Math.max(1, Math.ceil(daily.length / 10));
+  renderSmoothChart(host, daily, {
+    valueOf: (d) => d.kwh,
+    tooltipOf: (d) => {
+      const costStr = d.costKnown ? `${d.cost.toFixed(2)} kr` : "cost n/a";
+      const estimateNote = d.hasEstimate ? " (partly a live estimate)" : "";
+      return `${d.day} — ${d.kwh.toFixed(2)} kWh, ${costStr}${estimateNote}`;
+    },
+    axisLabelOf: (d, i) => (i % step === 0 ? d.day.slice(5) : ""),
+    emptyText: "No consumption data yet.",
+    ariaLabel: "Daily consumption",
+    gradientId: "daily-area-gradient",
+    baseline: "zero",
+    markerTest: (d) => d.hasEstimate,
+  });
 }
 
 function renderConsumptionChart(rows) {

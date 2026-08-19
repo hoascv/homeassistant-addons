@@ -113,9 +113,11 @@ code {
   display: flex; gap: 1rem; margin: 0.5rem 0 0; font-size: 0.72rem; color: var(--text-muted);
 }
 .chart-legend span { display: inline-flex; align-items: center; gap: 0.3rem; }
-.legend-swatch { width: 0.6rem; height: 0.6rem; border-radius: 2px; display: inline-block; }
-.legend-swatch-measured { background: var(--accent); }
-.legend-swatch-estimate { background: var(--accent); opacity: 0.4; background-image: repeating-linear-gradient(45deg, transparent, transparent 2px, var(--surface) 2px, var(--surface) 3px); }
+.legend-dot {
+  width: 0.55rem; height: 0.55rem; border-radius: 50%; display: inline-block;
+  box-shadow: 0 0 0 1.5px var(--surface);
+}
+.legend-dot-estimate { background: var(--accent); }
 
 .mini-stats { display: flex; gap: 0.6rem; margin: 0.9rem 0 0.1rem; flex-wrap: wrap; }
 .mini-stats-4 .mini-stat { min-width: calc(25% - 0.5rem); }
@@ -138,13 +140,20 @@ code {
 
 /* Charts (inline SVG, built by app.js) */
 .chart-host { width: 100%; }
-.chart-host svg { width: 100%; height: auto; display: block; }
-.chart-bar { transition: opacity 0.15s ease; }
-.chart-bar:hover { opacity: 0.75; }
-.chart-bar-cheap { fill: var(--success); }
-.chart-bar-normal { fill: var(--accent); }
-.chart-bar-expensive { fill: var(--danger); }
-.chart-bar-estimate { stroke: var(--accent); stroke-width: 1; stroke-dasharray: 2 1.5; }
+.chart-host svg { width: 100%; height: auto; display: block; overflow: visible; }
+
+/* The smooth line + soft gradient-wash area every chart in this add-on uses. */
+.chart-area-stop-top { stop-color: var(--accent); stop-opacity: 0.25; }
+.chart-area-stop-bottom { stop-color: var(--accent); stop-opacity: 0; }
+.chart-line { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.chart-now-line { stroke: var(--text-muted); stroke-width: 1; stroke-dasharray: 2 2; }
+.chart-now-dot { fill: var(--accent); stroke: var(--surface); stroke-width: 1.5; }
+.chart-dot { stroke: var(--surface); stroke-width: 1.3; }
+.chart-dot-cheap { fill: var(--success); }
+.chart-dot-expensive { fill: var(--danger); }
+.chart-dot-estimate { fill: var(--accent); }
+/* Invisible, larger-than-the-mark hit target — the actual hover surface. */
+.chart-hit { fill: transparent; cursor: pointer; }
 .chart-axis-label { font-size: 8px; fill: var(--text-muted); }
 
 .empty-state { color: var(--text-muted); font-size: 0.85rem; text-align: center; padding: 0.5rem; line-height: 1.5; }
