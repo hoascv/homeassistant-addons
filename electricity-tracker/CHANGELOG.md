@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.4.2
+
+- Fixed the actual reason Saveeye consumption never showed up even with
+  telemetry flowing and samples persisting correctly: leaving
+  `saveeye_device_serial` empty — the documented default, for the common
+  case of one Base reader — meant every consumption query filtered
+  `saveeye_samples` on `device_serial = NULL`, matching nothing, no matter
+  how much data existed. The write path already accepted telemetry from any
+  device when this option is empty; the read path now resolves the same
+  way — the device currently sending live telemetry, or failing that the
+  most recent device seen in storage — instead of requiring the option to
+  be filled in for reads to work at all.
+
 ## 1.4.1
 
 - Fixed the price chart's colors: the "cheap"/"expensive" tiers were swapped

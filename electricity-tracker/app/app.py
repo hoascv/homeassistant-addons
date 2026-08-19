@@ -19,7 +19,7 @@ import eloverblik
 import saveeye
 import easee
 
-APP_VERSION = "1.4.1"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.4.2"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("ELECTRICITY_DB_PATH", "/data/electricity.db")
 OPTIONS_PATH = os.environ.get("ELECTRICITY_OPTIONS_PATH", "/data/options.json")
@@ -657,6 +657,27 @@ def get_saveeye_status():
         return dict(_saveeye_status)
 
 
+def resolve_saveeye_device_serial(conn, configured_serial):
+    """The device serial to query saveeye_samples with.
+
+    `saveeye_device_serial` is deliberately left empty in the common
+    single-Base-reader case, which is fine for *receiving* telemetry (the
+    MQTT client accepts any device on the topic) but every read path below
+    needs an actual string to filter the table by. Falls back to whichever
+    device most recently sent telemetry — in memory if the add-on has seen a
+    message since it started, otherwise the most recent row already in
+    storage — so an empty config doesn't silently mean "match nothing",
+    which is what happened before this existed.
+    """
+    if configured_serial:
+        return configured_serial
+    payload, _ = get_saveeye_latest()
+    if payload and payload.get("device_serial"):
+        return payload["device_serial"]
+    row = conn.execute("SELECT device_serial FROM saveeye_samples ORDER BY ts_utc DESC LIMIT 1").fetchone()
+    return row["device_serial"] if row else None
+
+
 def start_saveeye_client(options):
     """Starts the background MQTT subscriber if saveeye_enabled. A no-op
     (returns None) otherwise — callers should treat that as "not configured",
@@ -992,11 +1013,12 @@ def publish_sensors(conn, options):
         )
 
     saveeye_cfg = get_saveeye_config(options)
+    saveeye_device_serial = resolve_saveeye_device_serial(conn, saveeye_cfg["device_serial"])
 
     cfg = get_eloverblik_config(options)
     if cfg["metering_point"]:
         summary = consumption_summary(
-            conn, now_local, cfg["metering_point"], opts["price_area"], opts, saveeye_cfg["device_serial"]
+            conn, now_local, cfg["metering_point"], opts["price_area"], opts, saveeye_device_serial
         )
         state = summary["today_kwh"] if summary["today_kwh"] is not None else "unknown"
         push_sensor(
@@ -1110,10 +1132,11 @@ def api_summary():
 
     cfg = get_eloverblik_config(options)
     saveeye_cfg = get_saveeye_config(options)
+    saveeye_device_serial = resolve_saveeye_device_serial(db, saveeye_cfg["device_serial"])
     consumption = None
     if cfg["metering_point"]:
         consumption = consumption_summary(
-            db, now_local, cfg["metering_point"], opts["price_area"], opts, saveeye_cfg["device_serial"]
+            db, now_local, cfg["metering_point"], opts["price_area"], opts, saveeye_device_serial
         )
 
     saveeye_now = None
@@ -1176,6 +1199,7 @@ def api_consumption():
     if not cfg["metering_point"]:
         return jsonify([])
     saveeye_cfg = get_saveeye_config(options)
+    saveeye_device_serial = resolve_saveeye_device_serial(db, saveeye_cfg["device_serial"])
     days = request.args.get("days", default=14, type=int) or 14
     days = min(90, max(1, days))
     now_local = datetime.now(LOCAL_TZ)
@@ -1183,7 +1207,7 @@ def api_consumption():
     end = now_local.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
     return jsonify(
         combined_consumption_with_cost(
-            db, start, end, cfg["metering_point"], opts["price_area"], opts, saveeye_cfg["device_serial"]
+            db, start, end, cfg["metering_point"], opts["price_area"], opts, saveeye_device_serial
         )
     )
 

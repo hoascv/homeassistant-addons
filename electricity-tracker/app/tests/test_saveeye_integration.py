@@ -16,6 +16,31 @@ def test_get_saveeye_config_defaults():
     assert cfg["device_serial"] is None
 
 
+def test_resolve_saveeye_device_serial_prefers_configured_value(conn):
+    assert electricityapp.resolve_saveeye_device_serial(conn, "configured-dev") == "configured-dev"
+
+
+def test_resolve_saveeye_device_serial_falls_back_to_in_memory_latest(conn, monkeypatch):
+    monkeypatch.setattr(
+        electricityapp, "_saveeye_latest", {"payload": {"device_serial": "live-dev"}, "received_at": "now"}
+    )
+    assert electricityapp.resolve_saveeye_device_serial(conn, None) == "live-dev"
+
+
+def test_resolve_saveeye_device_serial_falls_back_to_most_recent_stored_row(conn):
+    # No in-memory telemetry (e.g. add-on just restarted), but samples already exist.
+    conn.execute(
+        "INSERT INTO saveeye_samples (ts_utc, device_serial, instant_power_w, cumulative_wh) VALUES (?, ?, ?, ?)",
+        ("2026-08-16T10:00:00+00:00", "stored-dev", 100.0, 1000.0),
+    )
+    conn.commit()
+    assert electricityapp.resolve_saveeye_device_serial(conn, None) == "stored-dev"
+
+
+def test_resolve_saveeye_device_serial_none_when_nothing_known(conn):
+    assert electricityapp.resolve_saveeye_device_serial(conn, None) is None
+
+
 def test_get_saveeye_config_bad_port_falls_back():
     cfg = electricityapp.get_saveeye_config({"saveeye_mqtt_port": "not-a-port"})
     assert cfg["mqtt_port"] == 1883
@@ -271,3 +296,37 @@ def test_api_saveeye_now_reports_latest_payload(client, set_options, monkeypatch
     )
     data = client.get("/api/saveeye/now").get_json()
     assert data["payload"]["instant_power_w"] == 400.0
+
+
+def test_api_consumption_uses_saveeye_data_with_no_configured_device_serial(client, conn, set_options):
+    """Regression test for the bug this was: leaving saveeye_device_serial
+    empty (the documented default for a single Base reader) silently meant
+    every consumption query filtered on device_serial = NULL and matched
+    nothing, even with samples in storage and eloverblik configured."""
+    set_options(
+        saveeye_enabled=True,
+        eloverblik_refresh_token="rt",
+        eloverblik_metering_point="mp1",
+        grid_tariff_normal=0.0,
+        transmission_tariff=0.0,
+        electricity_tax=0.0,
+        vat_rate=0.0,
+        # saveeye_device_serial intentionally left unset.
+    )
+    now_local = datetime.now(electricityapp.LOCAL_TZ)
+    hour_start = (now_local - timedelta(hours=2)).replace(minute=0, second=0, microsecond=0)
+    for minute in (0, 15, 30, 45):
+        _seed_price(conn, (hour_start + timedelta(minutes=minute)).replace(tzinfo=None).isoformat(), spot=1.0)
+    _seed_saveeye_sample(
+        conn, hour_start.astimezone(timezone.utc).isoformat(), 1000.0, device_serial="auto-discovered"
+    )
+    _seed_saveeye_sample(
+        conn,
+        (hour_start + timedelta(hours=1)).astimezone(timezone.utc).isoformat(),
+        2000.0,
+        device_serial="auto-discovered",
+    )
+    conn.commit()
+
+    rows = client.get("/api/consumption?days=1").get_json()
+    assert any(r["source"] == "saveeye_estimate" and r["kwh"] == 1.0 for r in rows)
