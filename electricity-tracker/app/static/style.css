@@ -83,6 +83,8 @@ code {
 .card-head h2 { font-size: 1rem; margin: 0; }
 .muted { color: var(--text-muted); font-size: 0.82rem; font-weight: 400; }
 
+.pill-stale { background: var(--warn-soft); color: var(--warn); border-color: transparent; }
+
 .pill {
   font-size: 0.78rem; font-weight: 600;
   padding: 0.2rem 0.55rem; border-radius: 999px;

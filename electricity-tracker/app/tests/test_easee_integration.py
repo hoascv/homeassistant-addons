@@ -199,3 +199,150 @@ def test_api_easee_diagnose_without_credentials(client):
     res = client.get("/api/easee/diagnose")
     assert res.status_code == 400
     assert res.get_json()["ok"] is False
+
+
+# --- What the cost figure actually covers ---
+#
+# Every test above starts its session at exactly 0.0 kWh, which is why none of
+# them noticed that the first sample's energy was never priced: at 0.0 there is
+# nothing to miss. These start it somewhere else.
+
+
+def _seed_flat_day(conn, price=1.2):
+    """A whole day of flat prices, so any implied kr/kWh is checkable by eye."""
+    for hour in range(24):
+        for minute in (0, 15, 30, 45):
+            _seed_price(conn, f"2026-08-16T{hour:02d}:{minute:02d}:00", spot=price)
+
+
+def _flat_opts():
+    return electricityapp.get_price_options(
+        {"grid_tariff_normal": 0.0, "transmission_tariff": 0.0, "electricity_tax": 0.0, "vat_rate": 0.0}
+    )
+
+
+def test_cost_is_flagged_partial_when_the_session_started_before_our_samples(conn):
+    """The add-on installed or restarted mid-charge. Easee's counter reports
+    the whole session, but only the tail of it happened where prices could be
+    attributed — and the two numbers sit side by side on the dashboard."""
+    _seed_flat_day(conn)
+    for ts, kwh in [
+        ("2026-08-16T08:00:00+00:00", 24.00),  # already well into a charge
+        ("2026-08-16T08:05:00+00:00", 25.00),
+        ("2026-08-16T08:10:00+00:00", 26.00),
+        ("2026-08-16T08:15:00+00:00", 26.83),
+    ]:
+        _seed_easee_sample(conn, ts, session_energy_kwh=kwh)
+    conn.commit()
+
+    session = electricityapp.easee_current_session(conn, _flat_opts(), "DK2", "EH1")
+    assert session["session_energy_kwh"] == 26.83
+    assert session["session_start_observed"] is False
+    assert session["cost_is_partial"] is True
+    # Only the 2.83 kWh actually observed is priced — the earlier 24 kWh was
+    # consumed at prices nobody recorded, and is not invented.
+    assert session["cost_covers_kwh"] == 2.83
+    assert session["session_cost_dkk"] == round(2.83 * 1.2, 2)
+
+
+def test_the_first_sample_of_an_observed_session_is_priced(conn):
+    """The regression this pair exists for: a reset *was* seen, so the energy
+    on the session's first sample belongs to it. Priced from deltas alone it
+    was silently free, dragging the implied rate below the real one."""
+    _seed_flat_day(conn)
+    _seed_easee_sample(conn, "2026-08-16T07:55:00+00:00", session_energy_kwh=9.0, status="COMPLETED")
+    # The counter reset, and by the next poll 0.9 kWh had already gone in.
+    for ts, kwh in [
+        ("2026-08-16T08:00:00+00:00", 0.90),
+        ("2026-08-16T08:05:00+00:00", 1.90),
+        ("2026-08-16T08:10:00+00:00", 2.83),
+    ]:
+        _seed_easee_sample(conn, ts, session_energy_kwh=kwh)
+    conn.commit()
+
+    session = electricityapp.easee_current_session(conn, _flat_opts(), "DK2", "EH1")
+    assert session["session_start_observed"] is True
+    assert session["cost_is_partial"] is False
+    assert session["cost_covers_kwh"] == 2.83  # the whole session, baseline included
+    assert session["session_cost_dkk"] == round(2.83 * 1.2, 2)
+
+
+def test_cost_and_energy_agree_for_a_session_watched_end_to_end(conn):
+    """The property that matters, stated directly: when nothing was missed,
+    cost divided by energy is the price that was actually charged."""
+    _seed_flat_day(conn, price=1.2)
+    _seed_easee_sample(conn, "2026-08-16T07:55:00+00:00", session_energy_kwh=5.0, status="COMPLETED")
+    for i, kwh in enumerate([0.0, 2.0, 4.0, 6.0, 8.0]):
+        _seed_easee_sample(conn, f"2026-08-16T08:{i * 5:02d}:00+00:00", session_energy_kwh=kwh)
+    conn.commit()
+
+    session = electricityapp.easee_current_session(conn, _flat_opts(), "DK2", "EH1")
+    assert session["cost_is_partial"] is False
+    assert session["session_cost_dkk"] / session["session_energy_kwh"] == 1.2
+
+
+def test_a_lone_sample_reports_unknown_cost_rather_than_zero(conn):
+    """0.00 kr would be a claim; "–" is the truth when nothing has been priced."""
+    _seed_flat_day(conn)
+    _seed_easee_sample(conn, "2026-08-16T08:00:00+00:00", session_energy_kwh=4.0)
+    conn.commit()
+    session = electricityapp.easee_current_session(conn, _flat_opts(), "DK2", "EH1")
+    assert session["session_cost_dkk"] is None
+    assert session["cost_covers_kwh"] == 0.0
+    assert session["cost_is_partial"] is True
+
+
+def test_an_idle_charger_reports_zero_cost_not_unknown(conn):
+    """Nothing plugged in: no energy, so no cost — and that genuinely is 0."""
+    _seed_flat_day(conn)
+    _seed_easee_sample(conn, "2026-08-16T08:00:00+00:00", session_energy_kwh=0.0, status="DISCONNECTED", power_w=0.0)
+    conn.commit()
+    session = electricityapp.easee_current_session(conn, _flat_opts(), "DK2", "EH1")
+    assert session["session_cost_dkk"] == 0.0
+    assert session["cost_is_partial"] is False
+
+
+def test_a_missing_price_leaves_the_cost_unknown_rather_than_understated(conn):
+    """Half-priced energy must not be reported as a whole cost."""
+    # Prices for 10:00 local only; the session runs into an unpriced hour.
+    for minute in (0, 15, 30, 45):
+        _seed_price(conn, f"2026-08-16T10:{minute:02d}:00", spot=1.2)
+    _seed_easee_sample(conn, "2026-08-16T07:55:00+00:00", session_energy_kwh=9.0, status="COMPLETED")
+    _seed_easee_sample(conn, "2026-08-16T08:00:00+00:00", session_energy_kwh=1.0)
+    _seed_easee_sample(conn, "2026-08-16T09:00:00+00:00", session_energy_kwh=5.0)
+    conn.commit()
+    session = electricityapp.easee_current_session(conn, _flat_opts(), "DK2", "EH1")
+    assert session["session_cost_dkk"] is None
+
+
+def test_the_session_reading_carries_the_time_it_was_taken(conn):
+    """A status is only as current as its poll, and a failed sync writes no
+    row — so the dashboard needs the reading's own timestamp to say so."""
+    _seed_easee_sample(conn, "2026-08-16T08:00:00+00:00", session_energy_kwh=1.0)
+    _seed_easee_sample(conn, "2026-08-16T08:05:00+00:00", session_energy_kwh=2.0)
+    conn.commit()
+    session = electricityapp.easee_current_session(conn, _flat_opts(), "DK2", "EH1")
+    assert session["measured_at"] == "2026-08-16T08:05:00+00:00"
+
+
+def test_summary_exposes_the_last_easee_sync(conn, client, set_options):
+    set_options(easee_enabled=True, easee_username="u", easee_password="p", easee_charger_id="EH1")
+    _seed_easee_sample(conn, "2026-08-16T08:00:00+00:00", session_energy_kwh=1.0)
+    electricityapp._set_app_state(conn, "last_easee_sync", "2026-08-16T08:00:05+00:00")
+    conn.commit()
+    easee_block = client.get("/api/summary").get_json()["easee"]
+    assert easee_block["last_sync"] == "2026-08-16T08:00:05+00:00"
+
+
+def test_a_reset_still_bounds_the_session_when_the_baseline_is_large(conn):
+    """The existing reset test starts the new session at 0.0; this one proves
+    the boundary still holds when the first post-reset poll is already well in."""
+    _seed_flat_day(conn)
+    _seed_easee_sample(conn, "2026-08-16T07:00:00+00:00", session_energy_kwh=40.0)
+    _seed_easee_sample(conn, "2026-08-16T08:00:00+00:00", session_energy_kwh=3.0)  # reset, already 3 kWh in
+    _seed_easee_sample(conn, "2026-08-16T08:30:00+00:00", session_energy_kwh=4.0)
+    conn.commit()
+    session = electricityapp.easee_current_session(conn, _flat_opts(), "DK2", "EH1")
+    assert session["session_energy_kwh"] == 4.0  # not 44
+    assert session["cost_covers_kwh"] == 4.0
+    assert session["session_cost_dkk"] == round(4.0 * 1.2, 2)

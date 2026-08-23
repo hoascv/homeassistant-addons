@@ -129,6 +129,20 @@ each delta at that hour's real rate, the same principle Saveeye's estimate
 uses, just scoped to one appliance's session rather than the whole house. A
 push of `sensor.electricity_tracker_ev_power` to Home Assistant.
 
+Two honesty notes on that card, because the energy and the cost do not always
+describe the same thing:
+
+- **Energy** is Easee's own session counter — the whole session, however long
+  it has been running. **Cost** is only what this add-on was awake to price. If
+  the add-on was installed, restarted, or simply not running when a charge
+  began, the card says *"Cost covers 2.83 of 26.83 kWh"* rather than quietly
+  reporting a charge that looks ten times too cheap. Energy consumed before the
+  first poll happened at prices nothing recorded, and is not invented.
+- **The status is as old as the last poll.** Easee is read once per background
+  tick, and a failed sync writes nothing at all, so the reading could be older
+  than it looks. Past two ticks the status pill shows its own age
+  (`COMPLETED · 1 h ago`) instead of presenting a stale reading as live.
+
 Charging energy is already included in your whole-house numbers from
 Eloverblik (and Saveeye, if configured) — Easee's session figures are a
 breakdown of part of that same total, not counted again on top of it.
@@ -238,7 +252,11 @@ Pushed via the Supervisor API (`homeassistant_api: true`) every sync tick
 - `/api/saveeye/now` — live Saveeye MQTT connection status and the most
   recent telemetry reading.
 - `/api/easee/now` — the current/most recent charging session's live state
-  and cost so far.
+  and cost so far. `session_energy_kwh` is Easee's own counter;
+  `cost_covers_kwh` is how much of it `session_cost_dkk` accounts for, and
+  `cost_is_partial` is true when those differ. `session_start_observed` says
+  whether the session's beginning was actually seen, and `measured_at` is when
+  the reading was taken.
 - `/api/easee/diagnose` — live Easee connection test, listing every charger
   on the account (see Settings, above).
 - `/api/health`, `/api/stats`, `/api/export` — for the Add-on Watchdog and a

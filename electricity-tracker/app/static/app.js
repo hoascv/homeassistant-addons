@@ -377,15 +377,45 @@ function renderEasee(easee) {
   }
   empty.hidden = true;
 
-  document.getElementById("easee-status-pill").textContent = session.status || "–";
+  // A status is only as current as the poll behind it. Easee is polled on the
+  // background tick, and a failed sync writes no row at all — so a stale
+  // reading has to say so rather than sit there looking live.
+  const age = relTime(session.measured_at);
+  const stale = isStale(session.measured_at);
+  const pill = document.getElementById("easee-status-pill");
+  pill.textContent = stale ? `${session.status || "–"} · ${age}` : session.status || "–";
+  pill.classList.toggle("pill-stale", stale);
+
   document.getElementById("easee-power").textContent =
     session.total_power_w != null ? `${(session.total_power_w / 1000).toFixed(2)} kW` : "–";
   document.getElementById("easee-energy").textContent =
     session.session_energy_kwh != null ? `${session.session_energy_kwh.toFixed(2)} kWh` : "–";
   document.getElementById("easee-cost").textContent =
     session.session_cost_dkk != null ? `${session.session_cost_dkk.toFixed(2)} kr` : "–";
+
   const started = relTime(session.session_started_at);
-  document.getElementById("easee-started").textContent = started ? `Session started ${started}` : "";
+  document.getElementById("easee-started").textContent = started
+    ? (session.session_start_observed ? `Session started ${started}` : `Watching since ${started}`)
+    : "";
+
+  // The cost and the energy can describe different amounts: energy is Easee's
+  // own session counter, cost is only what this add-on was awake to price.
+  // Saying so is the difference between a cheap-looking charge and a wrong one.
+  document.getElementById("easee-note").textContent = session.cost_is_partial
+    ? `Cost covers ${session.cost_covers_kwh.toFixed(2)} of ${session.session_energy_kwh.toFixed(2)} kWh — ` +
+      "the rest was charged before this add-on was watching."
+    : "";
+}
+
+// Two background ticks without a reading means a sync is failing or the add-on
+// was asleep; either way the number on screen is no longer a live one.
+const EASEE_STALE_AFTER_MS = 2 * 300 * 1000;
+
+function isStale(isoUtc) {
+  if (!isoUtc) return true;
+  const then = new Date(isoUtc).getTime();
+  if (Number.isNaN(then)) return true;
+  return Date.now() - then > EASEE_STALE_AFTER_MS;
 }
 
 // --- Consumption chart (measured vs live estimate) ---

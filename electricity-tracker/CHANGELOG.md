@@ -1,5 +1,36 @@
 # Changelog
 
+## 1.6.1
+
+- **Fixed EV session cost being wildly understated.** The cost was built purely
+  from poll-to-poll deltas of Easee's session counter, which never prices the
+  *first* sample of a session — so whatever the counter already read when this
+  add-on first saw it was free. A 26.83 kWh charge showed 3.33 kr: an implied
+  12 øre/kWh against a real price nearer 1.20 kr. Every existing test started
+  its session at exactly 0.0 kWh, where there is nothing to miss, which is why
+  the suite never caught it.
+- Where the session's start *was* observed (a counter reset seen between two
+  polls), that first sample's energy now gets priced at its own hour — closing
+  the gap entirely.
+- Where it was not — the add-on installed, restarted, or simply not running
+  when the charge began — that energy happened at prices nothing recorded, and
+  is not invented. The card now says so: *"Cost covers 2.83 of 26.83 kWh — the
+  rest was charged before this add-on was watching"*, and the API exposes
+  `cost_covers_kwh`, `cost_is_partial` and `session_start_observed`. The
+  footnote is the repair: a cost silently describing less energy than the
+  figure beside it is the bug, and disclosure is the only correct handling of
+  the part that cannot be recovered.
+- The session line now reads "Watching since" rather than "Session started"
+  when the start was never seen, instead of asserting a start time it does not
+  know.
+- **Fixed a stale Easee reading being presented as live.** Easee is polled once
+  per background tick and a failed sync writes no row, so the dashboard could
+  show a status of any age with nothing to indicate it — and had no way to tell,
+  since `/api/summary` did not carry the sync time. It now does, each reading
+  carries its own `measured_at`, and past two ticks the status pill shows its
+  age (`COMPLETED · 1 h ago`).
+- Nine tests, eight of which fail against the previous release.
+
 ## 1.6.0
 
 - **The consumption chart now draws two series instead of one blended

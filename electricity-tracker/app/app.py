@@ -19,7 +19,7 @@ import eloverblik
 import saveeye
 import easee
 
-APP_VERSION = "1.6.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.6.1"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("ELECTRICITY_DB_PATH", "/data/electricity.db")
 OPTIONS_PATH = os.environ.get("ELECTRICITY_OPTIONS_PATH", "/data/options.json")
@@ -907,6 +907,20 @@ def easee_current_session(conn, opts, price_area, charger_id):
     price at the later sample's hour — the same mechanism a spot meter
     reading would use, just applied to one appliance's share of the total
     rather than the whole house.
+
+    The subtlety is what the *first* sample of a run means, because deltas
+    alone never price it:
+
+    - If a reset was observed just before it, the session began in that gap
+      and its energy belongs to this session — priced at that first sample's
+      hour, which is the only hour it can have happened in.
+    - If no reset was observed, this run is simply where our samples start.
+      The charger may have been going for hours before the add-on was
+      installed, restarted, or before the sample window begins. That energy
+      was consumed at prices nobody recorded, so it is left out of the cost
+      and `cost_is_partial` says so — rather than the cost silently
+      describing less energy than `session_energy_kwh` claims, which reads on
+      screen as an implausibly cheap charge.
     """
     rows = conn.execute(
         "SELECT ts_utc, session_energy_kwh, total_power_w, status FROM easee_samples "
@@ -927,15 +941,9 @@ def easee_current_session(conn, opts, price_area, charger_id):
         session_start_idx = i - 1
     session_rows = rows[session_start_idx:]
     latest = session_rows[-1]
-
-    if len(session_rows) < 2:
-        return {
-            "status": latest["status"],
-            "session_energy_kwh": latest["session_energy_kwh"],
-            "total_power_w": latest["total_power_w"],
-            "session_cost_dkk": None,
-            "session_started_at": latest["ts_utc"],
-        }
+    # True only when a reset was actually seen, i.e. this run is a whole
+    # session rather than the tail of one that began before our samples.
+    start_observed = session_start_idx > 0
 
     start_local = datetime.fromisoformat(session_rows[0]["ts_utc"]).astimezone(LOCAL_TZ).replace(
         minute=0, second=0, microsecond=0
@@ -945,31 +953,65 @@ def easee_current_session(conn, opts, price_area, charger_id):
     ) + timedelta(hours=1)
     hourly_totals = _hourly_totals(quarter_prices_with_total(conn, start_local, end_local, price_area, opts))
 
+    def _price_at(ts_utc):
+        hour_key = (
+            datetime.fromisoformat(ts_utc)
+            .astimezone(LOCAL_TZ)
+            .replace(minute=0, second=0, microsecond=0, tzinfo=None)
+            .isoformat()
+        )
+        return hourly_totals.get(hour_key)
+
     cost = 0.0
+    covered_kwh = 0.0
     cost_known = True
+
+    baseline_kwh = session_rows[0]["session_energy_kwh"]
+    if start_observed and baseline_kwh:
+        price = _price_at(session_rows[0]["ts_utc"])
+        if price is None:
+            cost_known = False
+        else:
+            cost += baseline_kwh * price
+            covered_kwh += baseline_kwh
+
     for prev, cur in zip(session_rows, session_rows[1:]):
         if prev["session_energy_kwh"] is None or cur["session_energy_kwh"] is None:
             continue
         delta = cur["session_energy_kwh"] - prev["session_energy_kwh"]
         if delta <= 0:
             continue
-        hour_key = (
-            datetime.fromisoformat(cur["ts_utc"]).astimezone(LOCAL_TZ).replace(
-                minute=0, second=0, microsecond=0, tzinfo=None
-            ).isoformat()
-        )
-        price = hourly_totals.get(hour_key)
+        price = _price_at(cur["ts_utc"])
         if price is None:
             cost_known = False
             continue
         cost += delta * price
+        covered_kwh += delta
+
+    session_energy = latest["session_energy_kwh"]
+    # Nothing priced at all (a lone sample, say) is not "0 kr" — it is not
+    # known, and 0.00 on screen would be a claim we cannot make.
+    if covered_kwh <= 0:
+        cost_dkk = 0.0 if not session_energy else None
+    else:
+        cost_dkk = round(cost, 2) if cost_known else None
 
     return {
         "status": latest["status"],
-        "session_energy_kwh": latest["session_energy_kwh"],
+        "session_energy_kwh": session_energy,
         "total_power_w": latest["total_power_w"],
-        "session_cost_dkk": round(cost, 2) if cost_known else None,
+        "session_cost_dkk": cost_dkk,
         "session_started_at": session_rows[0]["ts_utc"],
+        "session_start_observed": start_observed,
+        # What the cost figure actually accounts for, so the two numbers on
+        # screen can be compared instead of silently disagreeing.
+        "cost_covers_kwh": round(covered_kwh, 3),
+        "cost_is_partial": bool(
+            session_energy and covered_kwh + 0.01 < session_energy
+        ),
+        # When this reading was taken — a status is only as current as the
+        # poll behind it, and a failed sync writes no row at all.
+        "measured_at": latest["ts_utc"],
     }
 
 
@@ -1169,6 +1211,9 @@ def api_summary():
         easee_now = {
             "charger_id": charger_id,
             "session": easee_current_session(db, opts, opts["price_area"], charger_id) if charger_id else None,
+            # Without this the page has no way to tell a 30-second-old status
+            # from a three-day-old one, and a failed sync writes no row at all.
+            "last_sync": _get_app_state(db, "last_easee_sync"),
         }
 
     return jsonify(
