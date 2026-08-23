@@ -1,0 +1,73 @@
+name: "Knowledge"
+version: "1.0.0"
+slug: "knowledge"
+description: "A topic a day: syllabus, quiz, exercises and flashcards, loaded from any LLM without this add-on ever going online"
+url: "https://github.com/hoascv/homeassistant-addons/tree/main/knowledge"
+arch:
+  - aarch64
+  - amd64
+startup: application
+boot: auto
+init: false
+ingress: true
+ingress_port: 8099
+# Not published unless you set a port. Only needed to let something outside
+# Home Assistant — a data pipeline — reach the API with api_token.
+ports:
+  8099/tcp: null
+ports_description:
+  8099/tcp: "Direct API access for a data pipeline (requires api_token)"
+panel_icon: mdi:school
+panel_title: "Knowledge"
+# Only Home Assistant admin-group users get the sidebar menu entry (the
+# default, stated explicitly). See restrict_to_user_ids for a hard,
+# per-user access block on top of that.
+panel_admin: true
+homeassistant_api: true
+options:
+  # How many subtopics to serve per day, across all subscribed topics. At 1
+  # (the default) several topics take turns, least recently served first.
+  lessons_per_day: 1
+  # How many subtopics the generated prompt asks for when a topic is new.
+  # This is the whole outline of the topic, not how much material comes back.
+  syllabus_size: 24
+  # How many subtopics' worth of material one pack should carry — i.e. how
+  # many days you can go offline on a single paste.
+  material_days: 14
+  # Per subtopic, what the prompt asks the assistant to produce.
+  quiz_questions: 6
+  short_answer_questions: 3
+  flashcards_per_subtopic: 8
+  # Most flashcards to put in front of you in one day's review.
+  cards_per_day: 20
+  # Warn when a topic has this many days of material left or fewer.
+  low_material_threshold: 3
+  default_level: "intermediate"
+  # Topics subscribed to automatically on a fresh install, so the add-on opens
+  # with something to press rather than an empty screen. Comma-separated; an
+  # optional "Name: what you want out of it" sets that topic's goal. Applied
+  # once — deleting a starter topic is permanent. Empty to start with nothing.
+  starter_topics: "Apache Spark: read and debug a slow job on my own cluster, Apache Airflow: write DAGs I trust to run unattended"
+  # Optional daily notification through a Home Assistant notify service —
+  # the bare service name, e.g. "mobile_app_pixel", not "notify.mobile_app_pixel".
+  notify_service: ""
+  daily_reminder_enabled: false
+  daily_reminder_time: "18:00"
+  restrict_to_user_ids: ""
+  api_token: ""
+schema:
+  lessons_per_day: "int(1,10)"
+  syllabus_size: "int(4,100)"
+  material_days: "int(1,60)"
+  quiz_questions: "int(1,20)"
+  short_answer_questions: "int(0,10)"
+  flashcards_per_subtopic: "int(0,30)"
+  cards_per_day: "int(1,200)"
+  low_material_threshold: "int(0,30)"
+  default_level: "list(beginner|intermediate|advanced)"
+  starter_topics: "str?"
+  notify_service: "str?"
+  daily_reminder_enabled: "bool"
+  daily_reminder_time: "str"
+  restrict_to_user_ids: "str?"
+  api_token: "str?"

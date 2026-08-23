@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<title>Knowledge</title>
+<link rel="stylesheet" href="static/style.css?v={{ app_version }}">
+</head>
+<body>
+<header class="topbar">
+  <span class="topbar-icon">📚</span>
+  <h1>Knowledge</h1>
+  <span class="pill" id="streak-pill">–</span>
+  <button type="button" class="topbar-icon-btn" id="settings-open-btn" aria-label="Topics and settings">⚙️</button>
+</header>
+
+<main class="page">
+
+  <!-- Today's lesson -->
+  <section class="card" id="today-card">
+    <div class="card-head">
+      <h2>Today</h2>
+      <span class="pill" id="today-date">–</span>
+    </div>
+    <div id="lessons"></div>
+    <p class="empty-state" id="today-empty" hidden></p>
+  </section>
+
+  <!-- Flashcard review -->
+  <section class="card" id="review-card" hidden>
+    <div class="card-head">
+      <h2>Review</h2>
+      <span class="pill" id="review-remaining">–</span>
+    </div>
+    <div id="review-body"></div>
+  </section>
+
+  <!-- Progress -->
+  <section class="card" id="progress-card">
+    <div class="card-head">
+      <h2>Progress</h2>
+    </div>
+    <div class="mini-stats mini-stats-4">
+      <div class="mini-stat"><span class="mini-value" id="p-streak">–</span><span class="mini-label">Day streak</span></div>
+      <div class="mini-stat"><span class="mini-value" id="p-lessons">–</span><span class="mini-label">Subtopics done</span></div>
+      <div class="mini-stat"><span class="mini-value" id="p-accuracy">–</span><span class="mini-label">Accuracy</span></div>
+      <div class="mini-stat"><span class="mini-value" id="p-cards">–</span><span class="mini-label">Cards due</span></div>
+    </div>
+  </section>
+
+  <!-- Topics -->
+  <section class="card" id="topics-card">
+    <div class="card-head">
+      <h2>Topics</h2>
+      <button type="button" class="btn-secondary btn-small" id="add-topic-btn">+ Subscribe</button>
+    </div>
+    <div id="topics-list"></div>
+    <p class="empty-state" id="topics-empty" hidden>
+      No topics yet. Subscribe to one, copy the prompt it gives you, run it against any
+      assistant you like, and paste the reply back — that is the only way material gets in,
+      and it works with no internet on this machine at all.
+    </p>
+  </section>
+
+  <footer class="foot">
+    <span id="foot-note"></span>
+    <span id="app-version">v{{ app_version }}</span>
+  </footer>
+
+</main>
+
+<!-- Add topic sheet -->
+<div class="sheet-backdrop" id="add-backdrop">
+  <div class="sheet">
+    <div class="sheet-head">
+      <h2>Subscribe to a topic</h2>
+      <button type="button" class="topbar-icon-btn" data-close="add-backdrop" aria-label="Close">✕</button>
+    </div>
+    <label class="field">
+      <span>Topic</span>
+      <input type="text" id="add-name" placeholder="Kubernetes, Danish grammar, options trading…" autocomplete="off">
+    </label>
+    <label class="field">
+      <span>What do you want out of it? <em>(optional — it steers the syllabus)</em></span>
+      <textarea id="add-goal" rows="2" placeholder="Enough to run a small cluster in production without fear"></textarea>
+    </label>
+    <label class="field">
+      <span>Level</span>
+      <select id="add-level">
+        <option value="beginner">Beginner</option>
+        <option value="intermediate" selected>Intermediate</option>
+        <option value="advanced">Advanced</option>
+      </select>
+    </label>
+    <button type="button" class="btn-primary full" id="add-save-btn">Subscribe</button>
+    <p class="muted" id="add-error"></p>
+  </div>
+</div>
+
+<!-- Prompt sheet -->
+<div class="sheet-backdrop" id="prompt-backdrop">
+  <div class="sheet">
+    <div class="sheet-head">
+      <h2 id="prompt-title">Prompt</h2>
+      <button type="button" class="topbar-icon-btn" data-close="prompt-backdrop" aria-label="Close">✕</button>
+    </div>
+    <p class="muted" id="prompt-intro"></p>
+    <div class="btn-row">
+      <button type="button" class="btn-primary" id="prompt-copy-btn">Copy prompt</button>
+      <button type="button" class="btn-secondary" id="prompt-download-btn">Download .txt</button>
+      <button type="button" class="btn-secondary" id="prompt-goto-import-btn">I have the reply →</button>
+    </div>
+    <pre class="prompt-box" id="prompt-text"></pre>
+  </div>
+</div>
+
+<!-- Import sheet -->
+<div class="sheet-backdrop" id="import-backdrop">
+  <div class="sheet">
+    <div class="sheet-head">
+      <h2>Load a pack</h2>
+      <button type="button" class="topbar-icon-btn" data-close="import-backdrop" aria-label="Close">✕</button>
+    </div>
+    <p class="muted" id="import-intro"></p>
+    <textarea id="import-text" rows="8" placeholder="Paste the assistant's whole reply here — fences, preamble and all."></textarea>
+    <div class="btn-row">
+      <button type="button" class="btn-secondary" id="import-check-btn">Check it</button>
+      <label class="btn-secondary file-btn">
+        Upload a file<input type="file" id="import-file" accept=".json,.txt,.md,application/json,text/plain" hidden>
+      </label>
+      <button type="button" class="btn-primary" id="import-save-btn">Load it</button>
+    </div>
+    <div id="import-result"></div>
+  </div>
+</div>
+
+<!-- Settings sheet -->
+<div class="sheet-backdrop" id="settings-backdrop">
+  <div class="sheet">
+    <div class="sheet-head">
+      <h2>Settings</h2>
+      <button type="button" class="topbar-icon-btn" data-close="settings-backdrop" aria-label="Close">✕</button>
+    </div>
+    <p class="muted">
+      How much a pack asks for, how many subtopics a day, and the daily reminder all live in
+      the add-on's <strong>Configuration</strong> tab in Home Assistant. This panel shows what
+      is currently in effect.
+    </p>
+    <h3>In effect now</h3>
+    <div class="diag-output" id="settings-config">–</div>
+    <h3>Notify services</h3>
+    <button type="button" class="btn-secondary full" id="notify-test-btn">List notify services</button>
+    <div id="notify-result"></div>
+    <h3>Storage</h3>
+    <div class="diag-output" id="settings-stats">–</div>
+  </div>
+</div>
+
+<script src="static/app.js?v={{ app_version }}"></script>
+</body>
+</html>

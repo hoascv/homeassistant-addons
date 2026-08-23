@@ -25,6 +25,11 @@ Personal Home Assistant add-on repository.
   consumption from Eloverblik into a full end-user price: spot + your grid
   company's tariff + Energinet's transmission tariff + elafgift + VAT.
   Works as a price-only tracker before Eloverblik is configured.
+- **[Knowledge](knowledge/DOCS.md)** — a topic a day: subscribe to what you
+  want to learn and get a syllabus, a briefing, a self-grading quiz, written
+  questions, a practical task and spaced-repetition flashcards. It never calls
+  an LLM itself — it writes you a prompt to run anywhere you have a connection,
+  and you paste the reply back, so the studying works with no internet at all.
 - **[Network Traffic Monitor](network-traffic/DOCS.md)** — full packet capture
   from the host: a rotating raw `.pcap` plus a parsed `.jsonl` record per
   packet (DNS queries, TLS SNI, plaintext HTTP where present), shipped
