@@ -374,7 +374,9 @@ def test_unplugging_ends_the_session(conn):
     assert session["status"] == "DISCONNECTED"          # what it is doing now
     assert session["session_energy_kwh"] == 4.0          # the charge that happened
     assert session["session_started_at"] == "2026-08-16T08:00:00+00:00"
-    assert session["session_ended_at"] == "2026-08-16T09:00:00+00:00"
+    # The charge ended when the counter stopped moving, not when the cable came
+    # out an hour later — idle time with a cable in is not charging time.
+    assert session["session_ended_at"] == "2026-08-16T08:30:00+00:00"
 
 
 def test_a_completed_session_still_shows_its_figures(conn):
@@ -389,7 +391,9 @@ def test_a_completed_session_still_shows_its_figures(conn):
     assert session["status"] == "COMPLETED"
     assert session["session_energy_kwh"] == 6.0
     assert session["session_cost_dkk"] == round(6.0 * 1.2, 2)
-    assert session["session_ended_at"] is None  # it is still the newest sample
+    # COMPLETED at 09:00 is the charger still reporting, but the last kWh
+    # arrived at 08:30 — that is when the charge finished.
+    assert session["session_ended_at"] == "2026-08-16T08:30:00+00:00"
 
 
 def test_a_new_plug_in_at_zero_does_not_hide_the_last_charge(conn):
@@ -681,3 +685,83 @@ def test_history_route_shape(conn, client, set_options):
 def test_history_route_is_quiet_when_easee_is_off(client):
     data = client.get("/api/easee/history").get_json()
     assert data == {"enabled": False, "sessions": [], "daily": [], "totals": None}
+
+
+# --- A session is the stretch where energy actually moved ---
+
+
+def test_idle_time_with_the_cable_in_is_not_charging_time(conn):
+    """A car left plugged in for days used to report a 159-hour session: the
+    counter holds its final value, so nothing closed the run."""
+    _seed_flat_month(conn)
+    _seed_easee_sample(conn, "2026-08-20T08:00:00+00:00", session_energy_kwh=0.0, power_w=0.0,
+                       status="AWAITING_START")
+    _seed_easee_sample(conn, "2026-08-20T09:00:00+00:00", session_energy_kwh=5.0)
+    _seed_easee_sample(conn, "2026-08-20T10:00:00+00:00", session_energy_kwh=9.0)
+    for hour in range(11, 24):  # plugged in, drawing nothing, for the rest of the day
+        _seed_easee_sample(conn, f"2026-08-20T{hour:02d}:00:00+00:00", session_energy_kwh=9.0,
+                           status="COMPLETED", power_w=0.0)
+    conn.commit()
+
+    session = electricityapp.easee_sessions(conn, _flat_opts(), "DK2", "EH1", days=30, now_local=_now())[0]
+    assert session["energy_kwh"] == 9.0
+    assert session["duration_minutes"] == 120  # 08:00 -> 10:00, not 08:00 -> 23:00
+    assert session["started_at"] == "2026-08-20T08:00:00+00:00"
+    assert session["ended_at"] == "2026-08-20T10:00:00+00:00"
+
+
+def test_waiting_before_a_charge_is_not_charging_time_either(conn):
+    _seed_flat_month(conn)
+    for hour in range(6, 9):  # plugged in at 06:00, charge starts at 09:00
+        _seed_easee_sample(conn, f"2026-08-20T{hour:02d}:00:00+00:00", session_energy_kwh=0.0,
+                           status="AWAITING_START", power_w=0.0)
+    _seed_easee_sample(conn, "2026-08-20T09:00:00+00:00", session_energy_kwh=4.0)
+    conn.commit()
+    session = electricityapp.easee_sessions(conn, _flat_opts(), "DK2", "EH1", days=30, now_local=_now())[0]
+    assert session["started_at"] == "2026-08-20T08:00:00+00:00"  # the sample the charge began from
+    assert session["duration_minutes"] == 60
+
+
+def test_a_counter_that_never_moved_is_not_listed_as_a_session(conn):
+    """The 26.51 kWh row with "cost covers 0.0 kWh": a value left over from a
+    charge that happened before the samples begin. Nothing here saw it arrive,
+    so it is not a session — and it must not inflate the range's kWh total."""
+    _seed_flat_month(conn)
+    for hour in range(8, 20):
+        _seed_easee_sample(conn, f"2026-08-20T{hour:02d}:00:00+00:00", session_energy_kwh=26.51,
+                           status="COMPLETED", power_w=0.0)
+    conn.commit()
+    assert electricityapp.easee_sessions(conn, _flat_opts(), "DK2", "EH1", days=30, now_local=_now()) == []
+
+
+def test_a_stale_counter_does_not_hide_a_real_charge_on_the_card(conn):
+    """The live card still has to show the charge that happened, not the idle
+    counter reading sitting after it."""
+    _seed_flat_day(conn)
+    _seed_easee_sample(conn, "2026-08-16T07:00:00+00:00", session_energy_kwh=0.0)
+    _seed_easee_sample(conn, "2026-08-16T08:00:00+00:00", session_energy_kwh=6.0)
+    _seed_easee_sample(conn, "2026-08-16T09:00:00+00:00", session_energy_kwh=6.0,
+                       status="DISCONNECTED", power_w=0.0)
+    for hour in range(10, 14):  # a new plug-in whose counter never moves
+        _seed_easee_sample(conn, f"2026-08-16T{hour:02d}:00:00+00:00", session_energy_kwh=2.0,
+                           status="AWAITING_START", power_w=0.0)
+    conn.commit()
+    session = electricityapp.easee_current_session(conn, _flat_opts(), "DK2", "EH1")
+    assert session["session_energy_kwh"] == 6.0        # the charge we watched
+    assert session["status"] == "AWAITING_START"        # what it is doing now
+
+
+def test_a_paused_and_resumed_charge_stays_one_session(conn):
+    """Not split on idle: the counter is cumulative, so a second segment would
+    report the whole session's energy as its own and double-count it."""
+    _seed_flat_month(conn)
+    _seed_easee_sample(conn, "2026-08-20T08:00:00+00:00", session_energy_kwh=0.0)
+    _seed_easee_sample(conn, "2026-08-20T09:00:00+00:00", session_energy_kwh=5.0)
+    for hour in range(10, 14):  # a long car-side pause, cable still in
+        _seed_easee_sample(conn, f"2026-08-20T{hour:02d}:00:00+00:00", session_energy_kwh=5.0, power_w=0.0)
+    _seed_easee_sample(conn, "2026-08-20T14:00:00+00:00", session_energy_kwh=8.0)
+    conn.commit()
+    sessions = electricityapp.easee_sessions(conn, _flat_opts(), "DK2", "EH1", days=30, now_local=_now())
+    assert len(sessions) == 1
+    assert sessions[0]["energy_kwh"] == 8.0  # not 5 + 8
+    assert sessions[0]["duration_minutes"] == 360

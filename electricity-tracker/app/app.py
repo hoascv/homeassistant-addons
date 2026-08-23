@@ -19,7 +19,7 @@ import eloverblik
 import saveeye
 import easee
 
-APP_VERSION = "1.7.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.7.1"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("ELECTRICITY_DB_PATH", "/data/electricity.db")
 OPTIONS_PATH = os.environ.get("ELECTRICITY_OPTIONS_PATH", "/data/options.json")
@@ -1045,6 +1045,35 @@ def _price_session(conn, opts, price_area, session_rows, start_observed):
     }
 
 
+def _trim_session(session_rows):
+    """A session's samples cut down to the stretch where energy actually moved,
+    plus whether any movement was seen at all.
+
+    Easee's counter holds its final value indefinitely after a charge, and a
+    car can sit plugged in for days without drawing anything. Left untrimmed a
+    "session" therefore runs from the moment the cable went in until the moment
+    it came out — reporting a 4-hour charge as lasting 159 hours, which is not
+    a charging session by any reading.
+
+    The span kept is from the sample *before* the first increase (the baseline
+    the cost is measured from) to the sample *at* the last increase. Trailing
+    idle is not part of the charge, and neither is the waiting beforehand.
+
+    Deliberately not a split: `session_energy_kwh` is a cumulative counter, so
+    cutting a paused-then-resumed charge in two would make the second half
+    report the whole session's energy as its own.
+    """
+    increases = [
+        i for i in range(1, len(session_rows))
+        if (session_rows[i]["session_energy_kwh"] or 0) > (session_rows[i - 1]["session_energy_kwh"] or 0)
+    ]
+    if not increases:
+        # The counter never moved while we were watching. Whatever it reads is
+        # a value we found, not a charge we observed.
+        return session_rows, False
+    return session_rows[increases[0] - 1 : increases[-1] + 1], True
+
+
 def easee_current_session(conn, opts, price_area, charger_id):
     """The current (or most recent) charging session's energy and cost, plus
     what the charger is doing right now.
@@ -1087,12 +1116,19 @@ def easee_current_session(conn, opts, price_area, charger_id):
     # 0 kWh has not started a charge, and showing it would throw away the one
     # that just finished.
     session_rows = None
+    fallback = None
     for candidate in reversed(sessions):
-        if candidate[-1]["session_energy_kwh"]:
-            session_rows = candidate
+        trimmed, charging_seen = _trim_session(candidate)
+        if charging_seen:
+            session_rows = trimmed
             break
+        if fallback is None and candidate[-1]["session_energy_kwh"]:
+            # A counter reading with no movement behind it. Worth showing if
+            # nothing better exists, since it is still Easee's own session
+            # figure, but never in preference to a charge we saw happen.
+            fallback = candidate
     if session_rows is None:
-        session_rows = sessions[-1] if sessions else [newest]
+        session_rows = fallback or (sessions[-1] if sessions else [newest])
 
     # The session's start was observed if something closed a session before it,
     # rather than the sample window simply beginning mid-charge.
@@ -1153,10 +1189,17 @@ def easee_sessions(conn, opts, price_area, charger_id, days=30, now_local=None):
         return []
 
     out = []
-    for index, session_rows in _split_sessions_with_index(rows):
-        energy = session_rows[-1]["session_energy_kwh"]
-        if not energy:
+    for index, raw_rows in _split_sessions_with_index(rows):
+        if not raw_rows[-1]["session_energy_kwh"]:
             continue  # plugged in but never drew anything: not a charge
+        session_rows, charging_seen = _trim_session(raw_rows)
+        if not charging_seen:
+            # The counter never moved across this whole run — a value left over
+            # from a charge that happened before the samples begin. Listing it
+            # would put a session in the history that nothing here ever saw.
+            continue
+        index += raw_rows.index(session_rows[0])
+        energy = session_rows[-1]["session_energy_kwh"]
         ended_local = datetime.fromisoformat(session_rows[-1]["ts_utc"]).astimezone(LOCAL_TZ)
         if ended_local < window_start:
             continue

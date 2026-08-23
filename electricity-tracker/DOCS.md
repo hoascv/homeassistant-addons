@@ -308,6 +308,16 @@ narrows ingress access to specific Home Assistant users on top of
 - Charging history is derived from the stored samples rather than kept as its
   own table, so it goes back exactly as far as the samples do — from when the
   add-on was first enabled with Easee configured.
+- A session's duration is the stretch where energy actually moved: from the
+  sample the first kWh arrived from, to the sample the last one arrived at.
+  Time spent plugged in without drawing — before a charge starts, or after it
+  finishes — is not charging time, and counting it turned a four-hour charge
+  into a 159-hour one. A charge that pauses and resumes stays one session; the
+  counter is cumulative, so splitting it would make the second half report the
+  whole session's energy as its own.
+- A run where the counter never moved is not listed in the history at all. That
+  is a value left over from a charge that happened before the samples begin,
+  not a session anything here observed.
 - A charging session ends when the car is unplugged (`DISCONNECTED`) or when
   Easee's counter resets. `COMPLETED` does not end it — that is the tail of the
   session the card is meant to show. `OFFLINE` does not either: it means the

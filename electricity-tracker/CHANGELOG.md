@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.7.1
+
+- **Fixed a four-hour charge being reported as a 159-hour session.** Easee's
+  counter holds its final value indefinitely after a charge, and a car can sit
+  plugged in for days without drawing anything — so an untrimmed session ran
+  from the moment the cable went in to the moment it came out. A session's span
+  is now the stretch where energy actually moved: from the sample the first kWh
+  arrived from, to the sample the last one arrived at. Idle time with a cable in
+  is not charging time.
+- Deliberately not a split on idle: `session_energy_kwh` is cumulative, so
+  cutting a paused-then-resumed charge in two would make the second half report
+  the whole session's energy as its own. A pause stays inside its session.
+- **Fixed a leftover counter reading being listed as a charging session.** A run
+  where the counter never moved while this add-on was watching — 26.51 kWh with
+  "cost covers 0.0 kWh" — is a value found lying around from a charge that
+  happened before the samples begin, not something anything here observed. Those
+  no longer appear in the history, and no longer inflate the range's kWh total.
+  The live card still prefers a charge it actually watched, falling back to a
+  bare counter reading only when there is nothing better.
+- Note on cost, not a code change: if the charging cost looks implausibly cheap,
+  check `grid_tariff_*` and `transmission_tariff` in the add-on's configuration.
+  They default to 0.0, and with them unset the "full end-user price" is only
+  spot plus VAT — around 0.12 kr/kWh where the real figure is nearer 1.20.
+
 ## 1.7.0
 
 - **Charging history.** A new card listing every past charging session over
