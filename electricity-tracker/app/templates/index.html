@@ -110,6 +110,28 @@
     <p class="empty-state" id="easee-empty" hidden>No charging session data yet.</p>
   </section>
 
+  <!-- Charging history -->
+  <section class="card" id="charging-history-card" hidden>
+    <div class="card-head">
+      <h2>Charging history</h2>
+      <div class="seg" id="charging-range-toggle" role="tablist" aria-label="Range">
+        <button type="button" class="seg-btn seg-on" data-days="7">7d</button>
+        <button type="button" class="seg-btn" data-days="30">30d</button>
+        <button type="button" class="seg-btn" data-days="90">90d</button>
+      </div>
+    </div>
+    <div class="mini-stats mini-stats-4">
+      <div class="mini-stat"><span class="mini-value" id="ch-sessions">–</span><span class="mini-label">Sessions</span></div>
+      <div class="mini-stat"><span class="mini-value" id="ch-kwh">–</span><span class="mini-label">kWh charged</span></div>
+      <div class="mini-stat"><span class="mini-value" id="ch-cost">–</span><span class="mini-label">kr spent</span></div>
+      <div class="mini-stat"><span class="mini-value" id="ch-avg">–</span><span class="mini-label">kr/kWh avg</span></div>
+    </div>
+    <div id="charging-chart" class="chart-host"></div>
+    <div id="charging-sessions"></div>
+    <p class="muted" id="charging-note"></p>
+    <p class="empty-state" id="charging-empty" hidden>No charging sessions recorded yet in this range.</p>
+  </section>
+
   <footer class="foot">
     <span id="last-price-sync">–</span>
     <span id="last-consumption-sync"></span>

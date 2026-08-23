@@ -164,6 +164,18 @@ code {
 .chart-hit { fill: transparent; cursor: pointer; }
 .chart-axis-label { font-size: 8px; fill: var(--text-muted); }
 
+/* Charging history */
+.session-row {
+  display: flex; align-items: baseline; gap: 0.5rem;
+  padding: 0.5rem 0; border-top: 1px solid var(--border); font-size: 0.84rem;
+}
+.session-when { flex: 1; min-width: 0; }
+.session-when strong { font-weight: 600; }
+.session-sub { display: block; font-size: 0.74rem; color: var(--text-muted); margin-top: 0.1rem; }
+.session-figure { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.session-figure span { display: block; font-size: 0.72rem; color: var(--text-muted); font-variant-numeric: normal; }
+.session-partial { color: var(--warn); }
+
 .empty-state { color: var(--text-muted); font-size: 0.85rem; text-align: center; padding: 0.5rem; line-height: 1.5; }
 
 .foot {

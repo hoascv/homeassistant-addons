@@ -1,5 +1,32 @@
 # Changelog
 
+## 1.7.0
+
+- **Charging history.** A new card listing every past charging session over
+  7/30/90 days — energy, cost, duration, and the average rate that session
+  actually paid — over a per-day chart of energy charged, with the roll-up
+  above it: sessions, kWh, kr, and the average kr/kWh for the range. The
+  per-session rate is the useful one if you charge on spot prices: it is what
+  says whether the cheap hours are being caught. `/api/easee/history?days=N`
+  returns the same thing.
+- Sessions are derived from the samples already stored rather than a new table,
+  so the history reaches back exactly as far as the samples do — no migration,
+  and it works from existing data the moment this release starts.
+- The costing is the same code path the live card uses, so a session cannot be
+  priced one way on the dashboard and another way in the list underneath it —
+  including the partial-cost handling from 1.6.1, which the history reports per
+  session and counts in the totals.
+- Averages are taken against the energy the cost actually covers rather than
+  the full session, since a partially observed charge would otherwise report a
+  rate it never paid.
+- The chart uses monotone cubic interpolation rather than the Catmull-Rom
+  spline the other charts use. Charging is mostly zeroes with occasional
+  30 kWh nights, and an overshooting spline swings below the axis between them
+  — drawing negative charging. Impossible quantities should not be drawable.
+- A static wiring test now checks that every element id `app.js` looks up
+  exists in the template. The dashboard has no build step, so a mistyped id
+  fails silently: the card renders empty and nothing says why.
+
 ## 1.6.2
 
 - **Fixed `CHARGING` being reported while nothing was flowing.** Easee holds

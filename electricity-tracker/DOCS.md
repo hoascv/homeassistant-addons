@@ -216,6 +216,12 @@ actually charges.
   live instant power plus what that costs per hour at the current price.
 - **EV charging** — once Easee is enabled: status, live power, and the
   current/last session's energy and cost.
+- **Charging history** — every past charging session over 7/30/90 days (kWh,
+  cost, duration, and the average rate that session actually paid), a per-day
+  chart of energy charged, and the roll-up: sessions, kWh, kr and the average
+  kr/kWh across the range. The per-session rate is the interesting one if you
+  charge on spot prices — it is what tells you whether the cheap hours are
+  being caught.
 - **Settings → Test Eloverblik connection** — a live round-trip to Eloverblik
   with your configured token, listing every metering point it can see.
 - **Settings → Saveeye connection** — live MQTT connection status and the
@@ -273,6 +279,10 @@ Pushed via the Supervisor API (`homeassistant_api: true`) every sync tick
   says `CHARGING` with no power), `raw_status` is Easee's own `chargerOpMode`,
   `charging` is the boolean, and `reason` explains a non-flowing state.
   `session_ended_at` is set once the car has been unplugged since.
+- `/api/easee/history?days=N` (default 30, max 365) — past charging sessions
+  newest first, per-day totals, and the roll-up. Each session carries
+  `energy_kwh`, `cost_dkk`, `avg_dkk_kwh`, `duration_minutes`, `ongoing`, and
+  the same `cost_is_partial` / `cost_covers_kwh` pair the live card uses.
 - `/api/easee/diagnose` — live Easee connection test, listing every charger
   on the account (see Settings, above).
 - `/api/health`, `/api/stats`, `/api/export` — for the Add-on Watchdog and a
@@ -291,6 +301,13 @@ narrows ingress access to specific Home Assistant users on top of
   stored keyed by UTC. Combining the two (for cost) converts consumption's
   UTC hour into Denmark's local time — including across the DST transitions —
   and averages that hour's four quarter-hour prices.
+- Averages in the history are computed against the energy the cost actually
+  covers, not the full session — a partially observed charge would otherwise
+  report a rate it never paid. Sessions in that state are counted under the
+  card, so a total missing some of its cost says so.
+- Charging history is derived from the stored samples rather than kept as its
+  own table, so it goes back exactly as far as the samples do — from when the
+  add-on was first enabled with Easee configured.
 - A charging session ends when the car is unplugged (`DISCONNECTED`) or when
   Easee's counter resets. `COMPLETED` does not end it — that is the tail of the
   session the card is meant to show. `OFFLINE` does not either: it means the

@@ -5,6 +5,7 @@ const state = {
   tomorrow: [],
   currentDay: "today",
   consumptionView: "hourly",
+  chargingDays: 7,
 };
 
 function escapeHtml(str) {
@@ -120,6 +121,58 @@ function renderPowerNow(saveeye, currentPrice) {
 // Catmull-Rom through every point, converted to cubic Bezier segments (the
 // standard 1/6-tension form) — a natural curve with no manual tangent math
 // at each call site.
+// Fritsch-Carlson monotone cubic: a smooth curve that never overshoots the
+// points it passes through. Catmull-Rom is prettier on gently varying data but
+// swings past its endpoints on spiky series — and a charging chart is mostly
+// zeroes with occasional 30 kWh nights, where that swing dips the curve below
+// the axis and draws negative charging. Impossible quantities must not be
+// drawable, so any series with a hard floor uses this instead.
+function monotoneLinePath(points) {
+  const n = points.length;
+  if (n < 3) return smoothLinePath(points);
+
+  const dx = [];
+  const slope = [];
+  for (let i = 0; i < n - 1; i++) {
+    const h = points[i + 1][0] - points[i][0];
+    dx.push(h);
+    slope.push(h === 0 ? 0 : (points[i + 1][1] - points[i][1]) / h);
+  }
+
+  const m = new Array(n);
+  m[0] = slope[0];
+  m[n - 1] = slope[n - 2];
+  for (let i = 1; i < n - 1; i++) {
+    // A sign change means this point is a local extreme: a flat tangent there
+    // is exactly what stops the curve continuing past it.
+    m[i] = slope[i - 1] * slope[i] <= 0 ? 0 : (slope[i - 1] + slope[i]) / 2;
+  }
+  for (let i = 0; i < n - 1; i++) {
+    if (slope[i] === 0) {
+      m[i] = 0;
+      m[i + 1] = 0;
+      continue;
+    }
+    const a = m[i] / slope[i];
+    const b = m[i + 1] / slope[i];
+    const sum = a * a + b * b;
+    if (sum > 9) {
+      const t = 3 / Math.sqrt(sum);
+      m[i] = t * a * slope[i];
+      m[i + 1] = t * b * slope[i];
+    }
+  }
+
+  let d = `M${points[0][0].toFixed(2)},${points[0][1].toFixed(2)}`;
+  for (let i = 0; i < n - 1; i++) {
+    const third = dx[i] / 3;
+    d += ` C${(points[i][0] + third).toFixed(2)},${(points[i][1] + m[i] * third).toFixed(2)}` +
+         ` ${(points[i + 1][0] - third).toFixed(2)},${(points[i + 1][1] - m[i + 1] * third).toFixed(2)}` +
+         ` ${points[i + 1][0].toFixed(2)},${points[i + 1][1].toFixed(2)}`;
+  }
+  return d;
+}
+
 function smoothLinePath(points) {
   if (points.length === 1) {
     // A single point still needs a valid path (a bare "M" is legal SVG and
@@ -192,8 +245,9 @@ function renderSmoothChart(host, rows, opts) {
     // A series can be interrupted (Saveeye was offline for an hour); each
     // uninterrupted run is its own path so the gap stays a gap instead of
     // being bridged by a straight line that implies data we don't have.
+    const curve = opts.monotone ? monotoneLinePath : smoothLinePath;
     for (const run of contiguousRuns(seriesPoints[si])) {
-      const linePath = smoothLinePath(run);
+      const linePath = curve(run);
       if (s.area) {
         const first = run[0], last = run[run.length - 1];
         areas +=
@@ -433,6 +487,112 @@ function isStale(isoUtc) {
   const then = new Date(isoUtc).getTime();
   if (Number.isNaN(then)) return true;
   return Date.now() - then > EASEE_STALE_AFTER_MS;
+}
+
+// --- Charging history ---
+
+function fmtDuration(minutes) {
+  if (minutes == null) return "–";
+  if (minutes < 60) return `${minutes} min`;
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  return m ? `${h} h ${m} min` : `${h} h`;
+}
+
+function shortDay(iso) {
+  return iso.slice(5).replace("-", "/");
+}
+
+function renderChargingHistory(data) {
+  const card = document.getElementById("charging-history-card");
+  if (!data.enabled) {
+    card.hidden = true;
+    return;
+  }
+  card.hidden = false;
+
+  const totals = data.totals || { sessions: 0, energy_kwh: 0, cost_dkk: null, avg_dkk_kwh: null };
+  document.getElementById("ch-sessions").textContent = totals.sessions;
+  document.getElementById("ch-kwh").textContent = fmtKwh(totals.energy_kwh);
+  document.getElementById("ch-cost").textContent = fmtKr(totals.cost_dkk);
+  document.getElementById("ch-avg").textContent =
+    totals.avg_dkk_kwh == null ? "–" : totals.avg_dkk_kwh.toFixed(2);
+
+  const empty = document.getElementById("charging-empty");
+  const chart = document.getElementById("charging-chart");
+  const list = document.getElementById("charging-sessions");
+  if (!data.sessions.length) {
+    empty.hidden = false;
+    chart.innerHTML = "";
+    list.innerHTML = "";
+    document.getElementById("charging-note").textContent = "";
+    return;
+  }
+  empty.hidden = true;
+
+  renderSmoothChart(chart, data.daily, {
+    series: [{ valueOf: (d) => d.kwh, area: true, gradientId: "charging-area-gradient" }],
+    tooltipOf: (d) => {
+      const cost = d.cost_known ? `${d.cost.toFixed(2)} kr` : "cost n/a";
+      return d.sessions
+        ? `${d.day} — ${d.kwh.toFixed(2)} kWh, ${cost} (${d.sessions} session${d.sessions > 1 ? "s" : ""})`
+        : `${d.day} — no charging`;
+    },
+    axisLabelOf: (d, i) => {
+      const step = Math.max(1, Math.ceil(data.daily.length / 8));
+      return i % step === 0 ? shortDay(d.day) : "";
+    },
+    emptyText: "No charging in this range.",
+    ariaLabel: "Charging energy per day",
+    baseline: "zero",
+    // Most days are zero with occasional big nights; an overshooting spline
+    // would draw negative charging between them.
+    monotone: true,
+  });
+
+  // Newest first, and capped: the chart carries the shape, the list is for
+  // looking up individual charges, and a 90-day list of every session is a
+  // wall nobody reads.
+  const shown = data.sessions.slice(0, 12);
+  list.innerHTML = shown.map((session) => {
+    const started = new Date(session.started_at);
+    const time = `${String(started.getHours()).padStart(2, "0")}:${String(started.getMinutes()).padStart(2, "0")}`;
+    const rate = session.avg_dkk_kwh == null ? "–" : `${session.avg_dkk_kwh.toFixed(2)} kr/kWh`;
+    return `
+      <div class="session-row">
+        <span class="session-when">
+          <strong>${escapeHtml(shortDay(session.day))} ${escapeHtml(time)}</strong>
+          ${session.ongoing ? '<span class="pill pill-accent">charging</span>' : ""}
+          <span class="session-sub">${escapeHtml(fmtDuration(session.duration_minutes))} · ${escapeHtml(rate)}${
+            session.cost_is_partial
+              ? ` · <span class="session-partial">cost covers ${session.cost_covers_kwh.toFixed(1)} kWh</span>`
+              : ""
+          }</span>
+        </span>
+        <span class="session-figure">${session.energy_kwh.toFixed(2)}<span>kWh</span></span>
+        <span class="session-figure">${session.cost_dkk == null ? "–" : session.cost_dkk.toFixed(2)}<span>kr</span></span>
+      </div>`;
+  }).join("");
+
+  const notes = [];
+  if (data.sessions.length > shown.length) {
+    notes.push(`Showing the ${shown.length} most recent of ${data.sessions.length} sessions.`);
+  }
+  if (totals.partial_sessions) {
+    notes.push(
+      `${totals.partial_sessions} session${totals.partial_sessions > 1 ? "s" : ""} began before this add-on ` +
+      "was watching, so the cost above covers less energy than the kWh figure.");
+  }
+  document.getElementById("charging-note").textContent = notes.join(" ");
+}
+
+async function loadChargingHistory() {
+  try {
+    renderChargingHistory(await fetchJSON(`api/easee/history?days=${state.chargingDays}`));
+  } catch (err) {
+    document.getElementById("charging-chart").innerHTML =
+      `<p class="empty-state">Could not load charging history: ${escapeHtml(String(err))}</p>`;
+  }
 }
 
 // --- Consumption chart (measured vs live estimate) ---
@@ -690,6 +850,15 @@ function wireChartToggles() {
     refreshChart(new Date().toISOString());
   });
 
+  document.getElementById("charging-range-toggle").addEventListener("click", (e) => {
+    const btn = e.target.closest(".seg-btn");
+    if (!btn) return;
+    document.querySelectorAll("#charging-range-toggle .seg-btn").forEach((b) => b.classList.remove("seg-on"));
+    btn.classList.add("seg-on");
+    state.chargingDays = Number(btn.dataset.days);
+    loadChargingHistory();
+  });
+
   document.getElementById("consumption-range-toggle").addEventListener("click", (e) => {
     const btn = e.target.closest(".seg-btn");
     if (!btn) return;
@@ -705,8 +874,10 @@ function init() {
   wireChartToggles();
   loadSummary();
   loadConsumptionChart();
+  loadChargingHistory();
   setInterval(loadSummary, 60000);
   setInterval(loadConsumptionChart, 300000);
+  setInterval(loadChargingHistory, 300000);
 }
 
 document.addEventListener("DOMContentLoaded", init);

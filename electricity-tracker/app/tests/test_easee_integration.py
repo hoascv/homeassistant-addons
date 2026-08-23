@@ -509,3 +509,175 @@ def test_migration_is_idempotent(conn):
     electricityapp._migrate_columns(conn)
     columns = [row[1] for row in conn.execute("PRAGMA table_info(easee_samples)")]
     assert columns.count("reason_for_no_current") == 1
+
+
+# --- Charging history ---
+
+
+def _charge(conn, day, start_hour, kwh_steps, charger_id="EH1"):
+    """One charge: samples climbing through kwh_steps, then an unplug."""
+    for i, kwh in enumerate(kwh_steps):
+        _seed_easee_sample(
+            conn, f"2026-08-{day:02d}T{start_hour + i:02d}:00:00+00:00",
+            session_energy_kwh=kwh, charger_id=charger_id,
+        )
+    _seed_easee_sample(
+        conn, f"2026-08-{day:02d}T{start_hour + len(kwh_steps):02d}:00:00+00:00",
+        session_energy_kwh=kwh_steps[-1], status="DISCONNECTED", power_w=0.0, charger_id=charger_id,
+    )
+
+
+def _seed_flat_month(conn, price=1.2):
+    for day in range(10, 25):
+        for hour in range(24):
+            for minute in (0, 15, 30, 45):
+                _seed_price(conn, f"2026-08-{day:02d}T{hour:02d}:{minute:02d}:00", spot=price)
+
+
+def _now():
+    from datetime import datetime as _dt
+
+    return _dt(2026, 8, 24, 12, 0, tzinfo=electricityapp.LOCAL_TZ)
+
+
+def test_history_lists_each_charge_separately(conn):
+    _seed_flat_month(conn)
+    _charge(conn, 20, 8, [0.0, 3.0, 6.0])
+    _charge(conn, 22, 9, [0.0, 4.0])
+    conn.commit()
+    sessions = electricityapp.easee_sessions(conn, _flat_opts(), "DK2", "EH1", days=30, now_local=_now())
+    assert [s["energy_kwh"] for s in sessions] == [4.0, 6.0]  # newest first
+    assert [s["day"] for s in sessions] == ["2026-08-22", "2026-08-20"]
+
+
+def test_history_costs_each_session_like_the_live_card_does(conn):
+    _seed_flat_month(conn)
+    _charge(conn, 20, 8, [0.0, 3.0, 6.0])
+    conn.commit()
+    session = electricityapp.easee_sessions(conn, _flat_opts(), "DK2", "EH1", days=30, now_local=_now())[0]
+    assert session["cost_dkk"] == round(6.0 * 1.2, 2)
+    assert session["avg_dkk_kwh"] == 1.2
+    assert session["cost_is_partial"] is False
+
+
+def test_history_reports_duration_and_whether_a_charge_is_still_running(conn):
+    _seed_flat_month(conn)
+    _charge(conn, 20, 8, [0.0, 3.0, 6.0])  # 08:00 -> 10:00, then unplugged at 11:00
+    _seed_easee_sample(conn, "2026-08-23T09:00:00+00:00", session_energy_kwh=0.0)
+    _seed_easee_sample(conn, "2026-08-23T10:00:00+00:00", session_energy_kwh=2.0)
+    conn.commit()
+    sessions = electricityapp.easee_sessions(conn, _flat_opts(), "DK2", "EH1", days=30, now_local=_now())
+    assert sessions[0]["ongoing"] is True
+    assert sessions[0]["duration_minutes"] == 60
+    assert sessions[1]["ongoing"] is False
+    assert sessions[1]["duration_minutes"] == 120
+
+
+def test_history_skips_a_plug_in_that_never_drew_anything(conn):
+    _seed_flat_month(conn)
+    _seed_easee_sample(conn, "2026-08-20T08:00:00+00:00", session_energy_kwh=0.0, status="AWAITING_START")
+    _seed_easee_sample(conn, "2026-08-20T09:00:00+00:00", session_energy_kwh=0.0, status="DISCONNECTED")
+    conn.commit()
+    assert electricityapp.easee_sessions(conn, _flat_opts(), "DK2", "EH1", days=30, now_local=_now()) == []
+
+
+def test_history_excludes_sessions_that_ended_before_the_window(conn):
+    _seed_flat_month(conn)
+    _charge(conn, 12, 8, [0.0, 5.0])
+    _charge(conn, 22, 8, [0.0, 3.0])
+    conn.commit()
+    sessions = electricityapp.easee_sessions(conn, _flat_opts(), "DK2", "EH1", days=3, now_local=_now())
+    assert [s["day"] for s in sessions] == ["2026-08-22"]
+
+
+def test_the_lead_in_stops_the_oldest_session_looking_partial(conn):
+    """Without querying a day beyond the window, the first session in range
+    starts at the first row and so reads as a charge whose start was never
+    seen — marked partial purely because of where the window was cut."""
+    _seed_flat_month(conn)
+    _charge(conn, 21, 8, [0.0, 4.0])   # ends 21st, just before a 3-day window
+    _charge(conn, 22, 8, [0.0, 6.0])
+    conn.commit()
+    sessions = electricityapp.easee_sessions(conn, _flat_opts(), "DK2", "EH1", days=3, now_local=_now())
+    assert all(s["cost_is_partial"] is False for s in sessions)
+
+
+def test_totals_roll_the_sessions_up(conn):
+    _seed_flat_month(conn)
+    _charge(conn, 20, 8, [0.0, 6.0])
+    _charge(conn, 22, 8, [0.0, 4.0])
+    conn.commit()
+    sessions = electricityapp.easee_sessions(conn, _flat_opts(), "DK2", "EH1", days=30, now_local=_now())
+    totals = electricityapp.easee_charging_totals(sessions)
+    assert totals["sessions"] == 2
+    assert totals["energy_kwh"] == 10.0
+    assert totals["cost_dkk"] == round(10.0 * 1.2, 2)
+    assert totals["avg_dkk_kwh"] == 1.2
+    assert totals["partial_sessions"] == 0
+
+
+def test_totals_count_partial_sessions_rather_than_hiding_them(conn):
+    """A month total quietly missing some of its cost would look like a cheap
+    month; the count is what stops that being invisible."""
+    _seed_flat_month(conn)
+    # No boundary before this one: the window simply starts mid-charge.
+    _seed_easee_sample(conn, "2026-08-20T08:00:00+00:00", session_energy_kwh=20.0)
+    _seed_easee_sample(conn, "2026-08-20T09:00:00+00:00", session_energy_kwh=22.0)
+    _seed_easee_sample(conn, "2026-08-20T10:00:00+00:00", session_energy_kwh=22.0, status="DISCONNECTED")
+    conn.commit()
+    sessions = electricityapp.easee_sessions(conn, _flat_opts(), "DK2", "EH1", days=30, now_local=_now())
+    totals = electricityapp.easee_charging_totals(sessions)
+    assert totals["partial_sessions"] == 1
+    assert totals["energy_kwh"] == 22.0
+    assert totals["cost_dkk"] == round(2.0 * 1.2, 2)
+    # The rate is against what was actually priced, not the full 22 kWh.
+    assert totals["avg_dkk_kwh"] == 1.2
+
+
+def test_empty_history_rolls_up_without_dividing_by_zero(conn):
+    totals = electricityapp.easee_charging_totals([])
+    assert totals == {"sessions": 0, "energy_kwh": 0, "cost_dkk": None, "avg_dkk_kwh": None,
+                      "partial_sessions": 0, "longest_minutes": 0}
+
+
+def test_daily_rollup_fills_the_days_with_no_charging(conn):
+    """A gap has to be a zero: a line drawn straight between the 20th and the
+    23rd implies charging on days nothing was plugged in."""
+    _seed_flat_month(conn)
+    _charge(conn, 20, 8, [0.0, 6.0])
+    _charge(conn, 23, 8, [0.0, 4.0])
+    conn.commit()
+    sessions = electricityapp.easee_sessions(conn, _flat_opts(), "DK2", "EH1", days=30, now_local=_now())
+    daily = electricityapp.easee_daily_charging(sessions)
+    assert [d["day"] for d in daily] == ["2026-08-20", "2026-08-21", "2026-08-22", "2026-08-23"]
+    assert [d["kwh"] for d in daily] == [6.0, 0.0, 0.0, 4.0]
+    assert [d["sessions"] for d in daily] == [1, 0, 0, 1]
+
+
+def test_daily_rollup_sums_two_charges_on_one_day(conn):
+    _seed_flat_month(conn)
+    _charge(conn, 20, 6, [0.0, 3.0])
+    _charge(conn, 20, 14, [0.0, 5.0])
+    conn.commit()
+    sessions = electricityapp.easee_sessions(conn, _flat_opts(), "DK2", "EH1", days=30, now_local=_now())
+    daily = electricityapp.easee_daily_charging(sessions)
+    assert len(daily) == 1
+    assert daily[0]["kwh"] == 8.0
+    assert daily[0]["sessions"] == 2
+
+
+def test_history_route_shape(conn, client, set_options):
+    set_options(easee_enabled=True, easee_username="u", easee_password="p", easee_charger_id="EH1")
+    _seed_flat_month(conn)
+    _charge(conn, 20, 8, [0.0, 6.0])
+    conn.commit()
+    data = client.get("/api/easee/history?days=30").get_json()
+    assert data["enabled"] is True
+    assert len(data["sessions"]) == 1
+    assert data["totals"]["energy_kwh"] == 6.0
+    assert data["daily"][0]["kwh"] == 6.0
+
+
+def test_history_route_is_quiet_when_easee_is_off(client):
+    data = client.get("/api/easee/history").get_json()
+    assert data == {"enabled": False, "sessions": [], "daily": [], "totals": None}
