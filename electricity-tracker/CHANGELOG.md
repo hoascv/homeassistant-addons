@@ -1,5 +1,36 @@
 # Changelog
 
+## 1.6.2
+
+- **Fixed `CHARGING` being reported while nothing was flowing.** Easee holds
+  `chargerOpMode` at 3 for as long as a cable is in — car full, car's own
+  schedule pausing it, load balancing throttled to zero — and this add-on
+  trusted that field alone, so the card read `CHARGING` next to `0.00 kW`.
+  Measured power now decides, because it is the one field that cannot be wrong
+  about whether energy is moving, and the state is reported as `PAUSED` with
+  the cause: *"Plugged in but not drawing — limited by EV."*
+- Easee's `reasonForNoCurrent` is now captured (new nullable
+  `reason_for_no_current` column, added in place on upgrade) purely to supply
+  that explanation. It is deliberately never consulted to *decide* the state:
+  the code table is reverse-engineered by the community rather than documented,
+  and a mis-mapped code must not be able to turn a visible charge into a pause.
+  Easee's own opMode is still stored, and still reported as `raw_status`.
+- **Fixed a finished charge being reported as an ever-lengthening current
+  one.** A session was delimited only by the energy counter resetting, but
+  Easee simply holds the counter after a charge ends, so no reset ever arrives.
+  The run therefore absorbed every later sample: "Session started 2 h ago"
+  became 3 h, then a day, describing a charge that was long over — bounded only
+  by the 500-sample window. Unplugging (`DISCONNECTED`) now ends a session, and
+  a finished one reads "Last session 2 h ago → ended 1 h ago".
+- As a consequence, two charges that both start at 0 kWh and so never produce a
+  decrease are no longer costed as a single session.
+- Status and power now always come from the newest sample while energy and cost
+  come from the most recent session that actually drew something — they answer
+  different questions, and conflating them meant unplugging the car blanked the
+  card instead of showing what the charge had cost.
+- Twenty-two tests, covering the derivation, the session boundaries, and the
+  in-place column migration.
+
 ## 1.6.1
 
 - **Fixed EV session cost being wildly understated.** The cost was built purely

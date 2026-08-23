@@ -19,7 +19,7 @@ import eloverblik
 import saveeye
 import easee
 
-APP_VERSION = "1.6.1"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.6.2"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("ELECTRICITY_DB_PATH", "/data/electricity.db")
 OPTIONS_PATH = os.environ.get("ELECTRICITY_OPTIONS_PATH", "/data/options.json")
@@ -296,16 +296,29 @@ def init_db():
         CREATE TABLE IF NOT EXISTS easee_samples (
             ts_utc TEXT NOT NULL,
             charger_id TEXT NOT NULL,
-            status TEXT,
+            status TEXT,                   -- Easee's own chargerOpMode name, stored raw
             session_energy_kwh REAL,       -- resets at the start of each charging session
             total_power_w REAL,
+            reason_for_no_current INTEGER, -- Easee's reasonForNoCurrent code, when it gave one
             fetched_at TEXT NOT NULL,
             PRIMARY KEY (ts_utc, charger_id)
         )
         """
     )
+    _migrate_columns(conn)
     conn.commit()
     conn.close()
+
+
+def _migrate_columns(conn):
+    """Bring an older database up to the current schema. CREATE TABLE handles
+    fresh installs; these ALTERs handle in-place upgrades."""
+    easee_cols = {row[1] for row in conn.execute("PRAGMA table_info(easee_samples)")}
+    if "reason_for_no_current" not in easee_cols:
+        # Added in 1.6.2. Nullable with no backfill: samples taken before this
+        # release genuinely have no reason recorded, and inventing 0 ("nothing
+        # wrong") for them would assert something never observed.
+        conn.execute("ALTER TABLE easee_samples ADD COLUMN reason_for_no_current INTEGER")
 
 
 # --- Price calculation ---
@@ -888,62 +901,120 @@ def sync_easee(conn, options):
     ts = _now_iso()
     conn.execute(
         "INSERT OR REPLACE INTO easee_samples "
-        "(ts_utc, charger_id, status, session_energy_kwh, total_power_w, fetched_at) VALUES (?, ?, ?, ?, ?, ?)",
-        (ts, charger_id, state["status"], state["session_energy_kwh"], state["total_power_w"], ts),
+        "(ts_utc, charger_id, status, session_energy_kwh, total_power_w, reason_for_no_current, fetched_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (
+            ts,
+            charger_id,
+            state["status"],
+            state["session_energy_kwh"],
+            state["total_power_w"],
+            state.get("reason_for_no_current"),
+            ts,
+        ),
     )
     _set_app_state(conn, "last_easee_sync", ts)
     conn.commit()
-    _log(f"Easee sync: {state['status']}, {state['session_energy_kwh']} kWh this session")
+    effective = easee.effective_status(state["status"], state["total_power_w"], state.get("reason_for_no_current"))
+    reason = easee.describe_reason(state.get("reason_for_no_current"))
+    _log(
+        f"Easee sync: {effective}"
+        + (f" ({state['status']}: {reason})" if effective != state["status"] else "")
+        + f", {state['session_energy_kwh']} kWh this session"
+    )
+
+
+# A DISCONNECTED sample means no car is attached, so whatever session was
+# running is over. OFFLINE is deliberately not in here: it means the charger is
+# unreachable, which says nothing about whether the cable is still in.
+SESSION_ENDING_STATUSES = frozenset({"DISCONNECTED"})
+
+
+def _split_sessions(rows):
+    """Chronological samples cut into individual charging sessions.
+
+    Two things end a session, and both are needed:
+
+    - The counter decreasing, which is Easee resetting `sessionEnergy` for a
+      new session.
+    - A DISCONNECTED sample, which is the car being unplugged. Without this the
+      counter simply holds its final value after a charge ends, no decrease
+      ever arrives, and the "current session" grows for as long as the sample
+      window is deep — reporting a start time that recedes further into the
+      past every day while describing a charge that finished on Tuesday.
+    """
+    sessions = []
+    current = []
+    for row in rows:
+        if row["status"] in SESSION_ENDING_STATUSES:
+            if current:
+                sessions.append(current)
+                current = []
+            continue
+        if current:
+            previous = current[-1]["session_energy_kwh"]
+            energy = row["session_energy_kwh"]
+            if previous is None or energy is None or energy < previous - 0.01:
+                sessions.append(current)
+                current = []
+        current.append(row)
+    if current:
+        sessions.append(current)
+    return sessions
 
 
 def easee_current_session(conn, opts, price_area, charger_id):
-    """The most recent (or ongoing) charging session's energy and cost so
-    far, from Easee's own `sessionEnergy` field — which the charger itself
-    resets at the start of each session, so a *decrease* between two
-    consecutive polls marks a session boundary. The "session" here is
-    therefore the longest run of recent samples where it never decreases.
+    """The current (or most recent) charging session's energy and cost, plus
+    what the charger is doing right now.
+
+    Those are two different questions and are answered from two different
+    places. Status and power come from the newest sample, because "now" is
+    now. Energy and cost come from the most recent session that actually drew
+    something — so unplugging the car leaves the card showing what that charge
+    cost, rather than blanking to a zero-energy segment.
 
     Cost is attributed by multiplying each poll-to-poll energy delta by the
-    price at the later sample's hour — the same mechanism a spot meter
-    reading would use, just applied to one appliance's share of the total
-    rather than the whole house.
+    price at the later sample's hour — the same mechanism a spot meter reading
+    would use, just applied to one appliance's session rather than the whole
+    house. The subtlety is what the *first* sample of a session means, because
+    deltas alone never price it:
 
-    The subtlety is what the *first* sample of a run means, because deltas
-    alone never price it:
-
-    - If a reset was observed just before it, the session began in that gap
-      and its energy belongs to this session — priced at that first sample's
-      hour, which is the only hour it can have happened in.
-    - If no reset was observed, this run is simply where our samples start.
-      The charger may have been going for hours before the add-on was
-      installed, restarted, or before the sample window begins. That energy
-      was consumed at prices nobody recorded, so it is left out of the cost
-      and `cost_is_partial` says so — rather than the cost silently
-      describing less energy than `session_energy_kwh` claims, which reads on
-      screen as an implausibly cheap charge.
+    - If a session boundary was observed just before it, the session began in
+      that gap and its energy belongs here — priced at that first sample's
+      hour, the only hour it can have happened in.
+    - If no boundary was observed, this run is simply where our samples start.
+      The charger may have been going long before the add-on was installed,
+      restarted, or before the window begins. That energy was consumed at
+      prices nobody recorded, so it is left out and `cost_is_partial` says so,
+      rather than the cost silently describing less energy than
+      `session_energy_kwh` claims — which reads on screen as an implausibly
+      cheap charge.
     """
     rows = conn.execute(
-        "SELECT ts_utc, session_energy_kwh, total_power_w, status FROM easee_samples "
+        "SELECT ts_utc, session_energy_kwh, total_power_w, status, reason_for_no_current FROM easee_samples "
         "WHERE charger_id = ? ORDER BY ts_utc DESC LIMIT 500",
         (charger_id,),
     ).fetchall()
     if not rows:
         return None
     rows = list(reversed(rows))  # chronological
+    newest = rows[-1]
 
-    session_start_idx = len(rows) - 1
-    for i in range(len(rows) - 1, 0, -1):
-        prev, cur = rows[i - 1], rows[i]
-        if prev["session_energy_kwh"] is None or cur["session_energy_kwh"] is None:
+    sessions = _split_sessions(rows)
+    # The most recent session that drew anything. A car sitting plugged in at
+    # 0 kWh has not started a charge, and showing it would throw away the one
+    # that just finished.
+    session_rows = None
+    for candidate in reversed(sessions):
+        if candidate[-1]["session_energy_kwh"]:
+            session_rows = candidate
             break
-        if cur["session_energy_kwh"] < prev["session_energy_kwh"] - 0.01:
-            break  # a real decrease: a new session started here
-        session_start_idx = i - 1
-    session_rows = rows[session_start_idx:]
-    latest = session_rows[-1]
-    # True only when a reset was actually seen, i.e. this run is a whole
-    # session rather than the tail of one that began before our samples.
-    start_observed = session_start_idx > 0
+    if session_rows is None:
+        session_rows = sessions[-1] if sessions else [newest]
+
+    # The session's start was observed if something closed a session before it,
+    # rather than the sample window simply beginning mid-charge.
+    start_observed = rows.index(session_rows[0]) > 0
 
     start_local = datetime.fromisoformat(session_rows[0]["ts_utc"]).astimezone(LOCAL_TZ).replace(
         minute=0, second=0, microsecond=0
@@ -988,7 +1059,7 @@ def easee_current_session(conn, opts, price_area, charger_id):
         cost += delta * price
         covered_kwh += delta
 
-    session_energy = latest["session_energy_kwh"]
+    session_energy = session_rows[-1]["session_energy_kwh"]
     # Nothing priced at all (a lone sample, say) is not "0 kr" — it is not
     # known, and 0.00 on screen would be a claim we cannot make.
     if covered_kwh <= 0:
@@ -996,22 +1067,30 @@ def easee_current_session(conn, opts, price_area, charger_id):
     else:
         cost_dkk = round(cost, 2) if cost_known else None
 
+    raw_status = newest["status"]
+    reason_code = newest["reason_for_no_current"] if "reason_for_no_current" in newest.keys() else None
+    status = easee.effective_status(raw_status, newest["total_power_w"], reason_code)
+
     return {
-        "status": latest["status"],
+        # What the charger is doing, which is not always what it says: Easee
+        # holds chargerOpMode at CHARGING through a pause. See effective_status.
+        "status": status,
+        "raw_status": raw_status,
+        "reason": easee.describe_reason(reason_code),
+        "charging": status == "CHARGING",
         "session_energy_kwh": session_energy,
-        "total_power_w": latest["total_power_w"],
+        "total_power_w": newest["total_power_w"],
         "session_cost_dkk": cost_dkk,
         "session_started_at": session_rows[0]["ts_utc"],
+        "session_ended_at": None if session_rows[-1] is newest else session_rows[-1]["ts_utc"],
         "session_start_observed": start_observed,
         # What the cost figure actually accounts for, so the two numbers on
         # screen can be compared instead of silently disagreeing.
         "cost_covers_kwh": round(covered_kwh, 3),
-        "cost_is_partial": bool(
-            session_energy and covered_kwh + 0.01 < session_energy
-        ),
+        "cost_is_partial": bool(session_energy and covered_kwh + 0.01 < session_energy),
         # When this reading was taken — a status is only as current as the
         # poll behind it, and a failed sync writes no row at all.
-        "measured_at": latest["ts_utc"],
+        "measured_at": newest["ts_utc"],
     }
 
 
@@ -1127,6 +1206,9 @@ def publish_sensors(conn, options):
                         "device_class": "power",
                         "state_class": "measurement",
                         "status": session["status"],
+                        "charger_op_mode": session["raw_status"],
+                        "charging": session["charging"],
+                        "reason": session["reason"],
                         "session_energy_kwh": session["session_energy_kwh"],
                         "session_cost_dkk": session["session_cost_dkk"],
                         "session_started_at": session["session_started_at"],

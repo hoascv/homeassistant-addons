@@ -394,17 +394,34 @@ function renderEasee(easee) {
     session.session_cost_dkk != null ? `${session.session_cost_dkk.toFixed(2)} kr` : "–";
 
   const started = relTime(session.session_started_at);
-  document.getElementById("easee-started").textContent = started
-    ? (session.session_start_observed ? `Session started ${started}` : `Watching since ${started}`)
-    : "";
+  const ended = relTime(session.session_ended_at);
+  document.getElementById("easee-started").textContent = !started
+    ? ""
+    : ended
+    // The car has been unplugged since, so this is a past charge, not a
+    // running one whose start keeps receding into the distance.
+    ? `Last session ${started} → ended ${ended}`
+    : session.session_start_observed
+    ? `Session started ${started}`
+    : `Watching since ${started}`;
 
+  const notes = [];
+  // Easee reports CHARGING through a pause, so a derived PAUSED needs to say
+  // why — otherwise it just looks like the add-on disagreeing with the app.
+  if (session.status === "PAUSED") {
+    notes.push(session.reason
+      ? `Plugged in but not drawing — ${session.reason}.`
+      : "Plugged in but not drawing: the charger reports a session with no power.");
+  }
   // The cost and the energy can describe different amounts: energy is Easee's
   // own session counter, cost is only what this add-on was awake to price.
   // Saying so is the difference between a cheap-looking charge and a wrong one.
-  document.getElementById("easee-note").textContent = session.cost_is_partial
-    ? `Cost covers ${session.cost_covers_kwh.toFixed(2)} of ${session.session_energy_kwh.toFixed(2)} kWh — ` +
-      "the rest was charged before this add-on was watching."
-    : "";
+  if (session.cost_is_partial) {
+    notes.push(
+      `Cost covers ${session.cost_covers_kwh.toFixed(2)} of ${session.session_energy_kwh.toFixed(2)} kWh — ` +
+      "the rest was charged before this add-on was watching.");
+  }
+  document.getElementById("easee-note").textContent = notes.join(" ");
 }
 
 // Two background ticks without a reading means a sync is failing or the add-on

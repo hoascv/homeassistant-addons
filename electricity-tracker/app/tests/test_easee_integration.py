@@ -125,11 +125,13 @@ def _seed_price(conn, time_dk, spot=1.0, price_area="DK2"):
     )
 
 
-def _seed_easee_sample(conn, ts_utc, session_energy_kwh, power_w=7200.0, status="CHARGING", charger_id="EH1"):
+def _seed_easee_sample(
+    conn, ts_utc, session_energy_kwh, power_w=7200.0, status="CHARGING", charger_id="EH1", reason=None
+):
     conn.execute(
-        "INSERT INTO easee_samples (ts_utc, charger_id, status, session_energy_kwh, total_power_w, fetched_at) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        (ts_utc, charger_id, status, session_energy_kwh, power_w, ts_utc),
+        "INSERT INTO easee_samples (ts_utc, charger_id, status, session_energy_kwh, total_power_w, "
+        "reason_for_no_current, fetched_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (ts_utc, charger_id, status, session_energy_kwh, power_w, reason, ts_utc),
     )
 
 
@@ -346,3 +348,164 @@ def test_a_reset_still_bounds_the_session_when_the_baseline_is_large(conn):
     assert session["session_energy_kwh"] == 4.0  # not 44
     assert session["cost_covers_kwh"] == 4.0
     assert session["session_cost_dkk"] == round(4.0 * 1.2, 2)
+
+
+# --- Where one session ends and the next begins ---
+
+
+def test_unplugging_ends_the_session(conn):
+    """Easee's counter simply holds its final value after a charge, so without
+    treating DISCONNECTED as a boundary the "current session" grows for as long
+    as the sample window is deep — reporting a start time that recedes further
+    into the past every day while describing a charge that already finished."""
+    _seed_flat_day(conn)
+    _seed_easee_sample(conn, "2026-08-16T08:00:00+00:00", session_energy_kwh=0.0)
+    _seed_easee_sample(conn, "2026-08-16T08:30:00+00:00", session_energy_kwh=4.0)
+    _seed_easee_sample(conn, "2026-08-16T09:00:00+00:00", session_energy_kwh=4.0, status="COMPLETED", power_w=0.0)
+    # Car unplugged, then hours of idle samples that must not join the session.
+    for hour in range(10, 14):
+        _seed_easee_sample(
+            conn, f"2026-08-16T{hour:02d}:00:00+00:00", session_energy_kwh=4.0,
+            status="DISCONNECTED", power_w=0.0,
+        )
+    conn.commit()
+
+    session = electricityapp.easee_current_session(conn, _flat_opts(), "DK2", "EH1")
+    assert session["status"] == "DISCONNECTED"          # what it is doing now
+    assert session["session_energy_kwh"] == 4.0          # the charge that happened
+    assert session["session_started_at"] == "2026-08-16T08:00:00+00:00"
+    assert session["session_ended_at"] == "2026-08-16T09:00:00+00:00"
+
+
+def test_a_completed_session_still_shows_its_figures(conn):
+    """COMPLETED is the tail of the session, not a boundary — the card is meant
+    to show the current *or most recent* charge."""
+    _seed_flat_day(conn)
+    _seed_easee_sample(conn, "2026-08-16T08:00:00+00:00", session_energy_kwh=0.0)
+    _seed_easee_sample(conn, "2026-08-16T08:30:00+00:00", session_energy_kwh=6.0)
+    _seed_easee_sample(conn, "2026-08-16T09:00:00+00:00", session_energy_kwh=6.0, status="COMPLETED", power_w=0.0)
+    conn.commit()
+    session = electricityapp.easee_current_session(conn, _flat_opts(), "DK2", "EH1")
+    assert session["status"] == "COMPLETED"
+    assert session["session_energy_kwh"] == 6.0
+    assert session["session_cost_dkk"] == round(6.0 * 1.2, 2)
+    assert session["session_ended_at"] is None  # it is still the newest sample
+
+
+def test_a_new_plug_in_at_zero_does_not_hide_the_last_charge(conn):
+    """Plugged in again but not charging yet. A zero-energy segment is not a
+    session worth showing, so the previous charge stays on the card."""
+    _seed_flat_day(conn)
+    _seed_easee_sample(conn, "2026-08-16T08:00:00+00:00", session_energy_kwh=0.0)
+    _seed_easee_sample(conn, "2026-08-16T08:30:00+00:00", session_energy_kwh=5.0)
+    _seed_easee_sample(conn, "2026-08-16T09:00:00+00:00", session_energy_kwh=5.0, status="DISCONNECTED", power_w=0.0)
+    _seed_easee_sample(conn, "2026-08-16T10:00:00+00:00", session_energy_kwh=0.0,
+                       status="AWAITING_START", power_w=0.0)
+    conn.commit()
+    session = electricityapp.easee_current_session(conn, _flat_opts(), "DK2", "EH1")
+    assert session["status"] == "AWAITING_START"   # now
+    assert session["session_energy_kwh"] == 5.0    # the charge that happened
+
+
+def test_status_and_power_always_come_from_the_newest_sample(conn):
+    """Two different questions: what is it doing now, and what did the last
+    charge cost. They are answered from two different rows."""
+    _seed_flat_day(conn)
+    _seed_easee_sample(conn, "2026-08-16T08:00:00+00:00", session_energy_kwh=0.0)
+    _seed_easee_sample(conn, "2026-08-16T08:30:00+00:00", session_energy_kwh=3.0, power_w=7200.0)
+    _seed_easee_sample(conn, "2026-08-16T09:00:00+00:00", session_energy_kwh=3.0,
+                       status="DISCONNECTED", power_w=0.0)
+    conn.commit()
+    session = electricityapp.easee_current_session(conn, _flat_opts(), "DK2", "EH1")
+    assert session["total_power_w"] == 0.0
+    assert session["measured_at"] == "2026-08-16T09:00:00+00:00"
+
+
+def test_charging_with_no_power_is_reported_as_paused_with_the_reason(conn):
+    """The original complaint, end to end: the card said CHARGING next to
+    0.00 kW because chargerOpMode alone was trusted."""
+    _seed_flat_day(conn)
+    _seed_easee_sample(conn, "2026-08-16T08:00:00+00:00", session_energy_kwh=0.0)
+    _seed_easee_sample(conn, "2026-08-16T08:30:00+00:00", session_energy_kwh=8.0)
+    _seed_easee_sample(conn, "2026-08-16T09:00:00+00:00", session_energy_kwh=8.0, power_w=0.0, reason=81)
+    conn.commit()
+    session = electricityapp.easee_current_session(conn, _flat_opts(), "DK2", "EH1")
+    assert session["raw_status"] == "CHARGING"   # what Easee said
+    assert session["status"] == "PAUSED"          # what is actually happening
+    assert session["charging"] is False
+    assert session["reason"] == "limited by EV"
+
+
+def test_an_active_charge_is_not_second_guessed(conn):
+    _seed_flat_day(conn)
+    _seed_easee_sample(conn, "2026-08-16T08:00:00+00:00", session_energy_kwh=0.0)
+    _seed_easee_sample(conn, "2026-08-16T08:30:00+00:00", session_energy_kwh=3.0, power_w=7200.0)
+    conn.commit()
+    session = electricityapp.easee_current_session(conn, _flat_opts(), "DK2", "EH1")
+    assert session["status"] == "CHARGING"
+    assert session["charging"] is True
+    assert session["reason"] is None
+
+
+def test_two_charges_split_by_unplugging_are_costed_separately(conn):
+    """Both start at 0, so no decrease ever occurs — only the unplug separates
+    them, and without it the two would be billed as one."""
+    _seed_flat_day(conn)
+    _seed_easee_sample(conn, "2026-08-16T08:00:00+00:00", session_energy_kwh=0.0)
+    _seed_easee_sample(conn, "2026-08-16T08:30:00+00:00", session_energy_kwh=10.0)
+    _seed_easee_sample(conn, "2026-08-16T09:00:00+00:00", session_energy_kwh=10.0,
+                       status="DISCONNECTED", power_w=0.0)
+    _seed_easee_sample(conn, "2026-08-16T10:00:00+00:00", session_energy_kwh=0.0)
+    _seed_easee_sample(conn, "2026-08-16T10:30:00+00:00", session_energy_kwh=2.0)
+    conn.commit()
+    session = electricityapp.easee_current_session(conn, _flat_opts(), "DK2", "EH1")
+    assert session["session_energy_kwh"] == 2.0
+    assert session["session_cost_dkk"] == round(2.0 * 1.2, 2)
+
+
+def test_offline_does_not_end_a_session(conn):
+    """OFFLINE means the charger is unreachable, which says nothing about
+    whether the cable is still in."""
+    _seed_flat_day(conn)
+    _seed_easee_sample(conn, "2026-08-16T08:00:00+00:00", session_energy_kwh=0.0)
+    _seed_easee_sample(conn, "2026-08-16T08:30:00+00:00", session_energy_kwh=2.0, status="OFFLINE", power_w=None)
+    _seed_easee_sample(conn, "2026-08-16T09:00:00+00:00", session_energy_kwh=5.0)
+    conn.commit()
+    session = electricityapp.easee_current_session(conn, _flat_opts(), "DK2", "EH1")
+    assert session["session_energy_kwh"] == 5.0
+    assert session["session_started_at"] == "2026-08-16T08:00:00+00:00"
+
+
+def test_migration_adds_the_reason_column_to_an_existing_database(conn, tmp_path):
+    """An installed add-on upgrades in place; CREATE TABLE IF NOT EXISTS would
+    leave the new column missing for everyone who already has a database."""
+    import sqlite3
+
+    path = tmp_path / "old.db"
+    old = sqlite3.connect(str(path))
+    old.execute(
+        "CREATE TABLE easee_samples (ts_utc TEXT NOT NULL, charger_id TEXT NOT NULL, status TEXT, "
+        "session_energy_kwh REAL, total_power_w REAL, fetched_at TEXT NOT NULL, "
+        "PRIMARY KEY (ts_utc, charger_id))"
+    )
+    old.execute(
+        "INSERT INTO easee_samples VALUES ('2026-08-16T08:00:00+00:00', 'EH1', 'CHARGING', 1.0, 7200.0, 'x')"
+    )
+    old.commit()
+
+    electricityapp._migrate_columns(old)
+    old.commit()
+
+    columns = {row[1] for row in old.execute("PRAGMA table_info(easee_samples)")}
+    assert "reason_for_no_current" in columns
+    # No backfill: a sample taken before the column existed has no reason, and
+    # inventing 0 ("nothing wrong") would assert something never observed.
+    assert old.execute("SELECT reason_for_no_current FROM easee_samples").fetchone()[0] is None
+    old.close()
+
+
+def test_migration_is_idempotent(conn):
+    electricityapp._migrate_columns(conn)
+    electricityapp._migrate_columns(conn)
+    columns = [row[1] for row in conn.execute("PRAGMA table_info(easee_samples)")]
+    assert columns.count("reason_for_no_current") == 1

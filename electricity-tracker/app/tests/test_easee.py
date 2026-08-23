@@ -75,6 +75,7 @@ def test_get_charger_state_maps_fields():
         "total_power_w": 7200.0,
         "session_energy_kwh": 4.5,
         "lifetime_energy_kwh": 1234.5,
+        "reason_for_no_current": None,  # this body carries no reason at all
     }
 
 
@@ -84,3 +85,67 @@ def test_get_charger_state_unknown_op_mode():
         state = easee.get_charger_state("acc-1", "EH123456")
     assert state["status"] == "UNKNOWN(999)"
     assert state["total_power_w"] is None
+
+
+def test_get_charger_state_keeps_the_reason_code():
+    body = {"chargerOpMode": 3, "totalPower": 0.0, "sessionEnergy": 4.5, "reasonForNoCurrent": 81}
+    with patch("urllib.request.urlopen", return_value=_FakeResponse(json.dumps(body).encode())):
+        state = easee.get_charger_state("acc-1", "EH1")
+    assert state["reason_for_no_current"] == 81
+    assert state["status"] == "CHARGING"  # the raw opMode is stored unchanged
+
+
+def test_get_charger_state_ignores_a_non_integer_reason():
+    body = {"chargerOpMode": 3, "reasonForNoCurrent": "dunno"}
+    with patch("urllib.request.urlopen", return_value=_FakeResponse(json.dumps(body).encode())):
+        assert easee.get_charger_state("acc-1", "EH1")["reason_for_no_current"] is None
+
+
+# --- What the charger is actually doing ---
+
+
+def test_charging_with_no_power_is_a_pause_not_a_charge():
+    """The reported complaint: Easee holds chargerOpMode at CHARGING while the
+    car is full, paused by its own schedule, or throttled to zero."""
+    assert easee.effective_status("CHARGING", 0.0) == "PAUSED"
+    assert easee.effective_status("CHARGING", 0.0, reason_code=81) == "PAUSED"
+
+
+def test_charging_with_real_power_stays_charging():
+    assert easee.effective_status("CHARGING", 7200.0) == "CHARGING"
+
+
+def test_a_trickle_below_the_threshold_is_still_a_pause():
+    assert easee.effective_status("CHARGING", 12.0) == "PAUSED"
+    assert easee.effective_status("CHARGING", easee.CHARGING_POWER_THRESHOLD_W) == "CHARGING"
+
+
+def test_no_power_reading_leaves_the_charger_s_own_word_alone():
+    """Nothing to contradict it with — inventing a pause would be worse."""
+    assert easee.effective_status("CHARGING", None) == "CHARGING"
+
+
+def test_other_statuses_are_never_rewritten():
+    for status in ("DISCONNECTED", "COMPLETED", "AWAITING_START", "READY_TO_CHARGE", "ERROR"):
+        assert easee.effective_status(status, 0.0) == status
+        assert easee.effective_status(status, 7200.0) == status
+
+
+def test_a_reason_code_never_overrides_visible_power():
+    """The reason table is reverse-engineered, so a mis-mapped code must not be
+    able to turn a charge that is visibly happening into a pause."""
+    assert easee.effective_status("CHARGING", 7200.0, reason_code=50) == "CHARGING"
+
+
+def test_describe_reason_reads_the_table():
+    assert easee.describe_reason(81) == "limited by EV"
+    assert easee.describe_reason(50).startswith("no car connected")
+
+
+def test_describe_reason_is_silent_when_there_is_nothing_to_explain():
+    assert easee.describe_reason(None) is None
+    assert easee.describe_reason(0) is None  # "no reason — charging or ready"
+
+
+def test_describe_reason_survives_a_code_outside_the_table():
+    assert easee.describe_reason(4242) == "unknown reason (4242)"

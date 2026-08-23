@@ -27,8 +27,86 @@ STATUS = {
 }
 
 
+# reasonForNoCurrent -> why the charger is not delivering, from pyeasee's own
+# table. That table carries the caveat that it is reverse-engineered from
+# observation rather than documented by Easee, so it is used only to *explain*
+# a state, never to decide one — the decision below rests on measured power.
+REASON_FOR_NO_CURRENT = {
+    0: "no reason — charging or ready to charge",
+    1: "max circuit limit too low",
+    2: "max dynamic circuit limit too low",
+    3: "max dynamic offline limit too low",
+    4: "circuit fuse too low",
+    5: "waiting in queue",
+    6: "waiting in fully",
+    7: "illegal grid type",
+    8: "no current request received",
+    9: "not connected to master",
+    10: "EQ current too low",
+    11: "phase not connected",
+    25: "limited by circuit fuse",
+    26: "limited by circuit max limit",
+    27: "limited by circuit dynamic limit",
+    28: "limited by equalizer",
+    29: "limited by load balancing",
+    30: "limited by offline settings",
+    50: "no car connected, or the secondary unit is not requesting current",
+    51: "max charger limit too low",
+    52: "max dynamic charger limit too low",
+    53: "charger disabled",
+    54: "waiting for schedule/auth",
+    55: "pending auth",
+    56: "charger in error state",
+    57: "EV erratic",
+    75: "limited by cable rating",
+    76: "limited by schedule",
+    77: "limited by charger max limit",
+    78: "limited by charger dynamic limit",
+    79: "EV is not charging",
+    80: "limited by local adjustment",
+    81: "limited by EV",
+    100: "undefined",
+}
+
+# Below this, nothing is meaningfully flowing. A charger delivering the legal
+# minimum (6 A at 230 V) is drawing about 1.4 kW, so there is no real charging
+# anywhere near this figure — it only has to clear measurement noise.
+CHARGING_POWER_THRESHOLD_W = 50.0
+
+
 class EaseeError(Exception):
     pass
+
+
+def describe_reason(code):
+    """Human-readable `reasonForNoCurrent`, or None when there is nothing to
+    explain (no code, or the code that means "nothing is wrong")."""
+    if code is None or code == 0:
+        return None
+    return REASON_FOR_NO_CURRENT.get(code, f"unknown reason ({code})")
+
+
+def effective_status(status, total_power_w, reason_code=None):
+    """What the charger is *doing*, as opposed to what `chargerOpMode` says.
+
+    Easee holds a session in CHARGING while delivering nothing at all — the car
+    is full but still plugged in, the car's own schedule has paused it, load
+    balancing has throttled to zero. `chargerOpMode` stays 3 throughout, so a
+    dashboard that trusts it alone reports "CHARGING" next to 0.00 kW, which is
+    the complaint that started this.
+
+    Measured power is the arbiter because it is the one field that cannot be
+    wrong about whether energy is moving. `reasonForNoCurrent` only supplies the
+    explanation, and is deliberately not consulted for the decision: its codes
+    are reverse-engineered, and a mis-mapped code should never be able to turn a
+    charge that is visibly happening into a pause.
+    """
+    if status != "CHARGING":
+        return status
+    if total_power_w is None:
+        # No power reading at all — nothing to contradict the charger with.
+        return status
+    return "CHARGING" if total_power_w >= CHARGING_POWER_THRESHOLD_W else "PAUSED"
 
 
 def _request(path, method="GET", body=None, access_token=None, timeout=15):
@@ -108,9 +186,14 @@ def get_charger_state(access_token, charger_id, timeout=15):
     """
     body = _request(f"/api/chargers/{charger_id}/state", access_token=access_token, timeout=timeout)
     op_mode = body.get("chargerOpMode")
+    reason = body.get("reasonForNoCurrent")
     return {
+        # Easee's own opMode name, stored as-is. The derived "what is it
+        # actually doing" reading is computed at read time by effective_status,
+        # so improving that judgement never needs a re-sync of stored history.
         "status": STATUS.get(op_mode, f"UNKNOWN({op_mode})"),
         "total_power_w": None if body.get("totalPower") is None else body["totalPower"] * 1000,
         "session_energy_kwh": body.get("sessionEnergy"),
         "lifetime_energy_kwh": body.get("lifetimeEnergy"),
+        "reason_for_no_current": reason if isinstance(reason, int) else None,
     }

@@ -142,6 +142,18 @@ describe the same thing:
   tick, and a failed sync writes nothing at all, so the reading could be older
   than it looks. Past two ticks the status pill shows its own age
   (`COMPLETED · 1 h ago`) instead of presenting a stale reading as live.
+- **`PAUSED` is this add-on's word, not Easee's.** Easee keeps `chargerOpMode`
+  at `CHARGING` for the whole time a cable is in, including when nothing is
+  flowing — the car is full, its own schedule has paused it, load balancing has
+  throttled it to zero. Measured power decides instead, because it is the one
+  field that cannot be wrong about whether energy is moving, and the card says
+  why: *"Plugged in but not drawing — limited by EV."* Easee's own opMode is
+  still stored and still reported as `raw_status`.
+
+The reason text comes from `reasonForNoCurrent`, whose code table is
+reverse-engineered by the community rather than documented by Easee. It is used
+only to explain a state, never to decide one — a mis-mapped code cannot turn a
+charge that is visibly happening into a pause.
 
 Charging energy is already included in your whole-house numbers from
 Eloverblik (and Saveeye, if configured) — Easee's session figures are a
@@ -227,7 +239,8 @@ Pushed via the Supervisor API (`homeassistant_api: true`) every sync tick
 - `sensor.electricity_tracker_power_now` — instant power, Watts. Only pushed
   once Saveeye is enabled and has reported at least once.
 - `sensor.electricity_tracker_ev_power` — EV charging power, Watts.
-  Attributes carry status, session energy, and session cost. Only pushed
+  Attributes carry status (plus `charger_op_mode`, `charging` and `reason`),
+  session energy, and session cost. Only pushed
   once Easee is enabled and a charger has been found.
 
 ## Endpoints
@@ -256,7 +269,10 @@ Pushed via the Supervisor API (`homeassistant_api: true`) every sync tick
   `cost_covers_kwh` is how much of it `session_cost_dkk` accounts for, and
   `cost_is_partial` is true when those differ. `session_start_observed` says
   whether the session's beginning was actually seen, and `measured_at` is when
-  the reading was taken.
+  the reading was taken. `status` is the derived reading (`PAUSED` where Easee
+  says `CHARGING` with no power), `raw_status` is Easee's own `chargerOpMode`,
+  `charging` is the boolean, and `reason` explains a non-flowing state.
+  `session_ended_at` is set once the car has been unplugged since.
 - `/api/easee/diagnose` — live Easee connection test, listing every charger
   on the account (see Settings, above).
 - `/api/health`, `/api/stats`, `/api/export` — for the Add-on Watchdog and a
@@ -275,6 +291,10 @@ narrows ingress access to specific Home Assistant users on top of
   stored keyed by UTC. Combining the two (for cost) converts consumption's
   UTC hour into Denmark's local time — including across the DST transitions —
   and averages that hour's four quarter-hour prices.
+- A charging session ends when the car is unplugged (`DISCONNECTED`) or when
+  Easee's counter resets. `COMPLETED` does not end it — that is the tail of the
+  session the card is meant to show. `OFFLINE` does not either: it means the
+  charger is unreachable, which says nothing about whether the cable is in.
 - A day with a DST transition has 23 or 25 hourly consumption points; nothing
   here assumes 24.
 - Two price areas' data can coexist in the database (e.g. if you ever change
