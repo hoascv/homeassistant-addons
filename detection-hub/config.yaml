@@ -1,5 +1,5 @@
 name: "Detection Hub"
-version: "1.17.0"
+version: "1.18.0"
 slug: "detection-hub"
 description: "Object detection for Home Assistant — an image in, what's in it out"
 url: "https://github.com/hoascv/homeassistant-addons/tree/main/detection-hub"
@@ -112,6 +112,20 @@ options:
   # this is the budget for the frames after it. Spent once per visit, not per
   # frame, and it stops as soon as a face is found.
   face_attempts: 5
+  # Push a notification when one of these is detected. Empty means no detection
+  # alerts at all — the events and sensors still fire regardless, this is only
+  # about a phone buzzing. Needs notify_service set to go anywhere.
+  #   alert_labels: "person"
+  # Naming a class that `labels` filters out, or one the model does not have,
+  # can never fire; the add-on says so in its log at start rather than leaving
+  # you with silence you assume is quiet.
+  alert_labels: ""
+  # At most one alert per camera per label in this many seconds. A person in
+  # view is detected repeatedly, and a phone that buzzes every few seconds is a
+  # phone that gets muted — which is the failure this exists to prevent. Per
+  # camera as well as per label, so a quiet driveway does not silence the back
+  # door. 0 sends one for every detection.
+  alert_cooldown_seconds: 300
   ha_sensors_enabled: true
   ha_events_enabled: true
   sensor_prefix: "detection_hub"
@@ -147,6 +161,8 @@ schema:
   face_match_threshold: "float(0.20,0.90)"
   face_margin: "float(0.0,0.50)"
   face_attempts: "int(1,60)"
+  alert_labels: "str?"
+  alert_cooldown_seconds: "int(0,86400)"
   ha_sensors_enabled: "bool"
   ha_events_enabled: "bool"
   sensor_prefix: "str"

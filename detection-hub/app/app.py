@@ -24,7 +24,7 @@ import hass
 import store
 import zones
 
-APP_VERSION = "1.17.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.18.0"  # keep in sync with the "version" field in config.yaml
 
 OPTIONS_PATH = os.environ.get("DETECTION_HUB_OPTIONS_PATH", "/data/options.json")
 
@@ -56,6 +56,20 @@ _capture = None
 # watching for — the surprise worth paging on is one that was working and
 # stopped.
 _camera_online = {}
+
+# Per (camera, label) time of the last alert sent, so a person who stays in
+# frame for ten minutes is one notification rather than one per arrival the
+# tracker reports. Keyed per camera as well as per label because "a person on
+# the drive" and "a person at the back door" are two different things to be
+# told about, and silencing one should not silence the other.
+_alert_sent = {}
+_alert_lock = threading.Lock()
+
+# How long to wait before retrying an alert whose notify call failed. Long
+# enough that a Home Assistant that is down cannot turn every detection into a
+# blocking HTTP call on a camera thread, short enough that a transient failure
+# does not silence the label for a whole cooldown.
+ALERT_RETRY_SECONDS = 30
 
 
 def _log(msg):
@@ -115,6 +129,90 @@ def get_labels():
     raw = _read_options().get("labels", "") or ""
     wanted = [name.strip().lower() for name in raw.replace("\n", ",").split(",")]
     return [name for name in wanted if name in detector.COCO_LABELS] or None
+
+
+def get_alert_config():
+    """Which labels are worth a push notification, and how often at most.
+
+    Read fresh on every detection rather than cached at start, so adding a
+    label or widening the cooldown takes effect without a restart — these are
+    the settings someone tunes while standing in their own driveway watching
+    the phone.
+    """
+    options = _read_options()
+    raw = options.get("alert_labels", "") or ""
+    wanted = [name.strip().lower() for name in raw.replace("\n", ",").split(",")]
+    return {
+        "labels": {name for name in wanted if name},
+        "cooldown": _int_option("alert_cooldown_seconds", 300, 0, 86400),
+        "notify_service": (options.get("notify_service") or "").strip(),
+    }
+
+
+def unalertable_labels(alerts=None, labels=None):
+    """Alert labels that can never fire, and why they cannot.
+
+    Two ways to configure an alert that silently does nothing: name a class the
+    model does not have, or name one the detector has been told to filter out
+    before it ever reaches the recorder. Both look like a working setup and both
+    produce silence, which is the worst possible failure for an alert.
+    """
+    alerts = alerts if alerts is not None else get_alert_config()
+    detected = labels if labels is not None else get_labels()
+    problems = {}
+    for label in sorted(alerts["labels"]):
+        if label not in detector.COCO_LABELS:
+            problems[label] = "not a class this model can detect"
+        elif detected is not None and label not in detected:
+            problems[label] = "excluded by the `labels` option, so it is never detected"
+    return problems
+
+
+def _alert_message(camera, detection):
+    percent = round((detection.get("confidence") or 0) * 100)
+    zone = detection.get("zone")
+    where = f"{camera} — {zone}" if zone else camera
+    return f"{detection.get('label')} on {where} ({percent}%)"
+
+
+def _maybe_alert(camera, detections, alerts=None, now=None):
+    """Push a notification for any detection whose label is configured to alert.
+
+    Returns the detections it notified about, which is what makes this testable
+    without a Home Assistant to send to.
+
+    Called from camera threads, so the rate limit is taken under a lock: two
+    cameras finishing a frame at the same instant would otherwise both read an
+    empty cooldown and both send.
+    """
+    alerts = alerts if alerts is not None else get_alert_config()
+    if not alerts["labels"] or not alerts["notify_service"]:
+        return []
+
+    now = time.monotonic() if now is None else now
+    sent = []
+    for detection in detections:
+        label = (detection.get("label") or "").strip().lower()
+        if label not in alerts["labels"]:
+            continue
+        key = (camera, label)
+        with _alert_lock:
+            last = _alert_sent.get(key)
+            if last is not None and now - last < alerts["cooldown"]:
+                continue
+            _alert_sent[key] = now
+
+        error = hass.notify(alerts["notify_service"], _alert_message(camera, detection))
+        if error:
+            _log(f"could not alert about {camera}/{label}: {error}")
+            with _alert_lock:
+                # Retry sooner than the full cooldown, but not immediately —
+                # see ALERT_RETRY_SECONDS.
+                if _alert_sent.get(key) == now:
+                    _alert_sent[key] = now - max(0, alerts["cooldown"] - ALERT_RETRY_SECONDS)
+            continue
+        sent.append(detection)
+    return sent
 
 
 def get_model_path():
@@ -453,6 +551,10 @@ def record(conn, camera, detections, image, kind="api"):
                 # Worth one line, not a crash: the detection is already stored,
                 # and a camera must keep watching whether or not HA heard.
                 _log(f"could not fire event for {camera}/{det['label']}: {error}")
+
+    # After the events, not instead of them: an event is for automations, a
+    # push is for a person, and wanting one has never implied wanting the other.
+    _maybe_alert(camera, detections)
     return snapshot_id, detection_ids
 
 
@@ -1286,6 +1388,21 @@ if __name__ == "__main__":
                  f"{face_options['threshold']}, {face_options['attempts']} attempts")
     else:
         _log("identifying people: off")
+
+    alerts = get_alert_config()
+    if not alerts["labels"]:
+        _log("detection alerts: off (no alert_labels set)")
+    elif not alerts["notify_service"]:
+        _log(f"detection alerts: {', '.join(sorted(alerts['labels']))} configured, but "
+             "notify_service is empty — nothing will be sent")
+    else:
+        _log(f"detection alerts: {', '.join(sorted(alerts['labels']))} via "
+             f"{alerts['notify_service']}, at most one per camera per label "
+             f"every {alerts['cooldown']}s")
+    for label, why in unalertable_labels(alerts).items():
+        # Silence is the worst failure mode for an alert, so a setting that can
+        # never fire is said out loud rather than left to be discovered.
+        _log(f"detection alerts: WARNING '{label}' will never fire — {why}")
 
     cameras = get_cameras()
     if cameras:

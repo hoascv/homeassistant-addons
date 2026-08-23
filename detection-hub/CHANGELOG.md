@@ -1,5 +1,31 @@
 # Changelog
 
+## 1.18.0
+
+- **Push notifications when a configured object is detected.** Set
+  `alert_labels` to the classes worth being told about — `person`, or
+  `person, car` — and a detection sends a push through the same
+  `notify_service` the camera watchdog already uses: *"person on drive (92%)"*,
+  or *"person on drive — Porch (92%)"* when it fell inside a named area. Empty
+  by default; events and sensors are unaffected either way.
+- `alert_cooldown_seconds` (default 300) caps it at one alert per camera per
+  label. A person standing in a driveway is detected repeatedly, and a phone
+  that buzzes every few seconds gets muted — which defeats the feature. Per
+  camera as well as per label, so a quiet driveway does not silence the back
+  door, and three people arriving together is one notification.
+- The hook lives in `record()`, the one function both the HTTP API and the
+  camera threads go through, so neither path can miss it — and it runs after
+  the events rather than instead of them: an event is for an automation, a push
+  is for a person, and wanting one has never implied wanting the other.
+- An alert configured on a class the model does not have, or on one the
+  `labels` option filters out before it reaches the recorder, can never fire.
+  Both look like a working setup and both produce silence, so the add-on checks
+  at start and says so in its log.
+- A notification Home Assistant refuses is retried after 30 seconds rather than
+  waiting out the whole cooldown — but not on every detection, which would put
+  a blocking HTTP call on a camera thread for as long as HA stayed down.
+- 24 tests.
+
 ## 1.17.0
 
 - **The editor plots where recent detections actually stood.** Every ground point

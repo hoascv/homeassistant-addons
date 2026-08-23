@@ -348,6 +348,50 @@ a camera still connecting at startup, or misconfigured from the start, should no
 page you. The alert is for a camera that was working and stopped. Either way the
 state shows on the sensors below and in the log, with or without a notify service.
 
+### Something being detected
+
+Set **alert_labels** to the classes worth a push — `person`, or
+`person, car` — and you get a notification when one is detected, through the
+same **notify_service** the camera watchdog uses. Empty (the default) means no
+detection alerts; events and sensors still fire regardless, this is only about a
+phone buzzing.
+
+```
+person on drive (92%)
+person on drive — Porch (92%)     ← when the detection fell inside a named area
+```
+
+**alert_cooldown_seconds** (default 300) caps it at one alert per camera per
+label. A person standing in a driveway is detected over and over, and a phone
+that buzzes every few seconds is a phone that gets muted — which defeats the
+point. The limit is per camera *and* per label, so a quiet driveway does not
+silence the back door, and `person` alerts do not suppress `car` ones. Three
+people arriving together is one notification: it is one event to whoever is
+holding the phone.
+
+Two ways to configure an alert that can never fire, both of which look like a
+working setup and both of which produce silence:
+
+- naming a class the model does not have (`dragon`), or
+- naming one that the **labels** option filters out before it ever reaches the
+  recorder.
+
+The add-on checks for both at start and says so in its log rather than leaving
+you to discover it the hard way:
+
+```
+detection alerts: WARNING 'dog' will never fire — excluded by the `labels` option, so it is never detected
+```
+
+If Home Assistant refuses the notification, the alert is retried after 30
+seconds rather than waiting out the whole cooldown — but not on every detection,
+because that would put a blocking HTTP call on a camera thread for as long as
+Home Assistant stayed down.
+
+Alerts carry no image. The snapshot lives inside this add-on behind ingress
+auth, so a URL to it would not open on a phone; use the event and Home
+Assistant's own camera entity if you want a picture attached.
+
 ### Sensors — for dashboards
 
 - `sensor.detection_hub_detections_today` — the count, with a `by_label`
