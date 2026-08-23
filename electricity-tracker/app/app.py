@@ -19,7 +19,7 @@ import eloverblik
 import saveeye
 import easee
 
-APP_VERSION = "1.7.1"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.8.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("ELECTRICITY_DB_PATH", "/data/electricity.db")
 OPTIONS_PATH = os.environ.get("ELECTRICITY_OPTIONS_PATH", "/data/options.json")
@@ -414,6 +414,37 @@ def _current_price_row(quarter_rows, now_local):
     now_key = now_local.replace(tzinfo=None, second=0, microsecond=0).isoformat()
     candidates = [r for r in quarter_rows if r["time_dk"] <= now_key]
     return candidates[-1] if candidates else None
+
+
+def price_config_warning(opts):
+    """What is missing from the tariff configuration, or None if nothing is.
+
+    The add-on's whole claim is a *full end-user price*: spot plus the grid
+    company's tariff, plus Energinet's, plus tax, plus VAT. Every one of those
+    is an option, and two of them default to 0.0 because nobody can guess them
+    — they depend on which grid company you are behind.
+
+    Left at zero the arithmetic is still correct, which is exactly the problem:
+    the dashboard shows a confident, precise, and badly wrong number. A charge
+    priced at 0.12 kr/kWh against a real 1.20 looks like a bug in the add-on
+    rather than a gap in its configuration, and there is nothing on screen to
+    suggest otherwise. This is that something.
+    """
+    missing = []
+    if not any(opts.get(f"grid_tariff_{band}") for band in ("low", "normal", "high")):
+        missing.append("grid_tariff_low / _normal / _high")
+    if not opts.get("transmission_tariff"):
+        missing.append("transmission_tariff")
+    if not missing:
+        return None
+    return {
+        "missing": missing,
+        "detail": (
+            "Prices here are spot + VAT only — your grid company's tariff and Energinet's "
+            "transmission tariff are still 0. Every cost in this add-on is understated until "
+            "they are set in the Configuration tab."
+        ),
+    }
 
 
 # --- Consumption + cost ---
@@ -1513,6 +1544,7 @@ def api_summary():
             "eloverblik_configured": bool(cfg["refresh_token"] and cfg["metering_point"]),
             "saveeye": saveeye_now,
             "easee": easee_now,
+            "price_config_warning": price_config_warning(opts),
             "last_price_sync": _get_app_state(db, "last_price_sync"),
             "last_consumption_sync": _get_app_state(db, "last_consumption_sync"),
         }

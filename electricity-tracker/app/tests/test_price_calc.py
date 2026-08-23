@@ -87,3 +87,56 @@ def test_get_price_options_falls_back_on_bad_types():
     opts = electricityapp.get_price_options({"grid_tariff_low": "not-a-number", "price_area": "XX"})
     assert opts["grid_tariff_low"] == 0.0
     assert opts["price_area"] == "DK2"
+
+
+# --- Warning when the tariffs were never configured ---
+#
+# The arithmetic is correct with them at zero, which is what makes this worth
+# saying out loud: the dashboard shows a confident, precise, badly wrong number
+# and nothing on screen suggests the cause is a gap in configuration.
+
+
+def test_untouched_tariffs_are_flagged():
+    warning = electricityapp.price_config_warning(electricityapp.get_price_options({}))
+    assert warning is not None
+    assert "grid_tariff_low / _normal / _high" in warning["missing"]
+    assert "transmission_tariff" in warning["missing"]
+
+
+def test_a_fully_configured_setup_is_not_nagged():
+    opts = electricityapp.get_price_options(
+        {"grid_tariff_normal": 0.35, "transmission_tariff": 0.09}
+    )
+    assert electricityapp.price_config_warning(opts) is None
+
+
+def test_any_one_grid_band_counts_as_configured():
+    """A grid company with only a peak rate modelled is configured, not empty."""
+    opts = electricityapp.get_price_options({"grid_tariff_high": 0.6, "transmission_tariff": 0.09})
+    assert electricityapp.price_config_warning(opts) is None
+
+
+def test_a_missing_transmission_tariff_alone_is_flagged():
+    opts = electricityapp.get_price_options({"grid_tariff_normal": 0.35})
+    warning = electricityapp.price_config_warning(opts)
+    assert warning["missing"] == ["transmission_tariff"]
+
+
+def test_a_missing_grid_tariff_alone_is_flagged():
+    opts = electricityapp.get_price_options({"transmission_tariff": 0.09})
+    warning = electricityapp.price_config_warning(opts)
+    assert warning["missing"] == ["grid_tariff_low / _normal / _high"]
+
+
+def test_the_warning_names_where_to_fix_it():
+    warning = electricityapp.price_config_warning(electricityapp.get_price_options({}))
+    assert "Configuration tab" in warning["detail"]
+
+
+def test_summary_carries_the_warning(conn, client):
+    assert client.get("/api/summary").get_json()["price_config_warning"] is not None
+
+
+def test_summary_drops_the_warning_once_tariffs_are_set(conn, client, set_options):
+    set_options(grid_tariff_normal=0.35, transmission_tariff=0.09)
+    assert client.get("/api/summary").get_json()["price_config_warning"] is None

@@ -90,8 +90,23 @@ function renderNow(data) {
     : "–";
 
   document.getElementById("price-area-pill").textContent = data.price_area || "–";
+  renderPriceConfigWarning(data.price_config_warning);
 
   renderPowerNow(data.saveeye, now);
+}
+
+// Sits under the price breakdown, where the zeros it is complaining about are
+// already visible — "Grid 0.00, Transmission 0.00" means nothing to someone who
+// does not know those are meant to be filled in.
+function renderPriceConfigWarning(warning) {
+  const host = document.getElementById("price-config-warning");
+  if (!warning) {
+    host.hidden = true;
+    return;
+  }
+  host.hidden = false;
+  host.innerHTML =
+    `${escapeHtml(warning.detail)} Missing: ${warning.missing.map((m) => `<code>${escapeHtml(m)}</code>`).join(", ")}.`;
 }
 
 function renderPowerNow(saveeye, currentPrice) {

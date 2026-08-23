@@ -176,6 +176,13 @@ code {
 .session-figure span { display: block; font-size: 0.72rem; color: var(--text-muted); font-variant-numeric: normal; }
 .session-partial { color: var(--warn); }
 
+.notice {
+  border-radius: 10px; padding: 0.55rem 0.7rem; font-size: 0.8rem;
+  line-height: 1.5; margin: 0.7rem 0 0;
+}
+.notice-warn { background: var(--warn-soft); color: var(--warn); }
+.notice code { background: transparent; border: none; padding: 0; font-weight: 600; }
+
 .empty-state { color: var(--text-muted); font-size: 0.85rem; text-align: center; padding: 0.5rem; line-height: 1.5; }
 
 .foot {

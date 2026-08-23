@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.8.0
+
+- **The dashboard now says when the tariffs were never configured.**
+  `grid_tariff_low/_normal/_high` and `transmission_tariff` default to 0.0
+  because nobody can guess them — they depend on which grid company you are
+  behind. Left at zero the arithmetic is still correct, and that is exactly the
+  problem: the add-on shows a confident, precise, badly wrong price, and a
+  charge costed at 0.12 kr/kWh against a real 1.20 reads as a bug in the
+  software rather than a gap in its configuration. A notice now sits directly
+  under the price breakdown, where the `Grid 0.00 / Transmission 0.00` it is
+  complaining about is already on screen, and names the exact options to fill
+  in. `/api/summary` carries the same thing as `price_config_warning`.
+- It clears itself as soon as any grid band or the transmission tariff is set —
+  a grid company with only a peak rate modelled counts as configured, not empty.
+
 ## 1.7.1
 
 - **Fixed a four-hour charge being reported as a 159-hour session.** Easee's
