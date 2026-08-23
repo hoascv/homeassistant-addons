@@ -170,13 +170,22 @@ actually charges.
 
 - **Price now** — the current 15-minute price, full end-user total, with the
   spot/tariff/tax/VAT breakdown underneath and today's cheapest/priciest hour.
-- **Price today/tomorrow** — a bar chart at 15-minute resolution. Tomorrow's
-  day-ahead auction clears in the early afternoon (CET), so the "Tomorrow"
-  toggle stays disabled until that's published.
-- **Consumption** — today/yesterday/week/month kWh and cost, plus a daily
-  bar chart over 7/14/30 days. Hidden behind an explanation until Eloverblik
-  is configured. A day partly covered by a Saveeye estimate is shown with a
-  hatched bar and a legend note; hovering any bar shows the breakdown.
+- **Price today/tomorrow** — a smooth line chart at 15-minute resolution,
+  with the cheapest and priciest hour dotted and a marker on the current
+  quarter. Tomorrow's day-ahead auction clears in the early afternoon (CET),
+  so the "Tomorrow" toggle stays disabled until that's published.
+- **Consumption** — today/yesterday/week/month kWh and cost, plus a chart
+  over today (hourly) or 7/14/30 days (daily). Hidden behind an explanation
+  until Eloverblik is configured. Two lines when both sources have something
+  to say: **Measured (Eloverblik)**, a solid line with a soft area beneath
+  it, and **Live estimate (Saveeye)**, a dashed line. They cover different
+  stretches — Eloverblik runs 1-3 days behind, Saveeye only goes back as far
+  as this add-on has been collecting — so the dashed line typically carries
+  on past where the solid one stops, and the overlap is where you can see
+  how closely the two agree. Hovering any point shows both numbers, the
+  cost, and (on the daily view) an hour count for any day either source only
+  partly covers. A source with nothing in range is simply absent, legend
+  entry included.
 - **kW now** — under the price card, once Saveeye is enabled and reporting:
   live instant power plus what that costs per hour at the current price.
 - **EV charging** — once Easee is enabled: status, live power, and the
@@ -216,8 +225,14 @@ Pushed via the Supervisor API (`homeassistant_api: true`) every sync tick
   full breakdown, for whatever's stored.
 - `/api/consumption?days=N` (default 14, max 90) — hourly consumption with
   matched price and cost, for whatever's stored (empty until a metering point
-  is configured and has synced). Each row's `"source"` is `"eloverblik"` or
-  `"saveeye_estimate"`.
+  is configured and has synced). Each row's `"kwh"`/`"source"` is the blended
+  series the totals are built from: `"source"` is `"eloverblik"`,
+  `"saveeye_estimate"` or `"saveeye_partial"`. Alongside it each row also
+  carries the two sources unblended — `"measured_kwh"` (null for an hour
+  Eloverblik hasn't reported) and `"saveeye_kwh"` (null when Saveeye has no
+  estimate for it) — which is what the dashboard's two lines are drawn from.
+  An hour both cover has both, even though only Eloverblik's shows up in
+  `"kwh"`.
 - `/api/eloverblik/diagnose` — live Eloverblik connection test (see Settings,
   above).
 - `/api/saveeye/now` — live Saveeye MQTT connection status and the most
@@ -246,9 +261,12 @@ narrows ingress access to specific Home Assistant users on top of
   here assumes 24.
 - Two price areas' data can coexist in the database (e.g. if you ever change
   `price_area`) — history for the old area is kept, not deleted.
-- Saveeye's hourly estimate only ever fills a genuine gap: an hour Eloverblik
-  has already reported is never recomputed or overridden from Saveeye, even
-  if samples exist for it too. A completed hour is only estimated when real
+- Saveeye's hourly estimate only ever fills a genuine gap *in the blended
+  series*: an hour Eloverblik has already reported is never recomputed or
+  overridden from Saveeye, even if samples exist for it too. That estimate
+  is still reported separately as `"saveeye_kwh"` and charted as its own
+  line, so the two can be compared without either being folded into the
+  other's totals. A completed hour is only estimated when real
   samples bracket both its start and end — no interpolation is ever
   extrapolated past the edge of what was actually observed. The hour
   currently in progress is the one exception: it gets a running

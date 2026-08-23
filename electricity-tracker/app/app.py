@@ -19,7 +19,7 @@ import eloverblik
 import saveeye
 import easee
 
-APP_VERSION = "1.5.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.6.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("ELECTRICITY_DB_PATH", "/data/electricity.db")
 OPTIONS_PATH = os.environ.get("ELECTRICITY_OPTIONS_PATH", "/data/options.json")
@@ -453,22 +453,36 @@ def combined_consumption_with_cost(
     lags, clearly marked `"source": "saveeye_estimate"` rather than presented
     as equivalent to a measured reading. Eloverblik always wins once it has
     the hour; nothing here ever overrides a measured row.
+
+    `kwh`/`source` stay that single blended series (what the totals and the
+    tiles are built from). Alongside them every row also carries the two
+    sources unblended — `measured_kwh` (Eloverblik, None when it hasn't
+    reported the hour) and `saveeye_kwh` (None when Saveeye has no estimate
+    for it) — so the chart can draw them as two comparable series, including
+    for the hours where both exist and only Eloverblik's shows up in `kwh`.
     """
     rows = consumption_with_cost(
         conn, start_local.astimezone(timezone.utc), end_local.astimezone(timezone.utc), metering_point, price_area, opts
     )
     for row in rows:
         row["source"] = "eloverblik"
+        row["measured_kwh"] = row["kwh"]
+        row["saveeye_kwh"] = None
 
     if not saveeye_device_serial:
         return rows
 
-    covered = {row["time_dk"] for row in rows}
+    by_hour = {row["time_dk"]: row for row in rows}
+    covered = set(by_hour)
     estimates = saveeye_hourly_kwh(conn, start_local, end_local, saveeye_device_serial)
     hourly_totals = _hourly_totals(quarter_prices_with_total(conn, start_local, end_local, price_area, opts))
 
     for hour_key, kwh in estimates.items():
-        if hour_key in covered:
+        measured_row = by_hour.get(hour_key)
+        if measured_row is not None:
+            # Eloverblik owns this hour, so it stays the blended value; Saveeye's
+            # own number rides along as the second series instead of being dropped.
+            measured_row["saveeye_kwh"] = kwh
             continue
         price = hourly_totals.get(hour_key)
         cost = round(kwh * price, 4) if price is not None else None
@@ -482,6 +496,8 @@ def combined_consumption_with_cost(
                 "price_dkk_kwh": round(price, 4) if price is not None else None,
                 "cost_dkk": cost,
                 "source": "saveeye_estimate",
+                "measured_kwh": None,
+                "saveeye_kwh": kwh,
             }
         )
 
@@ -502,6 +518,8 @@ def combined_consumption_with_cost(
                     "price_dkk_kwh": round(price, 4) if price is not None else None,
                     "cost_dkk": cost,
                     "source": "saveeye_partial",
+                    "measured_kwh": None,
+                    "saveeye_kwh": partial["kwh"],
                 }
             )
 

@@ -168,6 +168,11 @@ def test_combined_consumption_prefers_eloverblik_over_saveeye_for_same_hour(conn
     assert len(rows) == 1
     assert rows[0]["source"] == "eloverblik"
     assert rows[0]["kwh"] == 2.0  # not overridden by the Saveeye estimate
+    # ...but Saveeye's own number for that same hour still rides along as the
+    # second, unblended series the chart draws next to the measured one.
+    assert rows[0]["measured_kwh"] == 2.0
+    # (09:55, 1000) -> (11:05, 9000) is 8000 Wh over 70 min; the 10:00-11:00 slice is 6857.14 Wh.
+    assert rows[0]["saveeye_kwh"] == 6.8571
 
 
 def test_combined_consumption_fills_gap_with_saveeye_estimate(conn):
@@ -191,6 +196,8 @@ def test_combined_consumption_fills_gap_with_saveeye_estimate(conn):
     # At 10:00 (5 min in): 1035.714. At 11:00 (65 min in): 1464.286. Diff = 428.57 Wh.
     assert rows[0]["kwh"] == 0.4286
     assert rows[0]["cost_dkk"] == round(0.4286 * 2.0, 4)
+    assert rows[0]["measured_kwh"] is None
+    assert rows[0]["saveeye_kwh"] == 0.4286
 
 
 def test_combined_consumption_without_saveeye_serial_is_eloverblik_only(conn):
@@ -203,6 +210,37 @@ def test_combined_consumption_without_saveeye_serial_is_eloverblik_only(conn):
     )
     assert len(rows) == 1
     assert rows[0]["source"] == "eloverblik"
+    assert rows[0]["measured_kwh"] == 1.0
+    assert rows[0]["saveeye_kwh"] is None
+
+
+def test_combined_consumption_series_split_across_measured_and_estimated_hours(conn):
+    """The two series the chart draws: Eloverblik covers the earlier hour,
+    Saveeye covers both, so only the later hour is estimate-only."""
+    opts = electricityapp.get_price_options(
+        {"grid_tariff_normal": 0.0, "transmission_tariff": 0.0, "electricity_tax": 0.0, "vat_rate": 0.0}
+    )
+    for hour in (12, 13):
+        for minute in (0, 15, 30, 45):
+            _seed_price(conn, f"2026-08-16T{hour}:{minute:02d}:00", spot=1.0)
+    _seed_eloverblik_row(conn, "2026-08-16T10:00:00+00:00", kwh=2.0)  # 12:00 local only
+    # A flat 1000 Wh/h counter across both hours.
+    _seed_saveeye_sample(conn, "2026-08-16T09:55:00+00:00", cumulative_wh=1000.0)
+    _seed_saveeye_sample(conn, "2026-08-16T12:05:00+00:00", cumulative_wh=3200.0)
+    conn.commit()
+
+    start_local = datetime(2026, 8, 16, 12, tzinfo=electricityapp.LOCAL_TZ)
+    rows = electricityapp.combined_consumption_with_cost(
+        conn, start_local, start_local + timedelta(hours=2), "mp1", "DK2", opts, "dev1"
+    )
+
+    assert [r["time_dk"] for r in rows] == ["2026-08-16T12:00:00", "2026-08-16T13:00:00"]
+    assert [r["measured_kwh"] for r in rows] == [2.0, None]
+    assert all(r["saveeye_kwh"] is not None for r in rows)
+    # The blended series still prefers the measured hour and falls back afterwards.
+    assert [r["source"] for r in rows] == ["eloverblik", "saveeye_estimate"]
+    assert rows[0]["kwh"] == 2.0
+    assert rows[1]["kwh"] == rows[1]["saveeye_kwh"]
 
 
 def test_saveeye_partial_hour_kwh_needs_two_samples(conn):
@@ -254,6 +292,8 @@ def test_combined_consumption_includes_partial_current_hour(conn):
     assert partial_rows[0]["time_dk"] == hour_start.replace(tzinfo=None).isoformat()
     assert partial_rows[0]["kwh"] == 0.5
     assert partial_rows[0]["cost_dkk"] == 1.0  # 0.5 kWh * 2.0 DKK/kWh
+    assert partial_rows[0]["measured_kwh"] is None
+    assert partial_rows[0]["saveeye_kwh"] == 0.5
 
 
 def test_combined_consumption_partial_hour_yields_to_eloverblik(conn):

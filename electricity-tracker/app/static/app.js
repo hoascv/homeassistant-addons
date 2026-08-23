@@ -150,78 +150,128 @@ function smoothLinePath(points) {
 // shape (a time series), same treatment (smooth line, soft area wash,
 // per-point hover, sparse axis labels), differing only in baseline,
 // tooltip text, and which optional markers apply.
+//
+// `opts.series` is one entry per line to draw, each with its own `valueOf`;
+// a series that returns null for a row simply has no point there, so two
+// series covering different stretches of the same x axis (measured hours vs
+// live estimate) share one set of scales and axis labels. Series are drawn
+// in order, so put the primary one first — extreme dots, the "now" marker
+// and the hover targets all anchor to it.
 function renderSmoothChart(host, rows, opts) {
-  if (!rows || !rows.length) {
+  const series = opts.series;
+  const hasAnyValue = rows && rows.some((r) => series.some((s) => s.valueOf(r) != null));
+  if (!hasAnyValue) {
     host.innerHTML = `<p class="empty-state">${opts.emptyText}</p>`;
     return null;
   }
 
   const W = 600, H = 160, padTop = 14, padBottom = 20, padX = 3;
-  const values = rows.map(opts.valueOf);
+  const values = [];
+  rows.forEach((r) => series.forEach((s) => {
+    const v = s.valueOf(r);
+    if (v != null) values.push(v);
+  }));
   const min = opts.baseline === "zero" ? 0 : Math.min(...values);
   const max = Math.max(...values, min + 0.01);
   const range = max - min;
   const innerW = W - padX * 2;
   const stepX = rows.length > 1 ? innerW / (rows.length - 1) : 0;
-
-  const points = rows.map((r, i) => [
-    padX + i * stepX,
-    padTop + (1 - (opts.valueOf(r) - min) / range) * (H - padTop - padBottom),
-  ]);
-
-  const linePath = smoothLinePath(points);
   const baselineY = H - padBottom;
-  const last = points[points.length - 1];
-  const first = points[0];
-  const areaPath = `${linePath} L${last[0].toFixed(2)},${baselineY} L${first[0].toFixed(2)},${baselineY} Z`;
 
+  const pointAt = (s, r, i) => {
+    const v = s.valueOf(r);
+    if (v == null) return null;
+    return [padX + i * stepX, padTop + (1 - (v - min) / range) * (H - padTop - padBottom)];
+  };
+  const seriesPoints = series.map((s) => rows.map((r, i) => pointAt(s, r, i)));
+
+  let defs = "";
+  let areas = "";
+  let lines = "";
+  series.forEach((s, si) => {
+    // A series can be interrupted (Saveeye was offline for an hour); each
+    // uninterrupted run is its own path so the gap stays a gap instead of
+    // being bridged by a straight line that implies data we don't have.
+    for (const run of contiguousRuns(seriesPoints[si])) {
+      const linePath = smoothLinePath(run);
+      if (s.area) {
+        const first = run[0], last = run[run.length - 1];
+        areas +=
+          `<path class="chart-area" fill="url(#${s.gradientId})" ` +
+          `d="${linePath} L${last[0].toFixed(2)},${baselineY} L${first[0].toFixed(2)},${baselineY} Z"/>`;
+      }
+      lines += `<path class="chart-line ${s.lineClass || ""}" d="${linePath}"/>`;
+    }
+    if (s.area) {
+      defs +=
+        `<linearGradient id="${s.gradientId}" x1="0" y1="0" x2="0" y2="1">` +
+        `<stop offset="0%" class="chart-area-stop-top ${s.stopClass || ""}"/>` +
+        `<stop offset="100%" class="chart-area-stop-bottom ${s.stopClass || ""}"/>` +
+        `</linearGradient>`;
+    }
+  });
+
+  const primary = seriesPoints[0];
   let extras = "";
-  if (opts.nowIndex != null && opts.nowIndex >= 0) {
-    const [nx, ny] = points[opts.nowIndex];
+  if (opts.nowIndex != null && opts.nowIndex >= 0 && primary[opts.nowIndex]) {
+    const [nx, ny] = primary[opts.nowIndex];
     extras +=
       `<line class="chart-now-line" x1="${nx.toFixed(2)}" y1="${padTop}" x2="${nx.toFixed(2)}" y2="${baselineY}"/>` +
       `<circle class="chart-now-dot" cx="${nx.toFixed(2)}" cy="${ny.toFixed(2)}" r="3"/>`;
   }
 
   if (opts.extremeDots) {
-    let minIdx = 0, maxIdx = 0;
+    const valueOf = series[0].valueOf;
+    let minIdx = -1, maxIdx = -1;
     rows.forEach((r, i) => {
-      if (opts.valueOf(r) < opts.valueOf(rows[minIdx])) minIdx = i;
-      if (opts.valueOf(r) > opts.valueOf(rows[maxIdx])) maxIdx = i;
+      if (valueOf(r) == null) return;
+      if (minIdx < 0 || valueOf(r) < valueOf(rows[minIdx])) minIdx = i;
+      if (maxIdx < 0 || valueOf(r) > valueOf(rows[maxIdx])) maxIdx = i;
     });
-    extras +=
-      `<circle class="chart-dot chart-dot-cheap" cx="${points[minIdx][0].toFixed(2)}" cy="${points[minIdx][1].toFixed(2)}" r="2.6"/>` +
-      `<circle class="chart-dot chart-dot-expensive" cx="${points[maxIdx][0].toFixed(2)}" cy="${points[maxIdx][1].toFixed(2)}" r="2.6"/>`;
+    if (minIdx >= 0) {
+      extras +=
+        `<circle class="chart-dot chart-dot-cheap" cx="${primary[minIdx][0].toFixed(2)}" cy="${primary[minIdx][1].toFixed(2)}" r="2.6"/>` +
+        `<circle class="chart-dot chart-dot-expensive" cx="${primary[maxIdx][0].toFixed(2)}" cy="${primary[maxIdx][1].toFixed(2)}" r="2.6"/>`;
+    }
   }
 
-  if (opts.markerTest) {
-    rows.forEach((r, i) => {
-      if (!opts.markerTest(r)) return;
-      extras += `<circle class="chart-dot chart-dot-estimate" cx="${points[i][0].toFixed(2)}" cy="${points[i][1].toFixed(2)}" r="2.4"/>`;
-    });
-  }
-
-  const hitTargets = rows.map((r, i) => (
-    `<circle class="chart-hit" cx="${points[i][0].toFixed(2)}" cy="${points[i][1].toFixed(2)}" r="7">` +
-    `<title>${escapeHtml(opts.tooltipOf(r))}</title></circle>`
-  )).join("");
+  // One hover target per x position, on whichever series actually has a point
+  // there — the tooltip text covers every series at once anyway.
+  const hitTargets = rows.map((r, i) => {
+    const p = seriesPoints.map((sp) => sp[i]).find(Boolean);
+    if (!p) return "";
+    return (
+      `<circle class="chart-hit" cx="${p[0].toFixed(2)}" cy="${p[1].toFixed(2)}" r="7">` +
+      `<title>${escapeHtml(opts.tooltipOf(r))}</title></circle>`
+    );
+  }).join("");
 
   const labels = rows.map((r, i) => {
     const text = opts.axisLabelOf(r, i);
-    return text ? `<text class="chart-axis-label" x="${points[i][0].toFixed(2)}" y="${H - 4}">${text}</text>` : "";
+    return text ? `<text class="chart-axis-label" x="${(padX + i * stepX).toFixed(2)}" y="${H - 4}">${text}</text>` : "";
   }).join("");
 
   host.innerHTML = (
     `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="${escapeHtml(opts.ariaLabel)}">` +
-    `<defs><linearGradient id="${opts.gradientId}" x1="0" y1="0" x2="0" y2="1">` +
-    `<stop offset="0%" class="chart-area-stop-top"/><stop offset="100%" class="chart-area-stop-bottom"/>` +
-    `</linearGradient></defs>` +
-    `<path class="chart-area" d="${areaPath}" fill="url(#${opts.gradientId})"/>` +
-    `<path class="chart-line" d="${linePath}"/>` +
-    extras + hitTargets + labels +
+    `<defs>${defs}</defs>` + areas + lines + extras + hitTargets + labels +
     `</svg>`
   );
-  return { points };
+  return { seriesPoints };
+}
+
+function contiguousRuns(points) {
+  const runs = [];
+  let run = [];
+  for (const p of points) {
+    if (p) {
+      run.push(p);
+    } else if (run.length) {
+      runs.push(run);
+      run = [];
+    }
+  }
+  if (run.length) runs.push(run);
+  return runs;
 }
 
 // --- Price curve chart ---
@@ -238,7 +288,7 @@ function renderPriceChart(rows, highlightKey) {
 
   const nowIndex = highlightKey ? rows.findIndex((r) => r.time_dk === highlightKey) : -1;
   renderSmoothChart(host, rows, {
-    valueOf: (r) => r.total_dkk_kwh,
+    series: [{ valueOf: (r) => r.total_dkk_kwh, area: true, gradientId: "price-area-gradient" }],
     tooltipOf: (r) => `${hm(r.time_dk)} — ${r.total_dkk_kwh.toFixed(2)} DKK/kWh`,
     axisLabelOf: (r) => {
       const hourStr = r.time_dk.slice(11, 13);
@@ -247,7 +297,6 @@ function renderPriceChart(rows, highlightKey) {
     },
     emptyText: "No price data yet.",
     ariaLabel: "Electricity price today",
-    gradientId: "price-area-gradient",
     baseline: "min",
     nowIndex,
     extremeDots: true,
@@ -339,21 +388,45 @@ function renderEasee(easee) {
   document.getElementById("easee-started").textContent = started ? `Session started ${started}` : "";
 }
 
-// --- Consumption chart (daily totals) ---
+// --- Consumption chart (measured vs live estimate) ---
 
-function isSaveeyeSource(source) {
-  return source === "saveeye_estimate" || source === "saveeye_partial";
+// Two comparable series over the same hours: what the meter actually
+// reported through Eloverblik, and what Saveeye's own counter says. They
+// cover different stretches — Eloverblik runs 1-3 days behind, Saveeye only
+// goes back as far as this add-on has been collecting — which is exactly
+// what makes seeing both worthwhile.
+const CONSUMPTION_SERIES = [
+  { name: "measured", valueOf: (r) => r.measured_kwh, area: true, gradientId: "consumption-measured-gradient" },
+  { name: "saveeye", valueOf: (r) => r.saveeye_kwh, lineClass: "chart-line-saveeye" },
+];
+
+function fmtSeriesPair(measured, saveeye, suffix) {
+  const parts = [];
+  if (measured != null) parts.push(`meter ${measured.toFixed(2)} kWh${suffix ? suffix(true) : ""}`);
+  if (saveeye != null) parts.push(`Saveeye ${saveeye.toFixed(2)} kWh${suffix ? suffix(false) : ""}`);
+  return parts.length ? parts.join(" · ") : "no reading";
 }
 
 function aggregateDaily(rows) {
   const map = new Map();
   for (const r of rows) {
     const day = r.time_dk.slice(0, 10);
-    const entry = map.get(day) || { day, kwh: 0, cost: 0, costKnown: true, hasEstimate: false };
+    const entry = map.get(day) || {
+      day, kwh: 0, cost: 0, costKnown: true,
+      measured_kwh: null, measuredHours: 0,
+      saveeye_kwh: null, saveeyeHours: 0,
+    };
     entry.kwh += r.kwh;
     if (r.cost_dkk != null) entry.cost += r.cost_dkk;
     else entry.costKnown = false;
-    if (isSaveeyeSource(r.source)) entry.hasEstimate = true;
+    if (r.measured_kwh != null) {
+      entry.measured_kwh = (entry.measured_kwh || 0) + r.measured_kwh;
+      entry.measuredHours += 1;
+    }
+    if (r.saveeye_kwh != null) {
+      entry.saveeye_kwh = (entry.saveeye_kwh || 0) + r.saveeye_kwh;
+      entry.saveeyeHours += 1;
+    }
     map.set(day, entry);
   }
   return [...map.values()].sort((a, b) => a.day.localeCompare(b.day));
@@ -362,19 +435,17 @@ function aggregateDaily(rows) {
 function renderHourlyChart(rows) {
   const host = document.getElementById("consumption-chart");
   renderSmoothChart(host, rows, {
-    valueOf: (r) => r.kwh,
+    series: CONSUMPTION_SERIES,
     tooltipOf: (r) => {
       const costStr = r.cost_dkk != null ? `${r.cost_dkk.toFixed(2)} kr` : "cost n/a";
-      const sourceNote = r.source === "saveeye_partial" ? " (live, hour in progress)"
-        : r.source === "saveeye_estimate" ? " (live estimate)" : "";
-      return `${hm(r.time_dk)} — ${r.kwh.toFixed(2)} kWh, ${costStr}${sourceNote}`;
+      const pair = fmtSeriesPair(r.measured_kwh, r.saveeye_kwh,
+        (isMeasured) => (!isMeasured && r.source === "saveeye_partial" ? " so far" : ""));
+      return `${hm(r.time_dk)} — ${pair}, ${costStr}`;
     },
     axisLabelOf: (r) => (Number(r.time_dk.slice(11, 13)) % 3 === 0 ? r.time_dk.slice(11, 13) : ""),
     emptyText: "No consumption data yet today.",
-    ariaLabel: "Hourly consumption today",
-    gradientId: "hourly-area-gradient",
+    ariaLabel: "Hourly consumption today, measured and live estimate",
     baseline: "zero",
-    markerTest: (r) => isSaveeyeSource(r.source),
   });
 }
 
@@ -383,23 +454,30 @@ function renderDailyChart(rows) {
   const daily = aggregateDaily(rows);
   const step = Math.max(1, Math.ceil(daily.length / 10));
   renderSmoothChart(host, daily, {
-    valueOf: (d) => d.kwh,
+    series: CONSUMPTION_SERIES,
     tooltipOf: (d) => {
       const costStr = d.costKnown ? `${d.cost.toFixed(2)} kr` : "cost n/a";
-      const estimateNote = d.hasEstimate ? " (partly a live estimate)" : "";
-      return `${d.day} — ${d.kwh.toFixed(2)} kWh, ${costStr}${estimateNote}`;
+      // A day either source only partly covers is flagged with its hour count —
+      // otherwise a half-reported day reads as a genuine drop in consumption.
+      const hours = (n) => (n > 0 && n < 24 ? ` (${n}/24 h)` : "");
+      const pair = fmtSeriesPair(d.measured_kwh, d.saveeye_kwh,
+        (isMeasured) => hours(isMeasured ? d.measuredHours : d.saveeyeHours));
+      return `${d.day} — ${pair}, ${costStr}`;
     },
     axisLabelOf: (d, i) => (i % step === 0 ? d.day.slice(5) : ""),
     emptyText: "No consumption data yet.",
-    ariaLabel: "Daily consumption",
-    gradientId: "daily-area-gradient",
+    ariaLabel: "Daily consumption, measured and live estimate",
     baseline: "zero",
-    markerTest: (d) => d.hasEstimate,
   });
 }
 
 function renderConsumptionChart(rows) {
-  document.getElementById("consumption-chart-legend").hidden = !rows.some((r) => isSaveeyeSource(r.source));
+  const legend = document.getElementById("consumption-chart-legend");
+  const hasMeasured = rows.some((r) => r.measured_kwh != null);
+  const hasSaveeye = rows.some((r) => r.saveeye_kwh != null);
+  document.getElementById("legend-measured").hidden = !hasMeasured;
+  document.getElementById("legend-saveeye").hidden = !hasSaveeye;
+  legend.hidden = !(hasMeasured || hasSaveeye);
   if (state.consumptionView === "hourly") {
     renderHourlyChart(rows);
   } else {

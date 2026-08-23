@@ -7,6 +7,8 @@
   --border: #e4e7ec;
   --accent: #2563eb;
   --accent-soft: rgba(37, 99, 235, 0.14);
+  /* Second chart series (Saveeye's live estimate next to the measured line) */
+  --accent-2: #d97706;
   --success: #16a34a;
   --success-soft: rgba(22, 163, 74, 0.14);
   --warn: #b45309;
@@ -28,6 +30,7 @@
     --border: #333a44;
     --accent: #4b82f6;
     --accent-soft: rgba(75, 130, 246, 0.2);
+    --accent-2: #f0a83a;
     --success: #34d17a;
     --success-soft: rgba(52, 209, 122, 0.18);
     --warn: #f0a83a;
@@ -117,7 +120,8 @@ code {
   width: 0.55rem; height: 0.55rem; border-radius: 50%; display: inline-block;
   box-shadow: 0 0 0 1.5px var(--surface);
 }
-.legend-dot-estimate { background: var(--accent); }
+.legend-dot-measured { background: var(--accent); }
+.legend-dot-saveeye { background: var(--accent-2); }
 
 .mini-stats { display: flex; gap: 0.6rem; margin: 0.9rem 0 0.1rem; flex-wrap: wrap; }
 .mini-stats-4 .mini-stat { min-width: calc(25% - 0.5rem); }
@@ -151,7 +155,9 @@ code {
 .chart-dot { stroke: var(--surface); stroke-width: 1.3; }
 .chart-dot-cheap { fill: var(--success); }
 .chart-dot-expensive { fill: var(--danger); }
-.chart-dot-estimate { fill: var(--accent); }
+/* The estimate series: same weight, dashed and in the second hue, so it reads
+   as "derived live" rather than as a second measurement. */
+.chart-line-saveeye { stroke: var(--accent-2); stroke-dasharray: 4 3; }
 /* Invisible, larger-than-the-mark hit target — the actual hover surface. */
 .chart-hit { fill: transparent; cursor: pointer; }
 .chart-axis-label { font-size: 8px; fill: var(--text-muted); }

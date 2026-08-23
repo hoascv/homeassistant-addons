@@ -1,5 +1,35 @@
 # Changelog
 
+## 1.6.0
+
+- **The consumption chart now draws two series instead of one blended
+  line**: *Measured (Eloverblik)*, solid with the area wash beneath it, and
+  *Live estimate (Saveeye)*, dashed in a second hue. Previously Saveeye's
+  number for an hour Eloverblik had already reported was computed and then
+  thrown away, so the chart could only ever show one source per hour and the
+  legend claimed "Live estimate" for a curve that was mostly measured data.
+  Both now ride along on every row, which makes the overlap — where you can
+  actually see how closely the reader tracks the meter — the interesting
+  part of the chart.
+- `/api/consumption` rows gained `measured_kwh` and `saveeye_kwh`, either of
+  which is null where that source has nothing for the hour. `kwh` and
+  `source` are unchanged: still the blended series, still what every total
+  and tile is computed from, so nothing double-counts.
+- The two lines cover different stretches of the same axis (Eloverblik lags
+  1-3 days; Saveeye only goes back as far as this add-on has been
+  collecting), so the shared chart renderer now takes any number of series
+  and draws each one only where it has data — a gap stays a gap rather than
+  being bridged by a line implying readings we don't have.
+- Hover text shows both numbers at once, and on the daily view flags any day
+  a source only partly covers with its hour count, so a half-reported day
+  can't be misread as a real drop in consumption.
+- Legend entries appear only for the sources actually present in the range —
+  "Today" typically shows Saveeye alone, since Eloverblik hasn't reported it
+  yet.
+- Verified with a browser render (headless Chrome through the local
+  header-injecting proxy) against seeded data where the two sources overlap
+  partially, in both light and dark, on the hourly, 7d and 30d views.
+
 ## 1.5.0
 
 - **Redesigned all three charts** (price, hourly consumption, daily
