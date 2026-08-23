@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import app as gymapp
 
@@ -224,3 +224,62 @@ def test_a_weekday_weighin_reminder_is_unaffected(conn, set_options, fake_ha_ser
     gymapp._weighin_reminder_tick(datetime(2026, 7, 26, 8, 30), conn)  # a Sunday
     assert len(fake_ha_server) == 1
     assert "weekly" in fake_ha_server[0]["body"]["message"].lower()
+
+
+# --- Daily stoic quote -----------------------------------------------------
+
+
+def test_quote_sends_at_configured_time(conn, set_options, fake_ha_server):
+    set_options(notify_service=NOTIFY, stoic_quote_enabled=True, stoic_quote_time="07:00")
+    gymapp._stoic_quote_tick(datetime(2026, 7, 22, 7, 0), conn)
+    assert len(fake_ha_server) == 1
+    assert fake_ha_server[0]["path"] == f"/services/notify/{NOTIFY}"
+    text, author = gymapp.STOIC_QUOTES[0]
+    assert text in fake_ha_server[0]["body"]["message"]
+    assert author in fake_ha_server[0]["body"]["message"]
+    assert gymapp._get_app_state(conn, "stoic_quote_last_sent") == "2026-07-22"
+
+
+def test_quote_not_before_time(conn, set_options, fake_ha_server):
+    set_options(notify_service=NOTIFY, stoic_quote_enabled=True, stoic_quote_time="07:00")
+    gymapp._stoic_quote_tick(datetime(2026, 7, 22, 6, 59), conn)
+    assert fake_ha_server == []
+    assert gymapp._get_app_state(conn, "stoic_quote_last_sent") is None
+
+
+def test_quote_once_per_day(conn, set_options, fake_ha_server):
+    set_options(notify_service=NOTIFY, stoic_quote_enabled=True, stoic_quote_time="07:00")
+    gymapp._stoic_quote_tick(datetime(2026, 7, 22, 7, 0), conn)
+    gymapp._stoic_quote_tick(datetime(2026, 7, 22, 9, 30), conn)
+    assert len(fake_ha_server) == 1
+
+
+def test_quote_is_new_each_day_and_wraps(conn, set_options, fake_ha_server):
+    set_options(notify_service=NOTIFY, stoic_quote_enabled=True, stoic_quote_time="07:00")
+    total = len(gymapp.STOIC_QUOTES)
+    for i in range(total + 1):
+        gymapp._set_app_state(conn, "stoic_quote_last_sent", "")
+        gymapp._stoic_quote_tick(datetime(2026, 7, 22, 7, 0) + timedelta(days=i), conn)
+    sent = [m["body"]["message"] for m in fake_ha_server]
+    # every quote used once before any repeats, then it comes round again
+    assert len(set(sent[:total])) == total
+    assert sent[total] == sent[0]
+
+
+def test_quote_disabled(conn, set_options, fake_ha_server):
+    set_options(notify_service=NOTIFY, stoic_quote_enabled=False, stoic_quote_time="07:00")
+    gymapp._stoic_quote_tick(datetime(2026, 7, 22, 7, 0), conn)
+    assert fake_ha_server == []
+
+
+def test_quote_no_service(conn, set_options, fake_ha_server):
+    set_options(notify_service="", stoic_quote_enabled=True, stoic_quote_time="07:00")
+    gymapp._stoic_quote_tick(datetime(2026, 7, 22, 7, 0), conn)
+    assert fake_ha_server == []
+
+
+def test_quote_defaults_on_at_7am(conn, set_options, fake_ha_server):
+    set_options(notify_service=NOTIFY)
+    cfg = gymapp.get_reminders_config()
+    assert cfg["quote_enabled"] is True
+    assert cfg["quote_time"] == "07:00"

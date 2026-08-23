@@ -1,5 +1,55 @@
 # Changelog
 
+## 1.39.1
+
+- **The routine player went see-through once a routine started.** Its work and
+  rest tints are translucent by design, but each was set as the background on
+  its own, replacing the player's opaque one — so the app behind showed through
+  and the two screens looked stacked. The tints are now layered over the page
+  background: same colours, nothing showing through.
+
+## 1.39.0
+
+- **Challenge templates.** A new **Start from a template** button under the
+  challenge list offers ready-made challenges. Starting one builds the whole
+  thing: the challenge, its items, the routines behind them, and any exercises
+  those routines need. Anything you already have — matched by name — is reused
+  untouched, so a routine you have tuned keeps your steps.
+- **The first template is Advanced Kegel**: a 30-day daily challenge with a
+  fast-pulse warm-up (10 × 1s/1s), two endurance sets (10 × 10s hold / 10s
+  rest), and a 20-round cool-down, with the technique notes attached.
+- **A routine run more than once now says so.** A challenge item pointing at a
+  routine reads "2 sets · 3m 20s · 10 rounds" instead of dropping the set count
+  — the player counts a single run, so a two-set item that didn't mention its
+  second set was hiding half the work.
+
+## 1.38.1
+
+- **The routine player wasn't keeping the screen awake.** The wake lock was
+  requested a moment before the routine timer started, and the request declines
+  when no routine is running — so it was refused every time and the screen slept
+  mid-routine. It's now taken once the timer is running. Switching away from the
+  page and back used to mask this by re-requesting the lock through a path that
+  did hold it.
+
+## 1.38.0
+
+- **A stoic quote every morning at 07:00.** A new option, `stoic_quote_enabled`
+  (on by default) with `stoic_quote_time`, sends one stoic line a day through
+  your notify service. The quotes are walked in order rather than picked at
+  random, so the same one never lands two mornings running — you see all of
+  them before any repeats.
+- The quote list now lives in the app rather than only in the browser, so the
+  morning notification and the end-of-challenge celebration draw on one list.
+
+## 1.37.0
+
+- **Renamed to Goal Tracker.** The add-on name, sidebar entry, page title,
+  notification titles, and log prefix now all say "Goal Tracker" — the app had
+  grown well past the gym. Nothing about the install changed: the add-on slug
+  is still `gym-tracker`, so your database, options, ingress URL, and the data
+  pipeline keep working untouched across the update.
+
 ## 1.36.0
 
 - **Added a Profile section** (Settings → Profile) to record the age, sex,

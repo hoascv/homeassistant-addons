@@ -1,5 +1,5 @@
-name: "Gym Tracker"
-version: "1.36.0"
+name: "Goal Tracker"
+version: "1.39.1"
 slug: "gym-tracker"
 description: "Track a weight/body-fat goal, home workouts, and a daily challenge with reminders"
 url: "https://github.com/hoascv/homeassistant-addons/tree/main/gym-tracker"
@@ -18,7 +18,7 @@ ports:
 ports_description:
   8099/tcp: "Direct API access for a data pipeline (requires api_token)"
 panel_icon: mdi:dumbbell
-panel_title: "Gym Tracker"
+panel_title: "Goal Tracker"
 # Only Home Assistant admin-group users get the sidebar menu entry (the
 # default, stated explicitly). See restrict_to_user_ids for a hard,
 # per-user access block on top of that.
@@ -31,6 +31,8 @@ options:
   weighin_reminder_enabled: false
   weighin_reminder_weekday: "sunday"
   weighin_reminder_time: "08:00"
+  stoic_quote_enabled: true
+  stoic_quote_time: "07:00"
   restrict_to_user_ids: ""
   garmin_auto_sync: true
   garmin_sync_interval_hours: 6
@@ -44,6 +46,8 @@ schema:
   weighin_reminder_enabled: "bool"
   weighin_reminder_weekday: "list(daily|monday|tuesday|wednesday|thursday|friday|saturday|sunday)"
   weighin_reminder_time: "str"
+  stoic_quote_enabled: "bool"
+  stoic_quote_time: "str"
   restrict_to_user_ids: "str?"
   garmin_auto_sync: "bool"
   garmin_sync_interval_hours: "int(1,168)"

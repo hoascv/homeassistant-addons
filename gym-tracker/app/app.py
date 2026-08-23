@@ -19,7 +19,7 @@ from flask import Flask, Response, g, jsonify, render_template, request, send_fi
 
 import garmin_client
 
-APP_VERSION = "1.36.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.39.1"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("GYM_DB_PATH", "/data/gym.db")
 OPTIONS_PATH = os.environ.get("GYM_OPTIONS_PATH", "/data/options.json")
@@ -30,6 +30,28 @@ HA_API_BASE = "http://supervisor/core/api"
 # Monday..Sunday, index matches datetime.weekday() (Monday == 0). Used to
 # resolve the weighin_reminder_weekday option to a comparable index.
 WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+
+# Canonical list, shared by the celebration toast (handed to the page as
+# window.GYM.quotes) and the daily quote notification. Short enough to read in
+# a toast or a phone notification, plain enough to not need footnotes.
+STOIC_QUOTES = [
+    ["You have power over your mind — not outside events.", "Marcus Aurelius"],
+    ["Waste no more time arguing what a good man should be. Be one.", "Marcus Aurelius"],
+    ["We suffer more often in imagination than in reality.", "Seneca"],
+    ["Difficulties strengthen the mind, as labor does the body.", "Seneca"],
+    ["He who fears death will never do anything worthy of a living man.", "Seneca"],
+    ["It's not what happens to you, but how you react that matters.", "Epictetus"],
+    ["No man is free who is not master of himself.", "Epictetus"],
+    ["First say to yourself what you would be, then do what you have to do.", "Epictetus"],
+    ["The impediment to action advances action. What stands in the way becomes the way.", "Marcus Aurelius"],
+    ["Every new beginning comes from some other beginning's end.", "Seneca"],
+    ["Wealth consists not in having great possessions, but in having few wants.", "Epictetus"],
+    ["If it is not right, do not do it. If it is not true, do not say it.", "Marcus Aurelius"],
+    ["Man conquers the world by conquering himself.", "Zeno of Citium"],
+    ["While we wait for life, life passes.", "Seneca"],
+    ["Don't explain your philosophy. Embody it.", "Epictetus"],
+    ["The best revenge is to be unlike him who performed the injury.", "Marcus Aurelius"],
+]
 
 # Seeded on a fresh database so the app opens onto a populated, meaningful
 # home screen instead of empty state. All editable afterwards.
@@ -96,7 +118,7 @@ app = Flask(__name__)
 def _log(msg):
     # Timestamped and flushed so lines actually appear in the add-on log
     # (Flask's default logger is WARNING-level and would swallow info).
-    print(f"[Gym Tracker] {datetime.now().isoformat()} {msg}", flush=True)
+    print(f"[Goal Tracker] {datetime.now().isoformat()} {msg}", flush=True)
 
 
 def _read_options():
@@ -216,13 +238,13 @@ def _access_denied_html(user_id):
     return (
         "<!doctype html><html><head><meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width, initial-scale=1'>"
-        "<title>Gym Tracker — access restricted</title>"
+        "<title>Goal Tracker — access restricted</title>"
         "<style>body{font-family:system-ui,sans-serif;background:#111;color:#eee;"
         "display:flex;min-height:100vh;margin:0;align-items:center;justify-content:center;padding:1.5rem}"
         ".card{max-width:26rem;text-align:center;line-height:1.5}"
         "code{background:#222;padding:.15rem .4rem;border-radius:5px;word-break:break-all}</style>"
         "</head><body><div class='card'><h1>💪 Access restricted</h1>"
-        "<p>This Gym Tracker is limited to specific Home Assistant users. "
+        "<p>This Goal Tracker is limited to specific Home Assistant users. "
         "Your account isn't on the list.</p>"
         f"<p>Your user ID is:<br><code>{shown}</code></p>"
         "<p>Ask whoever set up the add-on to add this ID to "
@@ -243,6 +265,8 @@ def get_reminders_config():
         "weighin_enabled": bool(opts.get("weighin_reminder_enabled", False)),
         "weighin_weekday": (opts.get("weighin_reminder_weekday", "sunday") or "sunday").strip().lower(),
         "weighin_time": opts.get("weighin_reminder_time", "08:00"),
+        "quote_enabled": bool(opts.get("stoic_quote_enabled", True)),
+        "quote_time": opts.get("stoic_quote_time", "07:00"),
     }
 
 
@@ -1130,7 +1154,7 @@ def _ha_api_request(method, path, payload=None, timeout=5):
         return None, str(e)
 
 
-def send_notification(message, title="Gym Tracker"):
+def send_notification(message, title="Goal Tracker"):
     service = get_reminders_config()["notify_service"]
     if not service:
         return False, "no notify service configured"
@@ -2139,12 +2163,18 @@ def _routine_total_seconds(step_seconds, rounds):
     return int(step_seconds or 0) * max(1, int(rounds or 1))
 
 
-def _routine_target_text(rounds, total_seconds):
-    """'4m · 8 rounds' — what a routine reads as on a challenge card."""
+def _routine_target_text(rounds, total_seconds, sets=None):
+    """'4m · 8 rounds' — what a routine reads as on a challenge card.
+
+    A routine run more than once carries its set count too ('2 sets · 3m 20s ·
+    10 rounds'): the player counts one run, so a two-set item has to say so
+    somewhere or the second set is invisible.
+    """
     if not total_seconds:
         return None
     held = _format_seconds(total_seconds)
-    return f"{held} · {rounds} rounds" if rounds and rounds > 1 else held
+    text = f"{held} · {rounds} rounds" if rounds and rounds > 1 else held
+    return f"{sets} sets · {text}" if sets and sets > 1 else text
 
 
 def _format_seconds(seconds):
@@ -2185,7 +2215,8 @@ def _challenge_item_view(r):
         # the sets and reps a counted exercise carries.
         if _row_value(r, "is_routine"):
             target = _routine_target_text(
-                _row_value(r, "routine_rounds", 1), _row_value(r, "routine_seconds")
+                _row_value(r, "routine_rounds", 1), _row_value(r, "routine_seconds"),
+                r["target_sets"],
             )
         else:
             target = _exercise_target_text(
@@ -2326,6 +2357,7 @@ def index():
         goal=_get_goal(db),
         challenge_reminder_enabled=reminders["challenge_enabled"],
         weighin_reminder_enabled=reminders["weighin_enabled"],
+        stoic_quotes=STOIC_QUOTES,
     )
 
 
@@ -3829,6 +3861,239 @@ def api_repeat_challenge(challenge_id):
     return jsonify({"status": "created", "id": new_id}), 201
 
 
+# --- Challenge templates -----------------------------------------------------
+# A ready-made challenge: its schedule, its routines, and the items that tick
+# off. Declared rather than seeded into the database, so a template can be
+# added or corrected in a release without a migration, and so nothing exists
+# until you actually start one.
+#
+# A routine's steps name their exercises rather than carrying ids: the library
+# row is looked up by name when the template is started, and created only if it
+# is missing. Starting the same template twice therefore reuses the exercises
+# you already have — including any edits you have made to them.
+
+CHALLENGE_TEMPLATES = [
+    {
+        "id": "kegel-advanced",
+        "name": "Advanced Kegel",
+        "summary": (
+            "Fast-pulse warm-up, two endurance sets, then a cool-down — the full "
+            "pelvic-floor routine, counted for you."
+        ),
+        "technique": [
+            "Target the muscles you would use to stop the flow of urine midstream.",
+            "Keep breathing steady. Don't flex your stomach, thighs, or buttocks.",
+            "The endurance sets can be repeated up to 6 times a day, spread across "
+            "morning, afternoon, and evening.",
+        ],
+        "days": 30,
+        "schedule": {"schedule_kind": "daily"},
+        "routines": [
+            {
+                "name": "Kegel warm-up",
+                "rounds": 10,
+                "steps": [
+                    {"kind": "work", "exercise": "Contract", "seconds": 1},
+                    {"kind": "work", "exercise": "Relax", "seconds": 1},
+                ],
+            },
+            {
+                "name": "Kegel endurance hold",
+                "rounds": 10,
+                "steps": [
+                    {"kind": "work", "exercise": "Contract", "seconds": 10},
+                    {"kind": "rest", "seconds": 10},
+                ],
+            },
+            {
+                # "Squeeze hard" in the guide is a cue, not a different movement,
+                # so the cool-down reuses Contract/Relax rather than adding a
+                # near-duplicate row to the exercise library.
+                "name": "Kegel cool-down",
+                "rounds": 20,
+                "steps": [
+                    {"kind": "work", "exercise": "Contract", "seconds": 1},
+                    {"kind": "work", "exercise": "Relax", "seconds": 1},
+                ],
+            },
+        ],
+        # target_sets is left off a single-set item on purpose: the label builder
+        # would render "1 sets".
+        "items": [
+            {"routine": "Kegel warm-up"},
+            {"routine": "Kegel endurance hold", "target_sets": 2},
+            {"routine": "Kegel cool-down"},
+        ],
+    },
+]
+
+
+def _template_by_id(template_id):
+    for tpl in CHALLENGE_TEMPLATES:
+        if tpl["id"] == template_id:
+            return tpl
+    return None
+
+
+def _routine_seconds(routine):
+    return sum(s["seconds"] for s in routine["steps"]) * routine["rounds"]
+
+
+def _template_view(tpl):
+    """What the picker shows: enough to judge a template without starting it."""
+    routines = {r["name"]: r for r in tpl["routines"]}
+    items = []
+    for item in tpl["items"]:
+        routine = routines[item["routine"]]
+        items.append({
+            "name": item["routine"],
+            "sets": item.get("target_sets"),
+            "rounds": routine["rounds"],
+            "seconds": _routine_seconds(routine),
+        })
+    return {
+        "id": tpl["id"],
+        "name": tpl["name"],
+        "summary": tpl["summary"],
+        "technique": tpl.get("technique", []),
+        "days": tpl["days"],
+        "items": items,
+        "total_seconds": sum(
+            _routine_seconds(routines[i["routine"]]) * (i.get("target_sets") or 1)
+            for i in tpl["items"]
+        ),
+    }
+
+
+def _find_or_create_exercise(conn, name, measure="reps"):
+    """The library row for a template's exercise, created if it is missing.
+
+    Matched case-insensitively on name and never on an archived row, so a
+    template started twice reuses the same exercise rather than accumulating
+    near-duplicates.
+    """
+    row = conn.execute(
+        "SELECT id FROM exercises WHERE archived = 0 AND LOWER(name) = LOWER(?) "
+        "ORDER BY id ASC LIMIT 1",
+        (name,),
+    ).fetchone()
+    if row is not None:
+        return row["id"]
+    cur = conn.execute(
+        "INSERT INTO exercises (name, equipment, category, is_custom, archived, created_at, "
+        "updated_at, measure) VALUES (?, 'Bodyweight', NULL, 1, 0, ?, ?, ?)",
+        (name, _now_ts(), _now_ts(), measure),
+    )
+    return cur.lastrowid
+
+
+def _find_or_create_routine(conn, spec):
+    """The routine exercise for a template step-list, created if missing.
+
+    An existing routine of the same name is returned untouched — its steps may
+    have been tuned since, and a template start is not a reason to overwrite
+    them.
+    """
+    row = conn.execute(
+        "SELECT id, is_routine FROM exercises WHERE archived = 0 AND LOWER(name) = LOWER(?) "
+        "ORDER BY id ASC LIMIT 1",
+        (spec["name"],),
+    ).fetchone()
+    if row is not None and _row_value(row, "is_routine"):
+        return row["id"]
+
+    stamp = _now_ts()
+    if row is not None:
+        exercise_id = row["id"]  # same name, but not yet a routine — give it steps
+    else:
+        cur = conn.execute(
+            "INSERT INTO exercises (name, equipment, category, is_custom, archived, created_at, "
+            "updated_at, measure) VALUES (?, 'Bodyweight', NULL, 1, 0, ?, ?, 'duration')",
+            (spec["name"], stamp, stamp),
+        )
+        exercise_id = cur.lastrowid
+
+    for order, step in enumerate(spec["steps"]):
+        step_exercise_id = (
+            _find_or_create_exercise(conn, step["exercise"], measure="duration")
+            if step.get("exercise")
+            else None
+        )
+        conn.execute(
+            "INSERT INTO routine_steps (exercise_id, sort_order, kind, seconds, "
+            "step_exercise_id, label, created_at) VALUES (?, ?, ?, ?, ?, NULL, ?)",
+            (exercise_id, order, step["kind"], step["seconds"], step_exercise_id, stamp),
+        )
+    conn.execute(
+        "UPDATE exercises SET is_routine = 1, routine_rounds = ?, measure = 'duration', "
+        "updated_at = ? WHERE id = ?",
+        (spec["rounds"], stamp, exercise_id),
+    )
+    return exercise_id
+
+
+@app.route("/api/challenge-templates")
+def api_challenge_templates():
+    return jsonify({"templates": [_template_view(t) for t in CHALLENGE_TEMPLATES]})
+
+
+@app.route("/api/challenges/from-template", methods=["POST"])
+def api_start_challenge_from_template():
+    """Create a challenge, its items, and any exercises they need, in one go."""
+    data = request.get_json(force=True, silent=True) or {}
+    tpl = _template_by_id((data.get("template") or "").strip())
+    if tpl is None:
+        return jsonify({"error": "no such template"}), 400
+
+    start = (data.get("start_date") or "").strip() or date.today().isoformat()
+    try:
+        start_date = date.fromisoformat(start)
+    except ValueError:
+        return jsonify({"error": "start_date must be YYYY-MM-DD"}), 400
+    # "end_date" in the body wins, including an empty string for open-ended.
+    if "end_date" in data:
+        end = (data.get("end_date") or "").strip() or None
+    else:
+        end = (start_date + timedelta(days=tpl["days"] - 1)).isoformat()
+    err = _validate_challenge_dates(start, end)
+    if err:
+        return jsonify({"error": err}), 400
+
+    name = (data.get("name") or "").strip()[:80] or tpl["name"]
+    kind, interval, weekdays, err = _resolve_schedule({**tpl["schedule"], **data})
+    if err:
+        return jsonify({"error": err}), 400
+
+    db = get_db()
+    stamp = _now_ts()
+    order = db.execute("SELECT COALESCE(MAX(sort_order), -1) + 1 AS n FROM challenges").fetchone()["n"]
+    cur = db.execute(
+        "INSERT INTO challenges (name, start_date, end_date, sort_order, archived, created_at, "
+        "updated_at, schedule_kind, schedule_interval, schedule_weekdays) "
+        "VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?)",
+        (name, start, end, order, stamp, stamp, kind, interval, weekdays),
+    )
+    challenge_id = cur.lastrowid
+
+    routines = {r["name"]: r for r in tpl["routines"]}
+    next_order = db.execute(
+        "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM challenge_items"
+    ).fetchone()[0]
+    for offset, item in enumerate(tpl["items"]):
+        exercise_id = _find_or_create_routine(db, routines[item["routine"]])
+        sets = item.get("target_sets")
+        target = _exercise_target_text(sets, None, None)
+        label = f"{item['routine']}{' · ' + target if target else ''}"
+        db.execute(
+            "INSERT INTO challenge_items (label, sort_order, archived, item_type, exercise_id, "
+            "target_sets, challenge_id, created_at, updated_at) "
+            "VALUES (?, ?, 0, 'exercise', ?, ?, ?, ?, ?)",
+            (label, next_order + offset, exercise_id, sets, challenge_id, stamp, stamp),
+        )
+    db.commit()
+    return jsonify({"status": "created", "id": challenge_id}), 201
+
+
 @app.route("/api/challenges/<int:challenge_id>/celebrated", methods=["POST"])
 def api_mark_celebrated(challenge_id):
     """Record that the end-of-challenge celebration has been shown.
@@ -4316,6 +4581,11 @@ def api_reminders():
                 "time": cfg["weighin_time"],
                 "last_sent": _get_app_state(db, "weighin_reminder_last_sent"),
             },
+            "quote": {
+                "enabled": cfg["quote_enabled"],
+                "time": cfg["quote_time"],
+                "last_sent": _get_app_state(db, "stoic_quote_last_sent"),
+            },
         }
     )
 
@@ -4329,8 +4599,8 @@ def api_notify_services():
 @app.route("/api/notify-test", methods=["POST"])
 def api_notify_test():
     data = request.get_json(force=True, silent=True) or {}
-    message = (data.get("message") or "").strip() or "Test notification from Gym Tracker 💪"
-    ok, err = send_notification(message, title="Gym Tracker test")
+    message = (data.get("message") or "").strip() or "Test notification from Goal Tracker 💪"
+    ok, err = send_notification(message, title="Goal Tracker test")
     if ok:
         return jsonify({"status": "sent"})
     return jsonify({"status": "failed", "error": err}), 502
@@ -4665,7 +4935,7 @@ def api_restore():
     uploaded.save(tmp_path)
     if not _is_valid_backup(tmp_path):
         os.remove(tmp_path)
-        return jsonify({"error": "not a valid Gym Tracker backup file"}), 400
+        return jsonify({"error": "not a valid Goal Tracker backup file"}), 400
     close_db()
     os.replace(tmp_path, DB_PATH)
     init_db()  # backfill any columns/seeds added since the backup was taken
@@ -4709,6 +4979,7 @@ def api_debug():
             "reminders": cfg,
             "challenge_reminder_last_sent": _get_app_state(db, "challenge_reminder_last_sent"),
             "weighin_reminder_last_sent": _get_app_state(db, "weighin_reminder_last_sent"),
+            "stoic_quote_last_sent": _get_app_state(db, "stoic_quote_last_sent"),
             "python_version": sys.version.split()[0],
             "flask_version": importlib.metadata.version("flask"),
             "platform": platform.platform(),
@@ -4750,7 +5021,7 @@ def _challenge_reminder_tick(now, conn):
         names = ", ".join(outstanding)
         send_notification(
             f"Still to do today: {names} 💪",
-            title="Gym Tracker",
+            title="Goal Tracker",
         )
 
 
@@ -4775,11 +5046,38 @@ def _weighin_reminder_tick(now, conn):
     # Skip if they already stepped on the scale today.
     if not _weighed_in_on(conn, today_iso):
         send_notification(
-            "Weigh-in — log your weight in Gym Tracker."
+            "Weigh-in — log your weight in Goal Tracker."
             if daily
-            else "Weekly weigh-in — log your weight in Gym Tracker.",
-            title="Gym Tracker",
+            else "Weekly weigh-in — log your weight in Goal Tracker.",
+            title="Goal Tracker",
         )
+
+
+def _next_stoic_quote(conn):
+    """Walk the list in order rather than picking at random, so a quote can't
+    repeat the next morning — every one is seen before any comes round again."""
+    try:
+        last = int(_get_app_state(conn, "stoic_quote_last_index") or -1)
+    except ValueError:
+        last = -1
+    idx = (last + 1) % len(STOIC_QUOTES)
+    _set_app_state(conn, "stoic_quote_last_index", str(idx))
+    return STOIC_QUOTES[idx]
+
+
+def _stoic_quote_tick(now, conn):
+    cfg = get_reminders_config()
+    if not (cfg["quote_enabled"] and cfg["notify_service"]):
+        return
+    target = _parse_hhmm(cfg["quote_time"])
+    if target is None or now.time() < target:
+        return
+    today_iso = now.date().isoformat()
+    if _get_app_state(conn, "stoic_quote_last_sent") == today_iso:
+        return
+    _set_app_state(conn, "stoic_quote_last_sent", today_iso)
+    text, author = _next_stoic_quote(conn)
+    send_notification(f"“{text}” — {author}", title="Goal Tracker")
 
 
 def _garmin_sync_tick(now, conn):
@@ -4814,6 +5112,7 @@ def _background_loop():
                 _garmin_sync_tick(now, conn)
                 _challenge_reminder_tick(now, conn)
                 _weighin_reminder_tick(now, conn)
+                _stoic_quote_tick(now, conn)
                 _prune_change_log(conn)
                 conn.commit()
             finally:
@@ -4841,7 +5140,7 @@ if __name__ == "__main__":
 
     signal.signal(signal.SIGTERM, _handle_shutdown_signal)
     init_db()
-    _log(f"starting Gym Tracker {APP_VERSION}")
+    _log(f"starting Goal Tracker {APP_VERSION}")
     _log(_api_access_summary())
     threading.Thread(target=_background_loop, daemon=True).start()
     port = int(os.environ.get("GYM_PORT", "8099"))

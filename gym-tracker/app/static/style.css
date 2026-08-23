@@ -479,6 +479,28 @@ input:focus, select:focus { outline: 2px solid var(--accent-soft); border-color:
 .user-id { font-family: ui-monospace, Menlo, monospace; font-size: 0.8rem; word-break: break-all; background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 0.5rem; }
 .empty-state { color: var(--text-muted); font-size: 0.85rem; text-align: center; padding: 0.5rem; }
 
+/* Challenge templates */
+.tpl-card {
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--surface-2); padding: 0.85rem; margin-bottom: 0.8rem;
+}
+.tpl-card:last-child { margin-bottom: 0; }
+.tpl-card h3 { margin: 0 0 0.3rem; font-size: 0.98rem; }
+.tpl-summary { margin: 0 0 0.6rem; font-size: 0.85rem; line-height: 1.45; color: var(--text-muted); }
+.tpl-items { list-style: none; margin: 0 0 0.6rem; padding: 0; }
+.tpl-items li {
+  display: flex; justify-content: space-between; gap: 0.6rem; align-items: baseline;
+  padding: 0.35rem 0; border-bottom: 1px solid var(--border); font-size: 0.86rem;
+}
+.tpl-items li:last-child { border-bottom: none; }
+.tpl-meta { color: var(--text-muted); font-size: 0.78rem; white-space: nowrap; }
+p.tpl-meta { margin: 0 0 0.6rem; white-space: normal; }
+.tpl-tips { margin: 0 0 0.7rem; font-size: 0.82rem; color: var(--text-muted); }
+.tpl-tips summary { cursor: pointer; color: var(--accent); }
+.tpl-tips ul { margin: 0.4rem 0 0; padding-left: 1.1rem; line-height: 1.45; }
+.tpl-tips li { margin-bottom: 0.3rem; }
+.tpl-start { width: 100%; }
+
 /* Library tabs */
 .lib-tabs { display: flex; gap: 0.5rem; margin-bottom: 0.9rem; }
 .lib-tab {
@@ -624,9 +646,16 @@ input:focus, select:focus { outline: 2px solid var(--accent-soft); border-color:
 .player-controls button { flex: 1; padding: 0.9rem; font-size: 1rem; }
 .player-stop { align-self: center; color: var(--danger); }
 
-/* Work and rest have to be tellable apart without reading anything. */
-.player.is-work { background: var(--accent-soft); }
-.player.is-rest { background: var(--accent-2-soft); }
+/* Work and rest have to be tellable apart without reading anything.
+   The tints are deliberately translucent tokens, so each is layered over the
+   page background rather than set alone: on its own, a 14%-alpha background
+   replaces the player's opaque one and the app shows through mid-routine. */
+.player.is-work {
+  background: linear-gradient(var(--accent-soft), var(--accent-soft)), var(--bg);
+}
+.player.is-rest {
+  background: linear-gradient(var(--accent-2-soft), var(--accent-2-soft)), var(--bg);
+}
 .player-cues { display: flex; flex-wrap: wrap; gap: 0.5rem; }
 .player-cue {
   border: 1px solid var(--border); background: var(--surface-2); color: var(--text-muted);

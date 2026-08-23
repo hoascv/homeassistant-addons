@@ -1,4 +1,4 @@
-"""Shared pytest fixtures for the Gym Tracker Flask app.
+"""Shared pytest fixtures for the Goal Tracker Flask app.
 
 `pytest.ini` adds `app/` to `sys.path` (via `pythonpath`), so `import app`
 resolves to `app/app.py` — the same module the container runs.

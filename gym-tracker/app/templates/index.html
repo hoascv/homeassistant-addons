@@ -3,13 +3,13 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
-<title>Gym Tracker</title>
+<title>Goal Tracker</title>
 <link rel="stylesheet" href="static/style.css?v={{ app_version }}">
 </head>
 <body>
 <header class="topbar">
   <span class="topbar-icon">💪</span>
-  <h1>Gym Tracker</h1>
+  <h1>Goal Tracker</h1>
   <button type="button" class="ha-status-dot" id="ha-status-dot" aria-label="Home Assistant connection status"></button>
   <button class="topbar-icon-btn" id="library-open-btn" aria-label="Library">🏋️</button>
   <button class="topbar-icon-btn" id="garmin-open-btn" aria-label="Garmin Connect">⌚</button>
@@ -60,6 +60,7 @@
   <!-- Challenges: one card each, built by app.js -->
   <div id="challenge-cards"></div>
   <button type="button" class="btn-secondary full" id="challenge-new-btn">+ New challenge</button>
+  <button type="button" class="link-btn full" id="challenge-template-btn">Start from a template</button>
 
   <!-- Recent workouts -->
   <section class="card" id="recent-card">
@@ -305,6 +306,22 @@
 
 <!-- Challenge-items management sheet (typed builder) -->
 <!-- Create / edit a challenge -->
+<!-- Challenge templates -->
+<div class="sheet-backdrop" id="challenge-template-backdrop">
+  <div class="sheet">
+    <h2>Start from a template</h2>
+    <p class="sheet-subtext">
+      A ready-made challenge: the routines are built for you and any exercises
+      they need are added to your library. Anything you already have is reused,
+      never overwritten — and everything stays editable afterwards.
+    </p>
+    <div id="challenge-template-list"></div>
+    <div class="sheet-actions">
+      <button type="button" class="btn-secondary" id="challenge-template-close">Close</button>
+    </div>
+  </div>
+</div>
+
 <div class="sheet-backdrop" id="challenge-edit-backdrop">
   <div class="sheet">
     <h2 id="challenge-edit-title">New challenge</h2>
@@ -409,7 +426,7 @@
   <div class="sheet">
     <h2>Reminders</h2>
     <p class="sheet-subtext">
-      Gym Tracker can nudge you through a Home Assistant notify service. Turn each
+      Goal Tracker can nudge you through a Home Assistant notify service. Turn each
       reminder on and set its time on the add-on's <strong>Configuration</strong> tab;
       this screen shows their current status and lets you send a test.
     </p>
@@ -666,7 +683,8 @@
   window.GYM = {
     goal: {{ goal | tojson }},
     challengeReminderEnabled: {{ challenge_reminder_enabled | tojson }},
-    weighinReminderEnabled: {{ weighin_reminder_enabled | tojson }}
+    weighinReminderEnabled: {{ weighin_reminder_enabled | tojson }},
+    quotes: {{ stoic_quotes | tojson }}
   };
 </script>
 <script src="static/app.js?v={{ app_version }}"></script>

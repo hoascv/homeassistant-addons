@@ -77,6 +77,35 @@ def test_optional_browser_features_are_guarded():
     assert '"wakeLock" in navigator' in js
 
 
+def test_the_wake_lock_is_requested_after_the_timer_starts():
+    """requestWakeLock() bails out when no routine is running, so asking for the
+    lock before playerTimer is assigned silently never takes it — and the screen
+    sleeps mid-routine, which is the one thing the lock exists to prevent."""
+    js = _read(os.path.join(STATIC, "app.js"))
+    start = js.index('document.getElementById("player-start").addEventListener')
+    body = js[start:js.index("function stopPlayerTimer", start)]
+    assert "requestWakeLock()" in body, "the Start handler never asks for the wake lock"
+    assert body.index("playerTimer = setInterval") < body.index("requestWakeLock()"), (
+        "requestWakeLock() runs before playerTimer is set, so its guard rejects it"
+    )
+
+
+def test_the_player_stays_opaque_in_every_state():
+    """The player covers the whole screen, and --accent-soft and friends are
+    translucent. Setting one as the background on its own lets the app show
+    through mid-routine, which reads as two screens drawn on top of each other."""
+    css = _read(os.path.join(STATIC, "style.css"))
+    for state in ("is-work", "is-rest"):
+        rule = re.search(r"\.player\.%s \{(.*?)\}" % state, css, re.S)
+        assert rule, f".player.{state} has no rule"
+        background = re.search(r"background:([^;]+);", rule.group(1))
+        assert background, f".player.{state} sets no background"
+        assert "var(--bg)" in background.group(1), (
+            f".player.{state} paints a translucent tint without layering it over "
+            "var(--bg), so the page behind shows through"
+        )
+
+
 def test_the_stylesheet_keeps_the_toast_above_the_player():
     """A failure toast raised mid-workout must not appear behind the thing that
     caused it."""

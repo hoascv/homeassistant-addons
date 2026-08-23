@@ -7,7 +7,7 @@ Personal Home Assistant add-on repository.
 - **[Coop Tracker](coop-tracker/DOCS.md)** — log egg collection, coop
   cleaning, and feeding for your chickens from your phone.
   ([architecture](coop-tracker/ARCHITECTURE.md))
-- **[Gym Tracker](gym-tracker/DOCS.md)** — track a weight / body-fat goal,
+- **[Goal Tracker](gym-tracker/DOCS.md)** — track a weight / body-fat goal,
   home workouts, and a daily challenge, with reminders through a Home
   Assistant notify service.
 - **[Detection Hub](detection-hub/DOCS.md)** — object detection on the CPU:
@@ -69,7 +69,7 @@ no published port at all.
 2. Click the **⋮** menu (top right) → **Repositories**.
 3. Add the URL of this repository (once pushed to a Git host, e.g.
    `https://github.com/hoascv/homeassistant-addons`).
-4. Find **Coop Tracker** or **Gym Tracker** in the store and install it.
+4. Find **Coop Tracker** or **Goal Tracker** in the store and install it.
 
 ### Testing locally without Git
 

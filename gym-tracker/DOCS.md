@@ -1,4 +1,4 @@
-# Gym Tracker
+# Goal Tracker
 
 Track a body-weight / body-fat goal, home workouts, and a daily challenge —
 from your phone, through Home Assistant's sidebar (ingress). Everything is
@@ -151,6 +151,10 @@ You can run **several challenges at once**. Each is a named set of items you
 tick off daily, with its own streak and its own card on Home. **+ New
 challenge** creates one; **Edit challenge** renames it or changes its dates.
 
+**Start from a template** builds a whole challenge for you — its schedule, its
+routines, and any exercises those routines need. See
+[Challenge templates](#challenge-templates) below.
+
 A challenge also has a **schedule**: every day (the default), **every N days**,
 or **certain days of the week**. Days it isn't scheduled are **rest days** — the
 card still shows, marked *Rest day* with the next due date, but nothing is owed.
@@ -263,17 +267,67 @@ logged workout to change its sets, reps, weight, or date. (Workouts created
 by the challenge check-off are managed by the challenge and marked
 accordingly.)
 
+## Challenge templates
+
+**Start from a template**, under the challenge list, offers ready-made
+challenges. Each one lists what it contains — the routines, how long each takes,
+and how long the whole thing takes a day — before you commit to it. Starting one
+creates the challenge, its items, the routines behind them, and any exercises
+those routines reference.
+
+Nothing is overwritten. An exercise or routine you already have, matched by
+name, is **reused as it is** — so if you have tuned a routine's steps, starting
+the template again keeps your version. Everything a template creates is an
+ordinary challenge afterwards: rename it, change its schedule, add or remove
+items, edit the routines.
+
+Templates are defined in the add-on rather than stored in your database, so
+they don't take up space until you start one, and a corrected template arrives
+with an update.
+
+### Advanced Kegel
+
+A 30-day daily pelvic-floor challenge, in three parts:
+
+| Item | What it runs |
+| --- | --- |
+| Kegel warm-up | 10 rounds of 1s squeeze / 1s relax |
+| Kegel endurance hold | 2 sets of 10 rounds: 10s hold, 10s rest |
+| Kegel cool-down | 20 rounds of 1s hard squeeze / 1s relax |
+
+About 7½ minutes a day if you do both endurance sets back to back. The player
+counts one run of a routine, which is why the endurance item says **2 sets** —
+press ▶, then press it again for the second set, and tick the item once both are
+done.
+
+The cool-down calls for a *harder* squeeze at the same 1-second rhythm as the
+warm-up. That's a cue rather than a different movement, so both reuse the same
+**Contract** and **Relax** steps instead of adding near-duplicate rows to your
+library.
+
+**Technique**, shown under the template: target the muscles you'd use to stop
+the flow of urine midstream; keep breathing steady and don't flex your stomach,
+thighs, or buttocks. The endurance sets can be repeated up to **6 times a day**,
+spread across morning, afternoon, and evening — the challenge ticks once a day,
+so treat extra rounds as a bonus rather than something to record.
+
 ## Reminders
 
-Gym Tracker can send two reminders through a Home Assistant **notify
-service** (e.g. a mobile-app notification). Both are **off by default** and
-configured on the add-on's **Configuration** tab:
+Goal Tracker can send three notifications through a Home Assistant **notify
+service** (e.g. a mobile-app notification), all configured on the add-on's
+**Configuration** tab:
 
 - **Challenge reminder** — a daily nudge at `challenge_reminder_time`. It
   only fires if you haven't already completed the whole challenge that day.
+  Off by default.
 - **Weigh-in reminder** — fires at `weighin_reminder_time`, either every day or
   once a week, depending on `weighin_reminder_weekday`. Skipped if you already
-  logged a weight that day.
+  logged a weight that day. Off by default.
+- **Daily stoic quote** — one stoic line at `stoic_quote_time` (default
+  `07:00`), **on by default**. The quotes are walked in order rather than
+  picked at random, so you never get the same one two mornings running — every
+  quote in the list is seen before any repeats. It's the same list the app
+  shows when you finish a day's challenge.
 
 Set **notify_service** to the service name to use (without the `notify.`
 prefix, e.g. `mobile_app_pixel`). The in-app 🔔 reminders sheet shows the
@@ -293,7 +347,7 @@ locally, under the add-on's `/data` directory (so it survives restarts and is
 included in Home Assistant backups). The token refreshes itself, so you
 normally only sign in once.
 
-Once connected, Gym Tracker syncs automatically in the background (every
+Once connected, Goal Tracker syncs automatically in the background (every
 `garmin_sync_interval_hours`, default 6), and the ⌚ sheet has a **Sync now**
 button for an immediate pull. The home **Garmin** card shows your latest sleep,
 stress and Body Battery, plus recent activities. Use **Disconnect** to remove
@@ -349,7 +403,7 @@ the ⌚ sheet charts the **last 14 days** of sleep, stress, Body Battery or
 resting heart rate.
 
 Your watch only reaches Garmin when it syncs with the Garmin Connect phone
-app, which can lag by days. Gym Tracker treats that as normal rather than as
+app, which can lag by days. Goal Tracker treats that as normal rather than as
 missing data:
 
 - Each sync refreshes the last **7 days** and then chases any **holes** as far
@@ -401,6 +455,9 @@ the next sync usually recovers.
   trend — more readings let the day-to-day noise average out.
 - **weighin_reminder_time**: 24-hour `HH:MM` time for the weigh-in reminder
   (default `08:00`).
+- **stoic_quote_enabled**: turn the daily stoic quote on/off (default `true`).
+- **stoic_quote_time**: 24-hour `HH:MM` time for the daily quote (default
+  `07:00`).
 - **restrict_to_user_ids**: comma-separated Home Assistant user IDs allowed
   to open the add-on. Empty (default) means any user who can see the
   sidebar entry may use it. Find your own user ID in the ⚙️ settings sheet.

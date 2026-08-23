@@ -39,25 +39,12 @@ function toast(msg, { multiplier = 1 } = {}) {
 
 const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
 
-// Short enough to read in a toast, plain enough to not need footnotes.
-const STOIC_QUOTES = [
-  ["You have power over your mind — not outside events.", "Marcus Aurelius"],
-  ["Waste no more time arguing what a good man should be. Be one.", "Marcus Aurelius"],
-  ["We suffer more often in imagination than in reality.", "Seneca"],
-  ["Difficulties strengthen the mind, as labor does the body.", "Seneca"],
-  ["He who fears death will never do anything worthy of a living man.", "Seneca"],
-  ["It's not what happens to you, but how you react that matters.", "Epictetus"],
-  ["No man is free who is not master of himself.", "Epictetus"],
-  ["First say to yourself what you would be, then do what you have to do.", "Epictetus"],
-  ["The impediment to action advances action. What stands in the way becomes the way.", "Marcus Aurelius"],
-  ["Every new beginning comes from some other beginning's end.", "Seneca"],
-  ["Wealth consists not in having great possessions, but in having few wants.", "Epictetus"],
-  ["If it is not right, do not do it. If it is not true, do not say it.", "Marcus Aurelius"],
-  ["Man conquers the world by conquering himself.", "Zeno of Citium"],
-  ["While we wait for life, life passes.", "Seneca"],
-  ["Don't explain your philosophy. Embody it.", "Epictetus"],
-  ["The best revenge is to be unlike him who performed the injury.", "Marcus Aurelius"],
-];
+// Served by the app (window.GYM.quotes) so the celebration toast and the daily
+// quote notification always draw on the same list; the fallback only matters if
+// the page somehow renders without it.
+const STOIC_QUOTES = (window.GYM && window.GYM.quotes && window.GYM.quotes.length)
+  ? window.GYM.quotes
+  : [["You have power over your mind — not outside events.", "Marcus Aurelius"]];
 
 let lastQuoteIndex = -1;
 function pickQuote() {
@@ -1024,6 +1011,76 @@ document.getElementById("challenge-cards").addEventListener("click", async (e) =
 });
 
 document.getElementById("challenge-new-btn").addEventListener("click", () => openChallengeEditor(null));
+
+// --- Challenge templates ----------------------------------------------------
+// fmtDuration rounds to whole minutes, which reads as "0m" for a 20-second
+// cool-down. A template list is mostly short routines, so it needs seconds.
+function fmtShortSecs(sec) {
+  if (sec == null) return "";
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  if (!m) return `${s}s`;
+  return s ? `${m}m ${s}s` : `${m}m`;
+}
+
+document.getElementById("challenge-template-btn").addEventListener("click", () => {
+  openSheet("challenge-template-backdrop");
+  loadChallengeTemplates();
+});
+document.getElementById("challenge-template-close").addEventListener("click", () => {
+  closeSheet("challenge-template-backdrop");
+});
+
+async function loadChallengeTemplates() {
+  const host = document.getElementById("challenge-template-list");
+  host.innerHTML = '<p class="empty-state">Loading…</p>';
+  let data;
+  try { data = await fetchJSON("api/challenge-templates"); }
+  catch (e) { host.innerHTML = '<p class="empty-state">Could not load templates.</p>'; return; }
+
+  const templates = data.templates || [];
+  if (!templates.length) {
+    host.innerHTML = '<p class="empty-state">No templates yet.</p>';
+    return;
+  }
+  host.innerHTML = templates.map((tpl) => {
+    const items = tpl.items.map((it) => `
+      <li>${escapeHtml(it.name)}${it.sets ? ` · ${it.sets} sets` : ""}
+        <span class="tpl-meta">${it.rounds}× · ${fmtShortSecs(it.seconds)}</span></li>`).join("");
+    const tips = (tpl.technique || [])
+      .map((tip) => `<li>${escapeHtml(tip)}</li>`).join("");
+    return `
+      <div class="tpl-card">
+        <h3>${escapeHtml(tpl.name)}</h3>
+        <p class="tpl-summary">${escapeHtml(tpl.summary)}</p>
+        <ul class="tpl-items">${items}</ul>
+        <p class="tpl-meta">${tpl.days} days · about ${fmtShortSecs(tpl.total_seconds)} a day</p>
+        ${tips ? `<details class="tpl-tips"><summary>Technique</summary><ul>${tips}</ul></details>` : ""}
+        <button type="button" class="btn-primary tpl-start" data-template="${escapeHtml(tpl.id)}">Start this challenge</button>
+      </div>`;
+  }).join("");
+}
+
+document.getElementById("challenge-template-list").addEventListener("click", async (e) => {
+  const btn = e.target.closest(".tpl-start");
+  if (!btn) return;
+  btn.disabled = true;
+  try {
+    await fetchJSON("api/challenges/from-template", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ template: btn.dataset.template, start_date: todayISO() }),
+    });
+    closeSheet("challenge-template-backdrop");
+    loadChallenge();
+    loadChallengeStats();
+    loadExercises();
+    toast("Challenge started.");
+  } catch (err) {
+    toast(err.message);
+    btn.disabled = false;
+  }
+});
 
 function syncScheduleFields() {
   const kind = document.getElementById("challenge-edit-kind").value;
@@ -2407,11 +2464,14 @@ document.getElementById("player-start").addEventListener("click", () => {
   document.getElementById("player-round").hidden = false;
   document.getElementById("player-pause").textContent = "Pause";
 
-  requestWakeLock();
   cueStep(playerTimeline[0]);
   playerLastIndex = 0;
   tickPlayer();
   playerTimer = setInterval(tickPlayer, 200);
+  // After playerTimer is set, never before: requestWakeLock() refuses to take a
+  // lock when no routine is running, and that guard read as "not running" when
+  // this call sat above the setInterval.
+  requestWakeLock();
 });
 
 function stopPlayerTimer() {
@@ -2779,7 +2839,8 @@ async function loadReminders() {
     <div class="reminder-line">${badge(data.challenge.enabled)}<span>Daily challenge · ${escapeHtml(data.challenge.time)}</span></div>
     <div class="reminder-line">${badge(data.weighin.enabled)}<span>Weigh-in · ${
       data.weighin.weekday === "daily" ? "every day" : escapeHtml(data.weighin.weekday)
-    } ${escapeHtml(data.weighin.time)}</span></div>`;
+    } ${escapeHtml(data.weighin.time)}</span></div>
+    <div class="reminder-line">${badge(data.quote.enabled)}<span>Daily stoic quote · ${escapeHtml(data.quote.time)}</span></div>`;
 
   const select = document.getElementById("notify-service-select");
   let svc;
