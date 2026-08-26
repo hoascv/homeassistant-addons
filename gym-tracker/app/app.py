@@ -19,7 +19,7 @@ from flask import Flask, Response, g, jsonify, render_template, request, send_fi
 
 import garmin_client
 
-APP_VERSION = "1.39.1"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.40.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("GYM_DB_PATH", "/data/gym.db")
 OPTIONS_PATH = os.environ.get("GYM_OPTIONS_PATH", "/data/options.json")
@@ -2719,9 +2719,17 @@ def api_exercises():
             "e.is_routine, e.routine_rounds, "
             "(SELECT COALESCE(SUM(rs.seconds), 0) FROM routine_steps rs"
             " WHERE rs.exercise_id = e.id) * e.routine_rounds AS routine_seconds, "
+            # How often this has actually been logged. The picker orders on it
+            # so the handful of exercises somebody really does rise to the top
+            # of their group, instead of an alphabet that puts "Arnold press"
+            # above the squat they do three times a week.
+            "(SELECT COUNT(*) FROM workout_logs wl WHERE wl.exercise_id = e.id) AS log_count, "
             "i.updated_at AS image_v FROM exercises e "
             "LEFT JOIN exercise_images i ON i.exercise_id = e.id "
-            "WHERE e.archived = 0 ORDER BY e.equipment ASC, e.name ASC"
+            "WHERE e.archived = 0 "
+            # Name remains the tie-break, so everything never logged keeps the
+            # alphabetical order it has always had.
+            "ORDER BY e.equipment ASC, log_count DESC, e.name ASC"
         )
     ]
     groups = defaultdict(list)

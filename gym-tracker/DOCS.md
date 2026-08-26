@@ -69,6 +69,18 @@ two and edit earlier entries to correct them.
 
 ## The library: exercises and supplements
 
+### The order exercises appear in
+
+Exercises are grouped by equipment, and **within each group the ones you log
+most often come first**. An alphabet is the wrong order for a list you scroll
+while logging: it puts *Arnold press* above the squat you do three times a week.
+
+Only what you have actually logged moves. Anything never logged keeps its
+alphabetical place, and the equipment groups themselves do not reorder — so the
+list stays recognisable, it just brings your handful of regulars to the top of
+each group. The ranking is by **how many times** something has been logged, not
+by how recently, so a one-off yesterday does not displace a weekly staple.
+
 ### Counted or timed
 
 Some exercises are held rather than repeated. Each exercise in the 🏋️ Library

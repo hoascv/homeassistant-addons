@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.40.0
+
+- **The exercise picker now puts what you actually do at the top.** Within each
+  equipment group, exercises are ordered by how many times they have been
+  logged, most first. An alphabet put "Arnold press" above the squat done three
+  times a week; now the handful you really use rise to the top of their group.
+- Everything never logged keeps its alphabetical order, and the equipment
+  grouping itself is unchanged — only the order inside each group moves, so the
+  list stays recognisable.
+- Ordering is by **count, not recency**: a one-off yesterday does not displace
+  something done every week.
+- `/api/exercises` now returns `log_count` per exercise.
+- The picker's cached list is invalidated after logging a set, so a set that
+  changes the ranking is reflected without reloading the page.
+
 ## 1.39.1
 
 - **The routine player went see-through once a routine started.** Its work and

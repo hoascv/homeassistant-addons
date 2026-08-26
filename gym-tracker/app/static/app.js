@@ -2136,6 +2136,10 @@ document.getElementById("workout-form").addEventListener("submit", async (e) => 
     resetWorkoutForm();
     loadWorkoutHistory(workoutFilterExerciseId);
     loadRecentWorkouts();
+    // The picker is ordered by how often each exercise has been logged, so the
+    // set just logged can change that order. Without this the cached list keeps
+    // yesterday's ranking until the page is reloaded.
+    exerciseGroups = [];
   } catch (err) { toast(err.message); }
 });
 
