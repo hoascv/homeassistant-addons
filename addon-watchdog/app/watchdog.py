@@ -49,12 +49,14 @@ STATS_PATHS = {
     "coop-tracker": ("http", 8099, "/api/stats"),
     "detection-hub": ("http", 8099, "/api/stats"),
     "electricity-tracker": ("http", 8099, "/api/stats"),
+    "knowledge": ("http", 8099, "/api/stats"),
 }
 
 PROBES = {
     "gym-tracker": Probe("http", 8099, "/", "web UI answers"),
     "coop-tracker": Probe("http", 8099, "/", "web UI answers"),
     "electricity-tracker": Probe("http", 8099, "/", "web UI answers"),
+    "knowledge": Probe("http", 8099, "/", "web UI answers"),
     # /api/health rather than /, because this add-on's page answers perfectly
     # well with a broken model or a dead capture thread. It returns 503 for
     # exactly those, and the rest of its state arrives in its status file.

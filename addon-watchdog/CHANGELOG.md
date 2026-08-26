@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.14.1
+
+- **The Knowledge add-on was invisible here.** It shipped without a `PROBES`
+  entry, so it did not appear on the dashboard and nothing reported on it —
+  exactly the gap the "every add-on has a probe decision" test exists to catch,
+  and which it duly caught. Probed on `/` like the other trackers, with
+  `/api/stats` read for its record counts.
+- Also added `electricity-tracker` and `knowledge` to the CI test matrix. Their
+  suites had never run in CI: the matrix listed five add-ons and had not grown
+  with the repository, so two add-ons' tests only ever ran on somebody's laptop.
+
 ## 1.14.0
 
 - Monitors the new **Electricity Tracker** add-on: probe and `/api/stats`
