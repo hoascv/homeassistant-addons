@@ -21,7 +21,7 @@ import eloverblik
 import saveeye
 import easee
 
-APP_VERSION = "1.11.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.11.1"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("ELECTRICITY_DB_PATH", "/data/electricity.db")
 OPTIONS_PATH = os.environ.get("ELECTRICITY_OPTIONS_PATH", "/data/options.json")
@@ -1119,6 +1119,61 @@ def _trim_session(session_rows):
     return session_rows[increases[0] - 1 : increases[-1] + 1], True
 
 
+# Below this, a claimed power is small enough that a poll's worth of it could
+# plausibly round away in the counter. Above it, energy must visibly move.
+STALE_READING_MIN_KWH = 0.1
+
+
+def _stale_reading(rows):
+    """Whether the newest sample is a frozen reading rather than a live one.
+
+    Easee's cloud serves a charger's last known state when it cannot reach it,
+    with no indication that it is doing so. Observed in the wild: `CHARGING` at
+    10.64 kW for 158 hours straight with `sessionEnergy` unchanged at 26.510 —
+    which, had it been real, would have been 1,677 kWh through one car.
+
+    Neither earlier check catches it. The power is far above the pause
+    threshold, and the add-on is polling perfectly happily, so the reading is
+    fresh by every measure except the one that matters.
+
+    The invariant that does catch it is physical: **if power is flowing, energy
+    must accumulate**. A charger drawing 10.6 kW adds about 0.9 kWh every
+    five-minute poll. So walk back over samples whose counter has not moved,
+    work out how much energy the claimed power should have delivered in that
+    span, and if it is more than a rounding error the charger is not doing what
+    it says. Scaling by the claimed power rather than using a fixed time window
+    is what keeps a genuine trickle charge from being called stale.
+    """
+    if not rows:
+        return None
+    newest = rows[-1]
+    power_w = newest["total_power_w"]
+    energy = newest["session_energy_kwh"]
+    if not power_w or power_w < easee.CHARGING_POWER_THRESHOLD_W or energy is None:
+        return None
+
+    oldest_same = newest
+    for row in reversed(rows[:-1]):
+        if row["session_energy_kwh"] is None or abs(row["session_energy_kwh"] - energy) > 0.0001:
+            break
+        oldest_same = row
+    if oldest_same is newest:
+        return None
+
+    seconds = (
+        datetime.fromisoformat(newest["ts_utc"]) - datetime.fromisoformat(oldest_same["ts_utc"])
+    ).total_seconds()
+    expected_kwh = power_w / 1000.0 * (seconds / 3600.0)
+    if expected_kwh <= STALE_READING_MIN_KWH:
+        return None
+    return {
+        "since": oldest_same["ts_utc"],
+        "hours": round(seconds / 3600.0, 1),
+        "claimed_kw": round(power_w / 1000.0, 2),
+        "expected_kwh": round(expected_kwh, 1),
+    }
+
+
 def easee_current_session(conn, opts, price_area, charger_id):
     """The current (or most recent) charging session's energy and cost, plus
     what the charger is doing right now.
@@ -1187,6 +1242,11 @@ def easee_current_session(conn, opts, price_area, charger_id):
     raw_status = newest["status"]
     reason_code = newest["reason_for_no_current"] if "reason_for_no_current" in newest.keys() else None
     status = easee.effective_status(raw_status, newest["total_power_w"], reason_code)
+    # A frozen reading outranks everything else: reporting CHARGING from numbers
+    # that have not moved in days is worse than admitting we do not know.
+    stale = _stale_reading(rows)
+    if stale:
+        status = "STALE"
 
     return {
         # What the charger is doing, which is not always what it says: Easee
@@ -1195,6 +1255,9 @@ def easee_current_session(conn, opts, price_area, charger_id):
         "raw_status": raw_status,
         "reason": easee.describe_reason(reason_code),
         "charging": status == "CHARGING",
+        # Set when the charger's own numbers have stopped moving while still
+        # claiming power — see _stale_reading.
+        "stale_reading": stale,
         "session_energy_kwh": session_energy,
         "total_power_w": newest["total_power_w"],
         "session_cost_dkk": cost_dkk,

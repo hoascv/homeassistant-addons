@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.11.1
+
+- **Fixed `CHARGING` being reported from a frozen reading.** Found by running
+  this code against a real database: Easee had reported `CHARGING` at 10.64 kW
+  for **158 continuous hours** with `sessionEnergy` unchanged at 26.510. Had
+  that power been real it would have been 1,677 kWh through one car — the whole
+  house used 547 kWh across every hour it had recorded. Easee's cloud serves a
+  charger's last known state when it cannot reach it, and says nothing about
+  doing so.
+- Neither existing check caught it. The power was far above the pause threshold
+  from 1.6.2, and the add-on was polling every five minutes, so the reading was
+  fresh by every measure except the one that mattered. What catches it is
+  physical: **if power is flowing, energy must accumulate.** A charger drawing
+  10.6 kW adds about 0.9 kWh per five-minute poll, so a counter that has not
+  moved while meaningful power is claimed is not charging, whatever it says.
+- The status now reads `STALE`, and the card says how long the numbers have been
+  frozen and how much energy that would have been. The test scales with the
+  claimed power rather than using a fixed window, so a genuine trickle charge is
+  never mislabelled — verified against the same real data, which flags the
+  frozen week and leaves the real charges alone.
+- The charging history was already correct here: a frozen run moves no energy,
+  so 1.7.1's trimming had already excluded it. That is now pinned by a test, because
+  a frozen week becoming a 1,677 kWh session would be the worse failure.
+
 ## 1.11.0
 
 - **Backup and restore**, in Settings. Download the whole database as a file, or

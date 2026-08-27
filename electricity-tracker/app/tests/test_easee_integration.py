@@ -765,3 +765,85 @@ def test_a_paused_and_resumed_charge_stays_one_session(conn):
     assert len(sessions) == 1
     assert sessions[0]["energy_kwh"] == 8.0  # not 5 + 8
     assert sessions[0]["duration_minutes"] == 360
+
+
+# --- A charger whose numbers have frozen ---
+#
+# Shaped from a real database: Easee reported CHARGING at 10.64 kW for 158
+# hours straight with sessionEnergy unchanged at 26.510 — 1,677 kWh, had it been
+# real, through one car. Easee serves a charger's last known state when it
+# cannot reach it, with nothing to say it is doing so.
+
+
+def _frozen_run(conn, hours=6, kwh=26.51, power_w=10643.0, start_hour=8):
+    """Samples five minutes apart with the counter and power both unmoving."""
+    for i in range(hours * 12):
+        minute = i * 5
+        ts = f"2026-08-16T{start_hour + minute // 60:02d}:{minute % 60:02d}:00+00:00"
+        _seed_easee_sample(conn, ts, session_energy_kwh=kwh, power_w=power_w)
+    conn.commit()
+
+
+def test_a_frozen_reading_is_not_reported_as_charging(conn):
+    _seed_flat_day(conn)
+    _frozen_run(conn)
+    session = electricityapp.easee_current_session(conn, _flat_opts(), "DK2", "EH1")
+    assert session["raw_status"] == "CHARGING"   # what Easee said
+    assert session["status"] == "STALE"           # what is actually knowable
+    assert session["charging"] is False
+
+
+def test_the_stale_report_says_why_it_cannot_be_true(conn):
+    _seed_flat_day(conn)
+    _frozen_run(conn, hours=6)
+    stale = electricityapp.easee_current_session(conn, _flat_opts(), "DK2", "EH1")["stale_reading"]
+    assert stale["claimed_kw"] == 10.64
+    assert stale["hours"] >= 5.9
+    # 10.64 kW for ~6 hours is ~64 kWh that the counter never recorded.
+    assert stale["expected_kwh"] > 60
+
+
+def test_genuine_charging_is_never_called_stale(conn):
+    """The counter moving is the whole difference, and a real charge moves it
+    on every poll."""
+    _seed_flat_day(conn)
+    for i in range(72):
+        minute = i * 5
+        ts = f"2026-08-16T{8 + minute // 60:02d}:{minute % 60:02d}:00+00:00"
+        _seed_easee_sample(conn, ts, session_energy_kwh=round(i * 0.887, 3), power_w=10643.0)
+    conn.commit()
+    session = electricityapp.easee_current_session(conn, _flat_opts(), "DK2", "EH1")
+    assert session["status"] == "CHARGING"
+    assert session["stale_reading"] is None
+
+
+def test_a_trickle_charge_is_not_called_stale(conn):
+    """Scaled by the claimed power, not a fixed window: 60 W over ten minutes is
+    0.01 kWh, which could round away in the counter and proves nothing."""
+    _seed_flat_day(conn)
+    for i in range(3):
+        _seed_easee_sample(conn, f"2026-08-16T08:{i * 5:02d}:00+00:00",
+                           session_energy_kwh=5.0, power_w=60.0)
+    conn.commit()
+    assert electricityapp.easee_current_session(conn, _flat_opts(), "DK2", "EH1")["stale_reading"] is None
+
+
+def test_an_idle_charger_is_not_called_stale(conn):
+    """Nothing plugged in: the counter is meant to sit still."""
+    _seed_flat_day(conn)
+    for i in range(24):
+        minute = i * 5
+        ts = f"2026-08-16T{8 + minute // 60:02d}:{minute % 60:02d}:00+00:00"
+        _seed_easee_sample(conn, ts, session_energy_kwh=4.0, status="DISCONNECTED", power_w=0.0)
+    conn.commit()
+    assert electricityapp.easee_current_session(conn, _flat_opts(), "DK2", "EH1")["stale_reading"] is None
+
+
+def test_a_frozen_run_contributes_no_energy_to_the_history(conn):
+    """The session logic already trims it, since no energy ever moved — this
+    pins that, because a frozen week must never become a 1,677 kWh session."""
+    _seed_flat_day(conn)
+    _frozen_run(conn, hours=6)
+    sessions = electricityapp.easee_sessions(conn, _flat_opts(), "DK2", "EH1", days=30,
+                                             now_local=_now())
+    assert sessions == []

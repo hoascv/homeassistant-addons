@@ -527,7 +527,9 @@ function renderEasee(easee) {
   const stale = isStale(session.measured_at);
   const pill = document.getElementById("easee-status-pill");
   pill.textContent = stale ? `${session.status || "–"} · ${age}` : session.status || "–";
-  pill.classList.toggle("pill-stale", stale);
+  // Two different kinds of stale: the reading is old (no recent poll), or the
+  // charger's own numbers have frozen while it still claims power.
+  pill.classList.toggle("pill-stale", stale || Boolean(session.stale_reading));
 
   document.getElementById("easee-power").textContent =
     session.total_power_w != null ? `${(session.total_power_w / 1000).toFixed(2)} kW` : "–";
@@ -549,6 +551,15 @@ function renderEasee(easee) {
     : `Watching since ${started}`;
 
   const notes = [];
+  // A frozen reading is the one case where the honest answer is "we do not
+  // know", so it is said first and in full.
+  if (session.stale_reading) {
+    const s = session.stale_reading;
+    notes.push(
+      `The charger has reported the same energy for ${s.hours} h while claiming ${s.claimed_kw} kW. ` +
+      `That would be ${s.expected_kwh} kWh, so the reading is stale rather than live — Easee serves a ` +
+      "charger's last known state when it cannot reach it.");
+  }
   // Easee reports CHARGING through a pause, so a derived PAUSED needs to say
   // why — otherwise it just looks like the add-on disagreeing with the app.
   if (session.status === "PAUSED") {

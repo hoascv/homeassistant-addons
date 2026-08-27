@@ -142,6 +142,18 @@ describe the same thing:
   tick, and a failed sync writes nothing at all, so the reading could be older
   than it looks. Past two ticks the status pill shows its own age
   (`COMPLETED · 1 h ago`) instead of presenting a stale reading as live.
+- **`STALE` means the charger's own numbers have stopped moving.** Easee's
+  cloud serves a charger's last known state when it cannot reach it, with
+  nothing to say it is doing so — observed in the wild as `CHARGING` at
+  10.64 kW for 158 hours straight with the energy counter unchanged, which
+  would have been 1,677 kWh through one car. Neither of the other checks
+  catches that: the power is far above the pause threshold, and the add-on is
+  polling perfectly happily. What catches it is physics — if power is flowing,
+  energy must accumulate — so a counter that has not moved while meaningful
+  power is claimed is reported as stale rather than as charging. The card says
+  how long and how much energy is missing. A genuine trickle charge is not
+  affected: the test scales with the claimed power rather than using a fixed
+  window.
 - **`PAUSED` is this add-on's word, not Easee's.** Easee keeps `chargerOpMode`
   at `CHARGING` for the whole time a cable is in, including when nothing is
   flowing — the car is full, its own schedule has paused it, load balancing has
