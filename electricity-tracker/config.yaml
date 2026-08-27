@@ -1,5 +1,5 @@
 name: "Electricity Tracker"
-version: "1.11.2"
+version: "1.12.0"
 slug: "electricity-tracker"
 description: "Danish electricity spot prices and your own smart-meter consumption, combined into what you actually pay"
 url: "https://github.com/hoascv/homeassistant-addons/tree/main/electricity-tracker"
@@ -50,6 +50,18 @@ options:
   # Elafgift (Danish electricity tax), in DKK/kWh excl. VAT. Set by Parliament
   # and changed at the turn of most years — 2026/2027 rate is 0.008 (0.8 øre).
   electricity_tax: 0.008
+  # What your supplier adds to the raw spot price, in DKK/kWh excl. VAT.
+  # Energi Data Service publishes the market price; your bill shows spot plus
+  # your supplier's margin, so without this every figure here sits a few øre
+  # per kWh under what you actually pay. Read it off a bill by comparing its
+  # energy line's average against the spot average for the same period.
+  supplier_markup: 0.0
+  # A standing charge that does not depend on consumption — the "Transport
+  # fast" or abonnement line on a Danish bill — in DKK per month, excl. VAT.
+  # A bill quoted per quarter is that figure divided by three. Never mixed into
+  # the per-kWh price: it is added to the cost totals instead, and reported
+  # separately, so a quiet day does not appear to have an absurd unit price.
+  fixed_charge_monthly: 0.0
   # Danish VAT, applied on top of spot price + all tariffs + tax.
   vat_rate: 0.25
   eloverblik_refresh_token: ""
@@ -102,6 +114,8 @@ schema:
   grid_tariff_high_months: "str?"
   transmission_tariff: "float(0,50)"
   electricity_tax: "float(0,50)"
+  supplier_markup: "float(0,10)"
+  fixed_charge_monthly: "float(0,10000)"
   vat_rate: "float(0,1)"
   eloverblik_refresh_token: "password?"
   eloverblik_metering_point: "str?"

@@ -171,6 +171,46 @@ Charging energy is already included in your whole-house numbers from
 Eloverblik (and Saveeye, if configured) — Easee's session figures are a
 breakdown of part of that same total, not counted again on top of it.
 
+## Matching your bill
+
+A Danish bill has two parts this add-on could not represent before 1.12.0, and
+together they were most of the gap between what it showed and what was paid.
+
+**`supplier_markup`** (DKK/kWh, excl. VAT) is what your supplier adds to the
+spot price. Energi Data Service publishes the market price; your bill charges
+spot plus a margin. Read it off a bill by comparing its energy line's average
+rate against the spot average for the same period.
+
+**`fixed_charge_monthly`** (DKK/month, excl. VAT) is the standing charge that
+does not depend on consumption at all — the *Transport fast* or abonnement line.
+A bill quoted per quarter is that figure divided by three.
+
+The standing charge is deliberately **never mixed into the per-kWh price**.
+Dividing it by consumption would make a quiet day look like it had an absurd
+unit rate, which is arithmetically true and useless as a price signal. It is
+accrued per day instead — a month's charge over the days in *that* month — and
+added to the cost totals, so a running month-to-date figure is comparable with a
+bill. The tiles show energy plus standing charge once one is configured, with a
+note saying how much of the month's total it is.
+
+One worked example, from a real invoice over 1,636 kWh:
+
+| Component | incl. VAT | share |
+|---|---:|---:|
+| Energy (spot + supplier margin) | 1295.50 | 57.5% |
+| Pass-through tariff | 606.58 | 26.9% |
+| Standing charge | 335.74 | 14.9% |
+| Elafgift | 16.36 | 0.7% |
+
+With the tariffs left at 0 and no standing charge, this add-on would have
+reported 58% of that bill.
+
+Note that many suppliers pass the grid company's and Energinet's tariffs through
+as a **single combined line**. Where that is the case, put the whole figure in
+`transmission_tariff` and leave the `grid_tariff_*` bands at 0 — splitting it
+across both would count it twice. That combined rate is usually an average over
+the billing period, so it drifts as your time-of-day pattern changes.
+
 ## Setting up the full end-user price
 
 Only spot price and VAT (25%) have safe, stable defaults. Everything else —

@@ -75,6 +75,7 @@ function renderNow(data) {
     valueEl.className = `price-now-value price-${priceTier(now.total_dkk_kwh, data.today)}`;
     breakdownEl.innerHTML = [
       `Spot ${now.spot_dkk_kwh.toFixed(2)}`,
+      ...(now.supplier_markup_dkk_kwh ? [`Markup ${now.supplier_markup_dkk_kwh.toFixed(2)}`] : []),
       `Grid ${now.grid_tariff_dkk_kwh.toFixed(2)} (${now.grid_tariff_band})`,
       `Transmission ${now.transmission_tariff_dkk_kwh.toFixed(2)}`,
       `Tax ${now.electricity_tax_dkk_kwh.toFixed(2)}`,
@@ -491,10 +492,21 @@ function renderConsumptionSummary(consumption, configured) {
   document.getElementById("c-yesterday-kwh").textContent = fmtKwh(consumption.yesterday_kwh);
   document.getElementById("c-week-kwh").textContent = fmtKwh(consumption.week_kwh);
   document.getElementById("c-month-kwh").textContent = fmtKwh(consumption.month_kwh);
-  document.getElementById("c-today-cost").textContent = fmtKr(consumption.today_cost_dkk);
-  document.getElementById("c-yesterday-cost").textContent = fmtKr(consumption.yesterday_cost_dkk);
-  document.getElementById("c-week-cost").textContent = fmtKr(consumption.week_cost_dkk);
-  document.getElementById("c-month-cost").textContent = fmtKr(consumption.month_cost_dkk);
+  // With a standing charge configured the tiles show the billed figure —
+  // energy plus that charge — because that is the number that turns up on the
+  // invoice. Without one the two are identical.
+  const billed = consumption.has_fixed_charge;
+  document.getElementById("c-today-cost").textContent =
+    fmtKr(billed ? consumption.today_billed_dkk : consumption.today_cost_dkk);
+  document.getElementById("c-yesterday-cost").textContent =
+    fmtKr(billed ? consumption.yesterday_billed_dkk : consumption.yesterday_cost_dkk);
+  document.getElementById("c-week-cost").textContent =
+    fmtKr(billed ? consumption.week_billed_dkk : consumption.week_cost_dkk);
+  document.getElementById("c-month-cost").textContent =
+    fmtKr(billed ? consumption.month_billed_dkk : consumption.month_cost_dkk);
+  document.getElementById("consumption-fixed-note").textContent = billed
+    ? `Includes the standing charge: ${fmtKr(consumption.month_fixed_dkk)} kr so far this month.`
+    : "";
 }
 
 // --- EV charging (Easee) ---

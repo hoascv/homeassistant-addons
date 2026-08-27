@@ -1,5 +1,35 @@
 # Changelog
 
+## 1.12.0
+
+- **Two options that were the difference between this add-on and a bill.**
+  Prompted by reading a real Danish invoice: of 2,254 kr over 1,636 kWh, the
+  add-on as configured could account for about **58%**.
+- **`supplier_markup`** (DKK/kWh, excl. VAT) — what a supplier adds to the raw
+  spot price. Energi Data Service publishes the market price; a bill charges
+  spot plus a margin, so without this every figure sat a few øre per kWh under
+  reality. Reported as its own line in the price breakdown rather than folded
+  into spot: the market price is a fact and the margin is a contract, and seeing
+  them apart is what lets a bill be checked against this.
+- **`fixed_charge_monthly`** (DKK/month, excl. VAT) — the standing charge that
+  does not depend on consumption, the *Transport fast* or abonnement line. On
+  the invoice that was 14.9% of the total, and nothing here could represent it.
+- The standing charge is **never mixed into the per-kWh price**. Dividing it by
+  consumption would make a quiet day look like it had an absurd unit rate —
+  arithmetically true, useless as a price signal. It accrues per day instead, a
+  month's charge over the days in *that* month, so a running month-to-date total
+  is comparable with a bill and February's days each carry a little more than
+  August's. Cost tiles show energy plus standing charge once one is set, with a
+  note saying how much of the month it accounts for.
+- Insights gains an **all-in rate** — energy plus standing charge over the kWh
+  used — which is the figure a Danish bill quotes as *gennemsnitspris inkl.
+  abonnement*. Kept separate from "what you paid", which compares timing and
+  must stay on energy alone: the standing charge is identical however you time
+  your consumption, so including it there would dilute the comparison without
+  changing what it measures.
+- A test reconciles the real invoice from its own printed rates, to within the
+  rounding the invoice itself warns about.
+
 ## 1.11.2
 
 - **Fixed an hour of consumption being lost every time Saveeye's counter

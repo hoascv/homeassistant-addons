@@ -1,3 +1,4 @@
+import calendar
 import hmac
 import html
 import io
@@ -21,7 +22,7 @@ import eloverblik
 import saveeye
 import easee
 
-APP_VERSION = "1.11.2"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.12.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("ELECTRICITY_DB_PATH", "/data/electricity.db")
 OPTIONS_PATH = os.environ.get("ELECTRICITY_OPTIONS_PATH", "/data/options.json")
@@ -168,8 +169,18 @@ def get_price_options(options):
         "grid_tariff_high_weekdays": options.get("grid_tariff_high_weekdays") or "",
         "grid_tariff_high_months": options.get("grid_tariff_high_months") or "",
         "transmission_tariff": f("transmission_tariff", 0.0),
+        # What the supplier adds to the spot price. Energi Data Service gives
+        # the raw market price; a bill shows spot plus the supplier's margin,
+        # so without this every figure sits a few øre per kWh under reality.
+        "supplier_markup": f("supplier_markup", 0.0),
         "electricity_tax": f("electricity_tax", 0.008),
         "vat_rate": f("vat_rate", 0.25),
+        # A standing charge that does not depend on consumption at all — the
+        # "Transport fast" or abonnement line on a Danish bill. Kept out of the
+        # per-kWh price on purpose: dividing it by consumption would make a
+        # quiet day look expensive per kWh, which is true but useless as a
+        # price signal. It is added to cost totals instead.
+        "fixed_charge_monthly": f("fixed_charge_monthly", 0.0),
     }
 
 
@@ -381,10 +392,15 @@ def compute_total_price(spot_dkk_kwh, dt_local, opts):
     Energinet's transmission tariff + elafgift, all subject to Danish VAT."""
     band = _grid_tariff_band(dt_local, opts)
     grid = opts[f"grid_tariff_{band}"]
-    subtotal = spot_dkk_kwh + grid + opts["transmission_tariff"] + opts["electricity_tax"]
+    markup = opts.get("supplier_markup", 0.0)
+    subtotal = spot_dkk_kwh + markup + grid + opts["transmission_tariff"] + opts["electricity_tax"]
     total = subtotal * (1 + opts["vat_rate"])
     components = {
         "spot_dkk_kwh": round(spot_dkk_kwh, 4),
+        # Reported separately from spot rather than folded into it: the market
+        # price is a fact and the margin is a contract, and seeing them apart is
+        # what lets a bill be checked against this.
+        "supplier_markup_dkk_kwh": markup,
         "grid_tariff_dkk_kwh": grid,
         "grid_tariff_band": band,
         "transmission_tariff_dkk_kwh": opts["transmission_tariff"],
@@ -585,6 +601,31 @@ def combined_consumption_with_cost(
     return rows
 
 
+def fixed_charge_for_window(opts, start_local, end_local):
+    """The standing charge falling inside [start_local, end_local), incl. VAT.
+
+    Accrued per day rather than dropped whole on the 1st: a month's charge
+    divided by the days in *that* month, summed over the days the window
+    touches. That way "today" carries one day of it, a week carries seven, and
+    a part-month carries the part that has actually elapsed — which is what
+    makes a running month-to-date total comparable with a bill.
+
+    Charged on calendar days, so February's daily rate is higher than January's.
+    That mirrors how the charge is actually levied: per month, not per day.
+    """
+    monthly = opts.get("fixed_charge_monthly", 0.0)
+    if not monthly or end_local <= start_local:
+        return 0.0
+    total = 0.0
+    day = start_local.date()
+    last = (end_local - timedelta(microseconds=1)).date()
+    while day <= last:
+        days_in_month = calendar.monthrange(day.year, day.month)[1]
+        total += monthly / days_in_month
+        day += timedelta(days=1)
+    return round(total * (1 + opts["vat_rate"]), 4)
+
+
 def _consumption_totals(conn, start_local, end_local, metering_point, price_area, opts, saveeye_device_serial=None):
     rows = combined_consumption_with_cost(
         conn, start_local, end_local, metering_point, price_area, opts, saveeye_device_serial
@@ -615,6 +656,23 @@ def consumption_summary(conn, now_local, metering_point, price_area, opts, savee
         conn, month_start, tomorrow_start, metering_point, price_area, opts, saveeye_device_serial
     )
 
+    # The standing charge for each window, reported alongside the energy cost
+    # rather than folded into it. Both numbers are real and they answer
+    # different questions: what the electricity cost, and what the bill will
+    # say. Hiding the split would make a zero-consumption day look like it cost
+    # money for no reason.
+    windows = (
+        ("today", today_start, tomorrow_start, today_cost),
+        ("yesterday", yesterday_start, today_start, yesterday_cost),
+        ("week", week_start, tomorrow_start, week_cost),
+        ("month", month_start, tomorrow_start, month_cost),
+    )
+    fixed = {name: fixed_charge_for_window(opts, a, b) for name, a, b, _ in windows}
+    billed = {
+        name: None if cost is None else round(cost + fixed[name], 2)
+        for name, _, _, cost in windows
+    }
+
     return {
         "today_kwh": today_kwh,
         "today_cost_dkk": today_cost,
@@ -624,6 +682,17 @@ def consumption_summary(conn, now_local, metering_point, price_area, opts, savee
         "week_cost_dkk": week_cost,
         "month_kwh": month_kwh,
         "month_cost_dkk": month_cost,
+        # Standing charge accrued in each window, and energy + standing charge
+        # together — what the bill actually comes to.
+        "today_fixed_dkk": fixed["today"],
+        "yesterday_fixed_dkk": fixed["yesterday"],
+        "week_fixed_dkk": fixed["week"],
+        "month_fixed_dkk": fixed["month"],
+        "today_billed_dkk": billed["today"],
+        "yesterday_billed_dkk": billed["yesterday"],
+        "week_billed_dkk": billed["week"],
+        "month_billed_dkk": billed["month"],
+        "has_fixed_charge": bool(opts.get("fixed_charge_monthly", 0.0)),
     }
 
 
@@ -1683,11 +1752,28 @@ def build_insights(conn, options, days=30, now_local=None):
                 "house_kwh": round(house_kwh, 2),
             }
 
+    # What a bill would show: energy plus the standing charge, over the energy
+    # actually used. Deliberately separate from price_performance, which
+    # compares timing and must stay on energy alone — the standing charge is
+    # identical however you time your consumption, so including it there would
+    # dilute the comparison without changing what it measures.
+    fixed = fixed_charge_for_window(opts, start, end)
+    energy_cost = sum(r["cost_dkk"] for r in rows if r["cost_dkk"] is not None)
+    energy_kwh = sum(r["kwh"] for r in rows if r["cost_dkk"] is not None)
+    all_in = {
+        "energy_dkk": round(energy_cost, 2),
+        "fixed_dkk": round(fixed, 2),
+        "total_dkk": round(energy_cost + fixed, 2),
+        "kwh": round(energy_kwh, 2),
+        "all_in_dkk_kwh": round((energy_cost + fixed) / energy_kwh, 4) if energy_kwh > 0 else None,
+    } if energy_kwh > 0 else None
+
     return {
         "days": days,
         "from": start.date().isoformat(),
         "to": (end - timedelta(days=1)).date().isoformat(),
         "consumption_hours": len(rows),
+        "all_in": all_in,
         "price_performance": _price_performance(rows),
         "hourly_profile": _hourly_profile(rows),
         "baseline": _baseline_load(rows),
