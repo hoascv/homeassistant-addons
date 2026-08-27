@@ -54,3 +54,50 @@ def test_the_easee_card_still_carries_the_notes_the_fixes_added():
     for element_id in ("easee-status-pill", "easee-started", "easee-note"):
         assert element_id in TEMPLATE_IDS
         assert element_id in JS
+
+
+# --- Expanding a chart ---
+
+
+def _expand_buttons():
+    return re.findall(r'<button[^>]*class="chart-expand-btn"[^>]*>', HTML)
+
+
+def test_every_chart_has_an_expand_button():
+    """Every chart host in the page, and no stragglers: adding a chart without
+    one is the omission this catches."""
+    hosts = set(re.findall(r'<div id="([\w-]+)" class="chart-host"', HTML))
+    expandable = {re.search(r'data-chart="([\w-]+)"', b).group(1) for b in _expand_buttons()}
+    assert hosts == expandable, f"charts without an expand button: {sorted(hosts - expandable)}"
+
+
+def test_each_expand_button_points_at_a_real_chart_host():
+    """A typo in data-chart would open an empty modal and say nothing about why."""
+    for button in _expand_buttons():
+        chart_id = re.search(r'data-chart="([\w-]+)"', button).group(1)
+        assert f'id="{chart_id}"' in HTML, f"{chart_id} is not an element in the page"
+
+
+def test_each_expand_button_carries_a_title_and_a_label():
+    """The title becomes the modal heading; the aria-label is what a screen
+    reader announces, and three identical "Expand" buttons would be useless."""
+    titles = set()
+    for button in _expand_buttons():
+        title = re.search(r'data-title="([^"]+)"', button)
+        assert title, f"expand button without data-title: {button}"
+        assert "aria-label" in button, f"expand button without aria-label: {button}"
+        titles.add(title.group(1))
+    assert len(titles) == len(_expand_buttons()), "expand buttons share a title"
+
+
+def test_the_expanded_chart_modal_is_wired():
+    for element_id in ("chart-backdrop", "chart-modal-host", "chart-modal-title", "chart-modal-close"):
+        assert element_id in TEMPLATE_IDS, f"{element_id} missing from index.html"
+        assert element_id in JS, f"{element_id} never used by app.js"
+
+
+def test_the_expanded_render_uses_a_distinct_gradient_id():
+    """Both charts are in the document at once, and url(#id) resolves to the
+    first match — so reusing the small chart's gradient id is a latent bug."""
+    assert "-expanded" in JS
+    assert "gradientId" in JS

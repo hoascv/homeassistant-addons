@@ -1,5 +1,5 @@
 name: "Electricity Tracker"
-version: "1.8.0"
+version: "1.9.0"
 slug: "electricity-tracker"
 description: "Danish electricity spot prices and your own smart-meter consumption, combined into what you actually pay"
 url: "https://github.com/hoascv/homeassistant-addons/tree/main/electricity-tracker"

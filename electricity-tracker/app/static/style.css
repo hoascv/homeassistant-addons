@@ -144,6 +144,23 @@ code {
 .seg-btn:disabled { opacity: 0.4; cursor: default; }
 .seg-btn.seg-on { background: var(--surface); color: var(--accent); box-shadow: var(--shadow); }
 
+.card-head-actions { display: flex; align-items: center; gap: 0.4rem; }
+.chart-expand-btn {
+  border: 1px solid var(--border); background: var(--surface-2); color: var(--text-muted);
+  font: inherit; font-size: 0.9rem; line-height: 1; cursor: pointer;
+  border-radius: 8px; padding: 0.3rem 0.45rem;
+}
+.chart-expand-btn:hover { color: var(--accent); border-color: var(--accent); }
+
+/* An expanded chart is centred rather than a bottom sheet: it is something to
+   look at, not a form to fill in. */
+.sheet-backdrop.sheet-center { align-items: center; padding: 1rem; }
+.sheet-center .sheet {
+  border-radius: 16px; max-width: min(96vw, 1100px);
+  padding: 1.1rem;
+}
+.chart-host-large svg { min-height: 44vh; }
+
 /* Charts (inline SVG, built by app.js) */
 .chart-host { width: 100%; }
 .chart-host svg { width: 100%; height: auto; display: block; overflow: visible; }

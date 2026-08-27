@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.9.0
+
+- **Every chart can be expanded.** An ⤢ button in each card header opens the
+  same chart full width and more than twice as tall. A 160 px chart in a card
+  is enough to see a shape and not enough to read a value off — this is for the
+  times you want to look properly.
+- Axis labels get denser with the room: hourly rather than three-hourly on the
+  price curve and the hourly consumption chart, and about twice as many dates
+  on the daily consumption and charging charts. Hover and long-press still give
+  the exact value, since the tooltips are SVG `<title>` and come along unchanged.
+- The renderer now records what each chart host last drew, so expanding needs no
+  cooperation from the code that drew it — the price, consumption and charging
+  charts all became expandable from one mechanism, and a chart added later gets
+  it for free.
+- Close with ✕, Escape, or by tapping outside. A full-screen overlay that only
+  closes by hitting a small ✕ is a trap on a phone.
+- The expanded render remaps its gradient ids: both charts are in the document
+  at once, and `url(#id)` resolves to the first match, so reusing them would be
+  a latent bug the day the two stopped matching.
+
 ## 1.8.0
 
 - **The dashboard now says when the tariffs were never configured.**

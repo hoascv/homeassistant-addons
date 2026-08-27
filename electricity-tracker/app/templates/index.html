@@ -43,9 +43,12 @@
   <section class="card" id="curve-card">
     <div class="card-head">
       <h2>Price today <span class="muted" id="curve-day-note"></span></h2>
-      <div class="seg" id="curve-day-toggle" role="tablist" aria-label="Day">
-        <button type="button" class="seg-btn seg-on" data-day="today">Today</button>
-        <button type="button" class="seg-btn" data-day="tomorrow" id="curve-tomorrow-btn" disabled>Tomorrow</button>
+      <div class="card-head-actions">
+        <div class="seg" id="curve-day-toggle" role="tablist" aria-label="Day">
+          <button type="button" class="seg-btn seg-on" data-day="today">Today</button>
+          <button type="button" class="seg-btn" data-day="tomorrow" id="curve-tomorrow-btn" disabled>Tomorrow</button>
+        </div>
+        <button type="button" class="chart-expand-btn" data-chart="price-chart" data-title="Price" aria-label="Expand price chart" title="Expand">⤢</button>
       </div>
     </div>
     <div id="price-chart" class="chart-host"></div>
@@ -81,11 +84,14 @@
   <section class="card" id="consumption-chart-card" hidden>
     <div class="card-head">
       <h2>Consumption &amp; cost</h2>
-      <div class="seg" id="consumption-range-toggle" role="tablist" aria-label="Range">
-        <button type="button" class="seg-btn seg-on" data-view="hourly">Today</button>
-        <button type="button" class="seg-btn" data-view="7">7d</button>
-        <button type="button" class="seg-btn" data-view="14">14d</button>
-        <button type="button" class="seg-btn" data-view="30">30d</button>
+      <div class="card-head-actions">
+        <div class="seg" id="consumption-range-toggle" role="tablist" aria-label="Range">
+          <button type="button" class="seg-btn seg-on" data-view="hourly">Today</button>
+          <button type="button" class="seg-btn" data-view="7">7d</button>
+          <button type="button" class="seg-btn" data-view="14">14d</button>
+          <button type="button" class="seg-btn" data-view="30">30d</button>
+        </div>
+        <button type="button" class="chart-expand-btn" data-chart="consumption-chart" data-title="Consumption" aria-label="Expand consumption chart" title="Expand">⤢</button>
       </div>
     </div>
     <div id="consumption-chart" class="chart-host"></div>
@@ -115,10 +121,13 @@
   <section class="card" id="charging-history-card" hidden>
     <div class="card-head">
       <h2>Charging history</h2>
-      <div class="seg" id="charging-range-toggle" role="tablist" aria-label="Range">
-        <button type="button" class="seg-btn seg-on" data-days="7">7d</button>
-        <button type="button" class="seg-btn" data-days="30">30d</button>
-        <button type="button" class="seg-btn" data-days="90">90d</button>
+      <div class="card-head-actions">
+        <div class="seg" id="charging-range-toggle" role="tablist" aria-label="Range">
+          <button type="button" class="seg-btn seg-on" data-days="7">7d</button>
+          <button type="button" class="seg-btn" data-days="30">30d</button>
+          <button type="button" class="seg-btn" data-days="90">90d</button>
+        </div>
+        <button type="button" class="chart-expand-btn" data-chart="charging-chart" data-title="Charging" aria-label="Expand charging chart" title="Expand">⤢</button>
       </div>
     </div>
     <div class="mini-stats mini-stats-4">
@@ -140,6 +149,18 @@
   </footer>
 
 </main>
+
+<!-- Expanded chart -->
+<div class="sheet-backdrop sheet-center" id="chart-backdrop">
+  <div class="sheet sheet-wide">
+    <div class="sheet-head">
+      <h2 id="chart-modal-title">Chart</h2>
+      <button type="button" class="topbar-icon-btn" id="chart-modal-close" aria-label="Close">✕</button>
+    </div>
+    <div id="chart-modal-host" class="chart-host chart-host-large"></div>
+    <p class="muted">Hover or long-press a point for its value.</p>
+  </div>
+</div>
 
 <!-- Settings sheet -->
 <div class="sheet-backdrop" id="settings-backdrop">

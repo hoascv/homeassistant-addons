@@ -225,15 +225,25 @@ function smoothLinePath(points) {
 // live estimate) share one set of scales and axis labels. Series are drawn
 // in order, so put the primary one first — extreme dots, the "now" marker
 // and the hover targets all anchor to it.
+// What each chart host last drew, keyed by element id. Recorded by the renderer
+// itself rather than by each caller, so expanding a chart needs no cooperation
+// from the code that drew it — and a chart added later gets it for free.
+const chartRenders = new Map();
+
 function renderSmoothChart(host, rows, opts) {
   const series = opts.series;
   const hasAnyValue = rows && rows.some((r) => series.some((s) => s.valueOf(r) != null));
   if (!hasAnyValue) {
     host.innerHTML = `<p class="empty-state">${opts.emptyText}</p>`;
+    // Forget it, so the expander cannot open a chart that is no longer there.
+    if (host.id) chartRenders.delete(host.id);
     return null;
   }
+  if (host.id) chartRenders.set(host.id, { rows, opts });
 
-  const W = 600, H = 160, padTop = 14, padBottom = 20, padX = 3;
+  // Expanded renders pass their own box; the default is the in-card size.
+  const W = opts.width || 600, H = opts.height || 160;
+  const padTop = 14, padBottom = 20, padX = 3;
   const values = [];
   rows.forEach((r) => series.forEach((s) => {
     const v = s.valueOf(r);
@@ -316,7 +326,7 @@ function renderSmoothChart(host, rows, opts) {
   }).join("");
 
   const labels = rows.map((r, i) => {
-    const text = opts.axisLabelOf(r, i);
+    const text = opts.axisLabelOf(r, i, Boolean(opts.expanded));
     return text ? `<text class="chart-axis-label" x="${(padX + i * stepX).toFixed(2)}" y="${H - 4}">${text}</text>` : "";
   }).join("");
 
@@ -343,6 +353,64 @@ function contiguousRuns(points) {
   return runs;
 }
 
+// --- Expanding a chart ---
+
+// A chart in a card is about 160px tall on a phone, which is enough to see a
+// shape and not enough to read a value off. Expanding re-renders the same data
+// into a full-width box more than twice as tall, with denser axis labels — the
+// hover tooltips are SVG <title>, so they come along unchanged.
+const EXPANDED = { width: 600, height: 340 };
+
+function expandChart(hostId, title) {
+  const saved = chartRenders.get(hostId);
+  const host = document.getElementById("chart-modal-host");
+  document.getElementById("chart-modal-title").textContent = title;
+  if (!saved) {
+    host.innerHTML = '<p class="empty-state">Nothing to show yet.</p>';
+  } else {
+    renderSmoothChart(host, saved.rows, {
+      ...saved.opts,
+      ...EXPANDED,
+      expanded: true,
+      // Gradients are referenced by id and the small chart is still in the
+      // document, so reusing its ids would point both at whichever the browser
+      // found first. Same colours either way, but an id collision is a bug
+      // waiting for the day the two stop matching.
+      series: saved.opts.series.map((series) => (
+        series.gradientId ? { ...series, gradientId: `${series.gradientId}-expanded` } : series
+      )),
+    });
+  }
+  openChartModal();
+}
+
+function openChartModal() {
+  document.getElementById("chart-backdrop").classList.add("open");
+}
+
+function closeChartModal() {
+  document.getElementById("chart-backdrop").classList.remove("open");
+  // Drop the enlarged SVG rather than leaving a second copy of every chart in
+  // the document between openings.
+  document.getElementById("chart-modal-host").innerHTML = "";
+}
+
+function wireChartExpansion() {
+  document.querySelectorAll(".chart-expand-btn").forEach((btn) => {
+    btn.addEventListener("click", () => expandChart(btn.dataset.chart, btn.dataset.title));
+  });
+  document.getElementById("chart-modal-close").addEventListener("click", closeChartModal);
+  const backdrop = document.getElementById("chart-backdrop");
+  backdrop.addEventListener("click", (e) => {
+    if (e.target === backdrop) closeChartModal();
+  });
+  // A full-screen overlay that only closes by hitting a small ✕ is a trap on a
+  // phone; Escape is the habit on a desktop.
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && backdrop.classList.contains("open")) closeChartModal();
+  });
+}
+
 // --- Price curve chart ---
 
 function renderPriceChart(rows, highlightKey) {
@@ -359,10 +427,11 @@ function renderPriceChart(rows, highlightKey) {
   renderSmoothChart(host, rows, {
     series: [{ valueOf: (r) => r.total_dkk_kwh, area: true, gradientId: "price-area-gradient" }],
     tooltipOf: (r) => `${hm(r.time_dk)} — ${r.total_dkk_kwh.toFixed(2)} DKK/kWh`,
-    axisLabelOf: (r) => {
+    axisLabelOf: (r, _i, expanded) => {
       const hourStr = r.time_dk.slice(11, 13);
       const minStr = r.time_dk.slice(14, 16);
-      return minStr === "00" && Number(hourStr) % 3 === 0 ? hourStr : "";
+      const every = expanded ? 1 : 3;
+      return minStr === "00" && Number(hourStr) % every === 0 ? hourStr : "";
     },
     emptyText: "No price data yet.",
     ariaLabel: "Electricity price today",
@@ -553,8 +622,8 @@ function renderChargingHistory(data) {
         ? `${d.day} — ${d.kwh.toFixed(2)} kWh, ${cost} (${d.sessions} session${d.sessions > 1 ? "s" : ""})`
         : `${d.day} — no charging`;
     },
-    axisLabelOf: (d, i) => {
-      const step = Math.max(1, Math.ceil(data.daily.length / 8));
+    axisLabelOf: (d, i, expanded) => {
+      const step = Math.max(1, Math.ceil(data.daily.length / (expanded ? 16 : 8)));
       return i % step === 0 ? shortDay(d.day) : "";
     },
     emptyText: "No charging in this range.",
@@ -664,7 +733,8 @@ function renderHourlyChart(rows) {
         (isMeasured) => (!isMeasured && r.source === "saveeye_partial" ? " so far" : ""));
       return `${hm(r.time_dk)} — ${pair}, ${costStr}`;
     },
-    axisLabelOf: (r) => (Number(r.time_dk.slice(11, 13)) % 3 === 0 ? r.time_dk.slice(11, 13) : ""),
+    axisLabelOf: (r, _i, expanded) =>
+      (Number(r.time_dk.slice(11, 13)) % (expanded ? 1 : 3) === 0 ? r.time_dk.slice(11, 13) : ""),
     emptyText: "No consumption data yet today.",
     ariaLabel: "Hourly consumption today, measured and live estimate",
     baseline: "zero",
@@ -686,7 +756,8 @@ function renderDailyChart(rows) {
         (isMeasured) => hours(isMeasured ? d.measuredHours : d.saveeyeHours));
       return `${d.day} — ${pair}, ${costStr}`;
     },
-    axisLabelOf: (d, i) => (i % step === 0 ? d.day.slice(5) : ""),
+    axisLabelOf: (d, i, expanded) => (i % (expanded ? Math.max(1, Math.ceil(step / 2)) : step) === 0
+      ? d.day.slice(5) : ""),
     emptyText: "No consumption data yet.",
     ariaLabel: "Daily consumption, measured and live estimate",
     baseline: "zero",
@@ -887,6 +958,7 @@ function wireChartToggles() {
 function init() {
   wireSettingsSheet();
   wireChartToggles();
+  wireChartExpansion();
   loadSummary();
   loadConsumptionChart();
   loadChargingHistory();
