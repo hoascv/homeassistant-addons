@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.11.2
+
+- **Fixed an hour of consumption being lost every time Saveeye's counter
+  resets.** Also found in the real database: the cumulative counter is not a
+  lifetime total, and restarted three times in eleven days — 71,123 Wh to 9 Wh,
+  and twice more. Differencing straight across a reset gives a large negative,
+  which the estimator declined to report, so the hour containing each reset
+  silently had no Saveeye figure at all. Roughly 120 hours a year at that rate.
+- The counter is now split at each reset and each side measured on its own, so
+  the hour is accounted for rather than abandoned. Against the real data this
+  recovers exactly the three missing hours — 240 of 240 hours estimated where it
+  was 237 — and the recovered values land between their neighbours
+  (0.177 kWh where the hours either side are 0.175 and 0.168), which is the
+  check that matters. The same fix applies to the current partial hour, which
+  used to abandon the whole hour if a reset happened during it.
+- A backward step is only treated as a reset when it falls further than where it
+  lands. A meter correction of 1,000 -> 900 Wh is jitter, and reading it as a
+  restart would invent 900 Wh of consumption that never happened — the existing
+  guards still decline to report those rather than reporting something made up.
+- Energy accumulated between a reset and the first reading after it is counted,
+  bounded by what 25 kW could physically deliver in that gap, so a counter that
+  wrapped to a large value instead of restarting cannot be read as a sudden
+  40 kWh burst.
+
 ## 1.11.1
 
 - **Fixed `CHARGING` being reported from a frozen reading.** Found by running

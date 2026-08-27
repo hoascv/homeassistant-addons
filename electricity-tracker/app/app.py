@@ -21,7 +21,7 @@ import eloverblik
 import saveeye
 import easee
 
-APP_VERSION = "1.11.1"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.11.2"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("ELECTRICITY_DB_PATH", "/data/electricity.db")
 OPTIONS_PATH = os.environ.get("ELECTRICITY_OPTIONS_PATH", "/data/options.json")
@@ -821,6 +821,78 @@ def _interp_series(samples, target_ts):
     return None
 
 
+# The most any domestic supply could deliver between two polls, used to bound
+# how much of a post-reset counter value can be believed. 25 kW is generous for
+# a house; anything above what that allows is a counter doing something other
+# than resetting to zero, and is not counted rather than guessed at.
+MAX_PLAUSIBLE_KW = 25.0
+
+
+def _is_counter_reset(previous_value, value):
+    """Whether a backward step is the counter restarting, or just jitter.
+
+    A reset restarts near zero, so it falls much further than where it lands:
+    71,123 -> 9 dropped 71,114 to reach 9. A meter correction of 1,000 -> 900
+    fell 100 to reach 900, and reading that as a reset would invent 900 Wh of
+    consumption that never happened. Jitter is left to the existing guards,
+    which decline to report rather than report something made up.
+    """
+    return value < previous_value - value
+
+
+def _counter_segments(samples):
+    """Split a counter series at each reset.
+
+    Saveeye's cumulative counter is not a lifetime total: it resets to zero
+    every few days. Observed in a real database — 71,123 Wh to 9 Wh, three
+    times in eleven days.
+
+    Differencing straight across that reset gives a large negative number, so
+    the old code discarded the hour containing it. Safe, but it silently lost
+    an hour of consumption per reset — about 120 hours a year at this device's
+    rate. Splitting into runs that only ever increase means each side of a
+    reset can be measured on its own and added up.
+    """
+    segments = []
+    current = []
+    for sample in samples:
+        if current and _is_counter_reset(current[-1][1], sample[1]):
+            segments.append(current)
+            current = []
+        current.append(sample)
+    if current:
+        segments.append(current)
+    return segments
+
+
+def _segment_energy(segment, window_start, window_end, is_first, previous_end_ts):
+    """Watt-hours a single monotonic run contributes to [window_start, window_end).
+
+    A run that *begins* inside the window follows a reset, so its first reading
+    is energy consumed since that reset — counted, but only up to what the gap
+    could physically have delivered, so a counter that wrapped to a large value
+    rather than resetting to zero is not read as a huge burst of consumption.
+    """
+    total = 0.0
+    counted = False
+
+    lo = max(window_start, segment[0][0])
+    hi = min(window_end, segment[-1][0])
+    if hi > lo and len(segment) >= 2:
+        v_lo = _interp_series(segment, lo)
+        v_hi = _interp_series(segment, hi)
+        if v_lo is not None and v_hi is not None and v_hi >= v_lo:
+            total += v_hi - v_lo
+            counted = True
+
+    if not is_first and window_start <= segment[0][0] < window_end:
+        gap_hours = max(0.0, (segment[0][0] - previous_end_ts) / 3600.0)
+        total += min(max(0.0, segment[0][1]), MAX_PLAUSIBLE_KW * 1000.0 * gap_hours)
+        counted = True
+
+    return total, counted
+
+
 def saveeye_hourly_kwh(conn, start_local, end_local, device_serial):
     """Same-day-ish hourly consumption for [start_local, end_local), derived
     from Saveeye's cumulative energy counter by interpolating its value at
@@ -846,15 +918,27 @@ def saveeye_hourly_kwh(conn, start_local, end_local, device_serial):
     if len(samples) < 2:
         return {}
 
+    segments = _counter_segments(samples)
     out = {}
     hour = start_local.replace(minute=0, second=0, microsecond=0)
     while hour < end_local:
         boundary_start = hour.astimezone(timezone.utc).timestamp()
         boundary_end = (hour + timedelta(hours=1)).astimezone(timezone.utc).timestamp()
-        v_start = _interp_series(samples, boundary_start)
-        v_end = _interp_series(samples, boundary_end)
-        if v_start is not None and v_end is not None and v_end >= v_start:
-            out[hour.replace(tzinfo=None).isoformat()] = round((v_end - v_start) / 1000.0, 4)
+        # Unchanged from before: an hour not bracketed by real readings on both
+        # sides gets no estimate rather than an extrapolated one.
+        if boundary_start < samples[0][0] or boundary_end > samples[-1][0]:
+            hour += timedelta(hours=1)
+            continue
+
+        total = 0.0
+        counted = False
+        for index, segment in enumerate(segments):
+            previous_end = segments[index - 1][-1][0] if index else segment[0][0]
+            energy, seen = _segment_energy(segment, boundary_start, boundary_end, index == 0, previous_end)
+            total += energy
+            counted = counted or seen
+        if counted:
+            out[hour.replace(tzinfo=None).isoformat()] = round(total / 1000.0, 4)
         hour += timedelta(hours=1)
     return out
 
@@ -879,13 +963,27 @@ def saveeye_partial_hour_kwh(conn, hour_start_local, now_local, device_serial):
         "WHERE device_serial = ? AND ts_utc >= ? AND ts_utc <= ? ORDER BY ts_utc",
         (device_serial, hour_start_local.astimezone(timezone.utc).isoformat(), now_local.astimezone(timezone.utc).isoformat()),
     ).fetchall()
-    usable = [r["cumulative_wh"] for r in rows if r["cumulative_wh"] is not None]
+    usable = [
+        (datetime.fromisoformat(r["ts_utc"]).timestamp(), r["cumulative_wh"])
+        for r in rows
+        if r["cumulative_wh"] is not None
+    ]
     if len(usable) < 2:
         return None
-    kwh = (usable[-1] - usable[0]) / 1000.0
-    if kwh < 0:
-        return None  # a session/meter reset happened mid-hour — bail rather than show a negative
-    return {"kwh": round(kwh, 4), "partial": True}
+
+    # Sum each monotonic run rather than differencing end to end: the counter
+    # resets to zero every few days, and a reset mid-hour used to abandon the
+    # whole hour rather than accounting for both sides of it.
+    watt_hours = 0.0
+    for index, segment in enumerate(_counter_segments(usable)):
+        watt_hours += segment[-1][1] - segment[0][1]
+        if index:
+            previous_end = _counter_segments(usable)[index - 1][-1][0]
+            gap_hours = max(0.0, (segment[0][0] - previous_end) / 3600.0)
+            watt_hours += min(max(0.0, segment[0][1]), MAX_PLAUSIBLE_KW * 1000.0 * gap_hours)
+    if watt_hours < 0:
+        return None
+    return {"kwh": round(watt_hours / 1000.0, 4), "partial": True}
 
 
 # --- Easee (EV charger, optional, read-only) ---

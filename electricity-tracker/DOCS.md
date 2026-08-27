@@ -395,6 +395,14 @@ want a copy in your own hands, or to move to another install.
   here assumes 24.
 - Two price areas' data can coexist in the database (e.g. if you ever change
   `price_area`) — history for the old area is kept, not deleted.
+- **Saveeye's counter resets to zero every few days** — it is not a lifetime
+  total. An hour containing a reset is measured on both sides of it and added
+  up, rather than being discarded for producing a negative difference, which
+  used to lose about one hour per reset. A backward step that merely jitters
+  (falling a little to land somewhere still large) is not treated as a reset:
+  reading a correction of 1,000 -> 900 Wh as a restart would invent 900 Wh of
+  consumption. Energy accumulated between a reset and the first reading after
+  it is counted, bounded by what 25 kW could physically deliver in that gap.
 - Saveeye's hourly estimate only ever fills a genuine gap *in the blended
   series*: an hour Eloverblik has already reported is never recomputed or
   overridden from Saveeye, even if samples exist for it too. That estimate

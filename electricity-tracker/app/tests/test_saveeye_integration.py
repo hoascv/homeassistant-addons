@@ -370,3 +370,96 @@ def test_api_consumption_uses_saveeye_data_with_no_configured_device_serial(clie
 
     rows = client.get("/api/consumption?days=1").get_json()
     assert any(r["source"] == "saveeye_estimate" and r["kwh"] == 1.0 for r in rows)
+
+
+# --- The counter resetting to zero ---
+#
+# Shaped from a real database: Saveeye's cumulative counter is not a lifetime
+# total. It restarted three times in eleven days — 71,123 Wh to 9 Wh, and twice
+# more. Differencing straight across that gives a large negative, which used to
+# discard the hour containing it: about 120 hours a year silently missing.
+
+
+def _seed_run(conn, start_utc, values, step_minutes=5):
+    """Samples every few minutes carrying the given counter values."""
+    from datetime import datetime as _dt
+
+    base = _dt.fromisoformat(start_utc)
+    for i, value in enumerate(values):
+        ts = (base + timedelta(minutes=step_minutes * i)).isoformat()
+        _seed_saveeye_sample(conn, ts, cumulative_wh=value)
+    conn.commit()
+
+
+def test_a_reset_no_longer_loses_the_hour(conn):
+    # 10:00-11:00 local is 08:00-09:00 UTC. The counter climbs, resets, climbs.
+    _seed_run(conn, "2026-08-16T07:55:00+00:00",
+              [71000.0, 71050.0, 71100.0, 71123.0, 9.0, 40.0, 70.0, 100.0, 130.0, 160.0,
+               190.0, 220.0, 250.0, 280.0])
+    start = datetime(2026, 8, 16, 10, tzinfo=electricityapp.LOCAL_TZ)
+    hourly = electricityapp.saveeye_hourly_kwh(conn, start, start + timedelta(hours=1), "dev1")
+    assert "2026-08-16T10:00:00" in hourly, "the hour containing the reset was dropped"
+    assert hourly["2026-08-16T10:00:00"] > 0
+
+
+def test_the_recovered_hour_counts_both_sides_of_the_reset(conn):
+    """Energy before the reset plus energy after it, rather than either alone."""
+    _seed_run(conn, "2026-08-16T07:55:00+00:00",
+              [1000.0, 1100.0, 1200.0, 1300.0, 10.0, 110.0, 210.0, 310.0, 410.0, 510.0,
+               610.0, 710.0, 810.0, 910.0])
+    start = datetime(2026, 8, 16, 10, tzinfo=electricityapp.LOCAL_TZ)
+    kwh = electricityapp.saveeye_hourly_kwh(conn, start, start + timedelta(hours=1), "dev1")[
+        "2026-08-16T10:00:00"]
+    # Both sides contribute; the answer is far above either side on its own.
+    assert kwh > 0.3
+
+
+def test_jitter_is_not_mistaken_for_a_reset(conn):
+    """1,000 -> 900 fell 100 to reach 900. Reading that as a restart would
+    invent 900 Wh of consumption that never happened."""
+    assert electricityapp._is_counter_reset(71123.0, 9.0) is True
+    assert electricityapp._is_counter_reset(1000.0, 900.0) is False
+    assert electricityapp._is_counter_reset(1000.0, 499.0) is True
+    assert electricityapp._is_counter_reset(1000.0, 501.0) is False
+
+
+def test_a_counter_that_wrapped_to_a_large_value_is_not_read_as_a_burst(conn):
+    """A reset lands near zero. Landing somewhere large is something else, and
+    counting the whole remainder would report consumption nobody used."""
+    _seed_run(conn, "2026-08-16T07:55:00+00:00",
+              [99000.0, 99100.0, 99200.0, 99300.0, 40000.0, 40100.0, 40200.0, 40300.0,
+               40400.0, 40500.0, 40600.0, 40700.0, 40800.0, 40900.0])
+    start = datetime(2026, 8, 16, 10, tzinfo=electricityapp.LOCAL_TZ)
+    kwh = electricityapp.saveeye_hourly_kwh(conn, start, start + timedelta(hours=1), "dev1").get(
+        "2026-08-16T10:00:00")
+    # Uncapped this would read as ~41 kWh in one hour. The post-reset baseline
+    # is bounded by what 25 kW could physically deliver in the poll gap, so what
+    # survives is a couple of kWh rather than a fabricated 40.
+    assert kwh is not None
+    assert kwh < 4.0
+
+
+def test_hours_either_side_of_a_reset_are_unaffected(conn):
+    _seed_run(conn, "2026-08-16T06:55:00+00:00",
+              [100.0 * i for i in range(1, 25)] + [5.0 + 100.0 * i for i in range(24)],
+              step_minutes=5)
+    start = datetime(2026, 8, 16, 9, tzinfo=electricityapp.LOCAL_TZ)
+    hourly = electricityapp.saveeye_hourly_kwh(conn, start, start + timedelta(hours=3), "dev1")
+    # Every hour in a fully sampled window gets an estimate, reset or not.
+    assert len(hourly) >= 2
+    assert all(v >= 0 for v in hourly.values())
+
+
+def test_a_partial_hour_spanning_a_reset_still_reports(conn):
+    now_local = datetime.now(electricityapp.LOCAL_TZ)
+    hour_start = now_local.replace(minute=0, second=0, microsecond=0)
+    for offset, value in ((0, 5000.0), (5, 5100.0), (10, 12.0), (15, 112.0)):
+        ts = (hour_start + timedelta(minutes=offset)).astimezone(timezone.utc).isoformat()
+        _seed_saveeye_sample(conn, ts, cumulative_wh=value)
+    conn.commit()
+    partial = electricityapp.saveeye_partial_hour_kwh(
+        conn, hour_start, hour_start + timedelta(minutes=20), "dev1")
+    assert partial is not None, "a reset mid-hour abandoned the whole hour"
+    # 100 Wh before the reset, 12 Wh accumulated from zero to the first
+    # post-reset reading, then 100 Wh after it.
+    assert partial["kwh"] == 0.212
