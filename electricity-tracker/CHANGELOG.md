@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.12.2
+
+- **Fixed the tariff warning nagging people who had configured their tariffs
+  correctly.** The check required *both* `transmission_tariff` and the
+  `grid_tariff_*` bands to be set. Many Danish suppliers bill the grid
+  company's tariff and Energinet's as a single combined "transport" line, in
+  which case the whole figure belongs in `transmission_tariff` and the grid
+  bands correctly stay at zero — and the warning then never went away, however
+  right the configuration was.
+- Either option alone now counts as configured. The warning fires only when no
+  pass-through tariff is set at all, and says outright that a combined line
+  goes in `transmission_tariff`.
+- Two tests that encoded the old both-required rule are replaced: they were
+  asserting the bug.
+
 ## 1.12.1
 
 - **Fixed the all-in rate charging a full window of standing charge against a

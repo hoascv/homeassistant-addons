@@ -22,7 +22,7 @@ import eloverblik
 import saveeye
 import easee
 
-APP_VERSION = "1.12.1"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.12.2"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("ELECTRICITY_DB_PATH", "/data/electricity.db")
 OPTIONS_PATH = os.environ.get("ELECTRICITY_OPTIONS_PATH", "/data/options.json")
@@ -460,19 +460,23 @@ def price_config_warning(opts):
     rather than a gap in its configuration, and there is nothing on screen to
     suggest otherwise. This is that something.
     """
-    missing = []
-    if not any(opts.get(f"grid_tariff_{band}") for band in ("low", "normal", "high")):
-        missing.append("grid_tariff_low / _normal / _high")
-    if not opts.get("transmission_tariff"):
-        missing.append("transmission_tariff")
-    if not missing:
+    # Either option alone is a complete answer. Many Danish suppliers bill the
+    # grid company's tariff and Energinet's as a single combined "transport"
+    # line, in which case the whole figure belongs in transmission_tariff and
+    # the grid bands stay at zero — demanding both would nag forever at anyone
+    # who configured it correctly.
+    configured = any(opts.get(f"grid_tariff_{band}") for band in ("low", "normal", "high")) or bool(
+        opts.get("transmission_tariff")
+    )
+    if configured:
         return None
     return {
-        "missing": missing,
+        "missing": ["transmission_tariff", "or the grid_tariff_* bands"],
         "detail": (
-            "Prices here are spot + VAT only — your grid company's tariff and Energinet's "
-            "transmission tariff are still 0. Every cost in this add-on is understated until "
-            "they are set in the Configuration tab."
+            "Prices here are spot + VAT only — no pass-through tariff is set, so your grid "
+            "company's and Energinet's charges are missing. Every cost in this add-on is "
+            "understated until one is set in the Configuration tab. If your bill shows them as "
+            "a single combined line, put the whole figure in transmission_tariff."
         ),
     }
 

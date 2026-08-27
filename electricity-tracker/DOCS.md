@@ -278,8 +278,7 @@ gives the exact value. Close with **✕**, **Escape**, or by tapping outside.
 
 - **Price now** — the current 15-minute price, full end-user total, with the
   spot/tariff/tax/VAT breakdown underneath and today's cheapest/priciest hour.
-  If the grid or transmission tariffs are still at their 0.0 defaults, a notice
-  appears here saying so: the arithmetic is correct either way, which is
+  If no pass-through tariff is set at all, a notice appears here saying so: the arithmetic is correct either way, which is
   precisely why it needs pointing out — a price of 0.12 kr/kWh where the real
   figure is nearer 1.20 looks like a broken add-on rather than an unfilled
   configuration field, and every cost in the add-on is understated by the same

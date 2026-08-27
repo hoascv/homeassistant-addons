@@ -99,8 +99,27 @@ def test_get_price_options_falls_back_on_bad_types():
 def test_untouched_tariffs_are_flagged():
     warning = electricityapp.price_config_warning(electricityapp.get_price_options({}))
     assert warning is not None
-    assert "grid_tariff_low / _normal / _high" in warning["missing"]
     assert "transmission_tariff" in warning["missing"]
+
+
+def test_a_combined_transport_line_counts_as_configured():
+    """Many Danish suppliers bill the grid company's tariff and Energinet's as
+    one line. Putting the whole figure in transmission_tariff and leaving the
+    grid bands at zero is the correct configuration for those, and used to be
+    nagged about forever."""
+    opts = electricityapp.get_price_options({"transmission_tariff": 0.2965})
+    assert electricityapp.price_config_warning(opts) is None
+
+
+def test_grid_bands_alone_also_count_as_configured():
+    opts = electricityapp.get_price_options({"grid_tariff_normal": 0.35})
+    assert electricityapp.price_config_warning(opts) is None
+
+
+def test_only_a_completely_unset_tariff_warns():
+    warning = electricityapp.price_config_warning(electricityapp.get_price_options({}))
+    assert warning is not None
+    assert "combined line" in warning["detail"]
 
 
 def test_a_fully_configured_setup_is_not_nagged():
@@ -116,16 +135,13 @@ def test_any_one_grid_band_counts_as_configured():
     assert electricityapp.price_config_warning(opts) is None
 
 
-def test_a_missing_transmission_tariff_alone_is_flagged():
-    opts = electricityapp.get_price_options({"grid_tariff_normal": 0.35})
-    warning = electricityapp.price_config_warning(opts)
-    assert warning["missing"] == ["transmission_tariff"]
-
-
-def test_a_missing_grid_tariff_alone_is_flagged():
-    opts = electricityapp.get_price_options({"transmission_tariff": 0.09})
-    warning = electricityapp.price_config_warning(opts)
-    assert warning["missing"] == ["grid_tariff_low / _normal / _high"]
+def test_neither_half_alone_is_treated_as_missing():
+    """Superseded by the combined-line case above: either option on its own is
+    a complete configuration, because suppliers differ in how they bill it."""
+    assert electricityapp.price_config_warning(
+        electricityapp.get_price_options({"grid_tariff_normal": 0.35})) is None
+    assert electricityapp.price_config_warning(
+        electricityapp.get_price_options({"transmission_tariff": 0.09})) is None
 
 
 def test_the_warning_names_where_to_fix_it():
