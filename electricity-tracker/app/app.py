@@ -19,7 +19,7 @@ import eloverblik
 import saveeye
 import easee
 
-APP_VERSION = "1.9.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.10.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("ELECTRICITY_DB_PATH", "/data/electricity.db")
 OPTIONS_PATH = os.environ.get("ELECTRICITY_OPTIONS_PATH", "/data/options.json")
@@ -1322,6 +1322,208 @@ def easee_daily_charging(sessions):
     return out
 
 
+# --- Insights ---
+#
+# Everything here is derived from rows that already exist. No new tables, no new
+# sync: the value is in asking questions of what was already collected.
+
+
+def _price_performance(rows):
+    """What you actually paid per kWh, against what a flat consumer would have.
+
+    This is the number that says whether being on a spot tariff is worth
+    anything to you. Your average is weighted by when you used power; the
+    comparison is the plain mean of the same hours' prices, which is what
+    somebody consuming identically every hour would have paid. Beating it means
+    your consumption is genuinely leaning into the cheap hours.
+
+    Only hours with both a reading and a price count, on both sides — comparing
+    a weighted average over one set of hours with a flat average over a
+    different set would not be a comparison at all.
+    """
+    priced = [r for r in rows if r["cost_dkk"] is not None and r["price_dkk_kwh"] is not None]
+    kwh = sum(r["kwh"] for r in priced)
+    cost = sum(r["cost_dkk"] for r in priced)
+    if not priced or kwh <= 0:
+        return None
+    paid = cost / kwh
+    flat = sum(r["price_dkk_kwh"] for r in priced) / len(priced)
+    return {
+        "avg_paid_dkk_kwh": round(paid, 4),
+        "flat_dkk_kwh": round(flat, 4),
+        # Positive means cheaper than consuming evenly; negative means the
+        # opposite, which is worth knowing and is not hidden.
+        "difference_pct": round((flat - paid) / flat * 100, 1) if flat else None,
+        "difference_dkk": round((flat - paid) * kwh, 2),
+        "hours": len(priced),
+        "kwh": round(kwh, 2),
+    }
+
+
+def _hourly_profile(rows):
+    """Average consumption and average price paid, by hour of the day.
+
+    A household's shape is remarkably stable, and seeing it next to the price
+    curve is what turns "shift usage to cheap hours" from advice into a
+    specific hour to move something to.
+    """
+    buckets = {}
+    for row in rows:
+        hour = int(row["time_dk"][11:13])
+        entry = buckets.setdefault(hour, {"hour": hour, "kwh": 0.0, "cost": 0.0, "days": 0, "priced": 0})
+        entry["kwh"] += row["kwh"]
+        entry["days"] += 1
+        if row["cost_dkk"] is not None:
+            entry["cost"] += row["cost_dkk"]
+            entry["priced"] += 1
+    out = []
+    for hour in range(24):
+        entry = buckets.get(hour)
+        if not entry or not entry["days"]:
+            out.append({"hour": hour, "avg_kwh": 0.0, "avg_price": None, "samples": 0})
+            continue
+        out.append({
+            "hour": hour,
+            "avg_kwh": round(entry["kwh"] / entry["days"], 3),
+            "avg_price": round(entry["cost"] / entry["kwh"], 4) if entry["kwh"] > 0 and entry["priced"] else None,
+            "samples": entry["days"],
+        })
+    return out
+
+
+def _baseline_load(rows):
+    """The load that never goes away, estimated as the 10th percentile of
+    hourly consumption.
+
+    Not the minimum: a single hour of a power cut or a gap in reporting would
+    define it, and the answer would be zero. The 10th percentile is the level
+    the house sits at when nothing in particular is happening — standby draw,
+    the fridge, the router, whatever is always on. Annualised it is usually a
+    surprising number, which is the point of showing it.
+    """
+    values = sorted(r["kwh"] for r in rows)
+    if len(values) < 24:
+        return None  # less than a day of hours says nothing about a baseline
+    index = max(0, int(len(values) * 0.10) - 1)
+    kwh_per_hour = values[index]
+    return {
+        "kw": round(kwh_per_hour, 3),
+        "annual_kwh": round(kwh_per_hour * 24 * 365, 0),
+        "share_pct": round(kwh_per_hour * len(values) / sum(values) * 100, 1) if sum(values) else None,
+    }
+
+
+def _day_totals(rows):
+    days = {}
+    for row in rows:
+        day = row["time_dk"][:10]
+        entry = days.setdefault(day, {"day": day, "kwh": 0.0, "cost": 0.0, "cost_known": True})
+        entry["kwh"] += row["kwh"]
+        if row["cost_dkk"] is None:
+            entry["cost_known"] = False
+        else:
+            entry["cost"] += row["cost_dkk"]
+    return [
+        {**d, "kwh": round(d["kwh"], 3), "cost": round(d["cost"], 2)}
+        for d in sorted(days.values(), key=lambda d: d["day"])
+    ]
+
+
+def _day_extremes(daily):
+    """The days worth looking at: most used, most spent, and the cheapest rate.
+
+    A cheapest-rate day is a different question from a cheapest day, and the
+    interesting one — it is the day the household's timing worked.
+    """
+    if not daily:
+        return None
+    costed = [d for d in daily if d["cost_known"] and d["kwh"] > 0]
+    return {
+        "most_kwh": max(daily, key=lambda d: d["kwh"]),
+        "most_cost": max(costed, key=lambda d: d["cost"]) if costed else None,
+        "best_rate": min(costed, key=lambda d: d["cost"] / d["kwh"]) if costed else None,
+        "worst_rate": max(costed, key=lambda d: d["cost"] / d["kwh"]) if costed else None,
+    }
+
+
+def _cheapest_hours_of_day(quarter_rows, top=3):
+    """Which hours of the day have been cheapest on average, from price history
+    alone — true whether or not any consumption has ever been recorded."""
+    buckets = {}
+    for row in quarter_rows:
+        hour = int(row["time_dk"][11:13])
+        entry = buckets.setdefault(hour, [0.0, 0])
+        entry[0] += row["total_dkk_kwh"]
+        entry[1] += 1
+    averages = [
+        {"hour": hour, "avg_price": round(total / count, 4)}
+        for hour, (total, count) in sorted(buckets.items())
+        if count
+    ]
+    if not averages:
+        return None
+    ordered = sorted(averages, key=lambda a: a["avg_price"])
+    return {"by_hour": averages, "cheapest": ordered[:top], "priciest": list(reversed(ordered[-top:]))}
+
+
+def build_insights(conn, options, days=30, now_local=None):
+    """Everything the Insights tab shows, from rows already collected."""
+    now_local = now_local or datetime.now(LOCAL_TZ)
+    opts = get_price_options(options)
+    cfg = get_eloverblik_config(options)
+    start = (now_local - timedelta(days=days)).replace(hour=0, minute=0, second=0, microsecond=0)
+    end = now_local.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+
+    rows = []
+    if cfg["metering_point"]:
+        saveeye_cfg = get_saveeye_config(options)
+        rows = combined_consumption_with_cost(
+            conn, start, end, cfg["metering_point"], opts["price_area"], opts,
+            resolve_saveeye_device_serial(conn, saveeye_cfg["device_serial"]),
+        )
+
+    quarter_rows = quarter_prices_with_total(conn, start, end, opts["price_area"], opts)
+    daily = _day_totals(rows)
+
+    ev = None
+    easee_cfg = get_easee_config(options)
+    if easee_cfg["enabled"]:
+        charger_id = easee_cfg["charger_id"] or _easee_token_cache["charger_id"]
+        if charger_id:
+            sessions = easee_sessions(conn, opts, opts["price_area"], charger_id, days=days, now_local=now_local)
+            totals = easee_charging_totals(sessions)
+            house_kwh = sum(d["kwh"] for d in daily)
+            share = round(totals["energy_kwh"] / house_kwh * 100, 1) if house_kwh > 0 else None
+            ev = {
+                **totals,
+                # What share of everything the house used went into the car.
+                # Only meaningful when there is a house figure to compare to.
+                "share_of_house_pct": share,
+                # The car draws through the house meter, so its share cannot
+                # really exceed 100%. When the arithmetic says otherwise it is
+                # because Eloverblik runs days behind Easee: the charging is
+                # recorded and the meter reading covering it has not arrived.
+                # Saying that is better than printing "102% of the house".
+                "house_behind": bool(share is not None and share > 100),
+                "house_kwh": round(house_kwh, 2),
+            }
+
+    return {
+        "days": days,
+        "from": start.date().isoformat(),
+        "to": (end - timedelta(days=1)).date().isoformat(),
+        "consumption_hours": len(rows),
+        "price_performance": _price_performance(rows),
+        "hourly_profile": _hourly_profile(rows),
+        "baseline": _baseline_load(rows),
+        "daily": daily,
+        "extremes": _day_extremes(daily),
+        "prices": _cheapest_hours_of_day(quarter_rows),
+        "ev": ev,
+        "price_config_warning": price_config_warning(opts),
+    }
+
+
 # --- Home Assistant sensors ---
 
 
@@ -1622,6 +1824,15 @@ def api_easee_now():
             "last_sync": _get_app_state(db, "last_easee_sync"),
         }
     )
+
+
+@app.route("/api/insights")
+def api_insights():
+    """Everything the Insights tab shows. Derived on request from rows already
+    collected — nothing here is stored or synced separately."""
+    db = get_db()
+    days = min(365, max(1, request.args.get("days", default=30, type=int) or 30))
+    return jsonify(build_insights(db, _read_options(), days=days))
 
 
 @app.route("/api/easee/history")

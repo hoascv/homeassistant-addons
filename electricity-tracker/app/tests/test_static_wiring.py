@@ -101,3 +101,23 @@ def test_the_expanded_render_uses_a_distinct_gradient_id():
     first match — so reusing the small chart's gradient id is a latent bug."""
     assert "-expanded" in JS
     assert "gradientId" in JS
+
+
+# --- Insights tab ---
+
+
+def test_the_insights_tab_and_its_panel_both_exist():
+    assert 'data-tab="insights"' in HTML
+    assert "tab-insights" in TEMPLATE_IDS
+    assert "tab-dashboard" in TEMPLATE_IDS
+
+
+def test_the_difference_is_worded_rather_than_signed():
+    """A bare "−1.2%" next to a "beating flat" verdict reads just as easily as
+    having done 1.2% worse."""
+    assert "cheaper" in JS and "dearer" in JS
+
+
+def test_insights_charts_are_expandable_like_every_other():
+    for chart_id in ("insights-profile-chart", "insights-price-chart"):
+        assert f'data-chart="{chart_id}"' in HTML

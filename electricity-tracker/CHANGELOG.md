@@ -1,5 +1,31 @@
 # Changelog
 
+## 1.10.0
+
+- **A new Insights tab**, over 7/30/90 days, asking questions of the data
+  already collected. Nothing extra is stored or synced: every figure is derived
+  on request from rows that already existed.
+- **What you paid** is the headline: your average kr/kWh weighted by *when* you
+  used power, against what a flat consumer would have paid over the same hours.
+  It is the number that says whether being on a spot tariff is worth anything,
+  and it reports being worse as plainly as being better — a heat pump running at
+  the daily peak should say so, not round to "no difference".
+- **Your day** and **When power is cheapest** — average consumption by hour and
+  average price by hour. The second comes from price history alone, so it works
+  before Eloverblik is connected at all.
+- **Always on** — the load that never goes away, from the quietest tenth of
+  hours rather than the minimum: one outage hour would otherwise define it as
+  zero. Annualised, since that is what makes it worth acting on.
+- **Days worth a look** — most used, most spent, best and worst rate. A
+  best-rate day is a different question from a cheap day and the more
+  interesting one.
+- **The car's share** of the house, with a guard: the car draws through the
+  house meter so its share cannot really exceed 100%, and when the arithmetic
+  says otherwise it is Eloverblik running days behind Easee. The card explains
+  that instead of printing "102% of the house".
+- Both new charts are expandable like every other, which came for free from
+  1.9.0's render registry.
+
 ## 1.9.0
 
 - **Every chart can be expanded.** An ⤢ button in each card header opens the

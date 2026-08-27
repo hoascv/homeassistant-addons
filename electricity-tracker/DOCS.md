@@ -192,6 +192,29 @@ Leaving a tariff at its `0.0` default is honest: the dashboard then shows
 spot + tax + VAT, not a number silently wrong by whatever your grid company
 actually charges.
 
+## Insights
+
+A second tab, over 7/30/90 days, answering questions of the data already
+collected — nothing extra is stored or synced for it.
+
+- **What you paid** — your average kr/kWh, weighted by *when* you actually used
+  power, against what a flat consumer would have paid over the same hours. This
+  is the number that says whether being on a spot tariff is worth anything to
+  you, and it reports being worse just as plainly as being better.
+- **Your day** — average consumption by hour, so "shift usage to cheap hours"
+  becomes a specific hour to move something to.
+- **When power is cheapest** — average price by hour from price history alone,
+  so it works before Eloverblik is connected at all.
+- **Always on** — the load that never goes away, estimated from the quietest
+  tenth of hours rather than the minimum, so one outage hour cannot define it.
+  Annualised, because that is the number that makes it worth acting on.
+- **Days worth a look** — most used, most spent, and the best and worst rate
+  achieved. A best-rate day is a different question from a cheap day, and the
+  more interesting one: it is the day the timing worked.
+- **The car's share** — kWh charged and what fraction of the house that was.
+  The car draws through the house meter, so a share over 100% means Eloverblik
+  is running behind the charger; the card says so rather than printing it flat.
+
 ## Dashboard
 
 Every chart has an **⤢** button in its card header. A chart in a card is about

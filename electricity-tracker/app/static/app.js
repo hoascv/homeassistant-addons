@@ -6,6 +6,7 @@ const state = {
   currentDay: "today",
   consumptionView: "hourly",
   chargingDays: 7,
+  insightsDays: 30,
 };
 
 function escapeHtml(str) {
@@ -99,7 +100,11 @@ function renderNow(data) {
 // already visible — "Grid 0.00, Transmission 0.00" means nothing to someone who
 // does not know those are meant to be filled in.
 function renderPriceConfigWarning(warning) {
-  const host = document.getElementById("price-config-warning");
+  renderPriceConfigWarningInto("price-config-warning", warning);
+}
+
+function renderPriceConfigWarningInto(hostId, warning) {
+  const host = document.getElementById(hostId);
   if (!warning) {
     host.hidden = true;
     return;
@@ -789,6 +794,187 @@ async function loadConsumptionChart() {
   }
 }
 
+// --- Insights ---
+
+function hourLabel(hour) {
+  return `${String(hour).padStart(2, "0")}:00`;
+}
+
+function renderPaid(perf) {
+  const empty = document.getElementById("insights-paid-empty");
+  const verdict = document.getElementById("insights-verdict");
+  if (!perf) {
+    empty.hidden = false;
+    verdict.textContent = "–";
+    verdict.className = "pill";
+    ["ins-paid", "ins-flat", "ins-diff"].forEach((id) => (document.getElementById(id).textContent = "–"));
+    document.getElementById("insights-paid-note").textContent = "";
+    return;
+  }
+  empty.hidden = true;
+  document.getElementById("ins-paid").textContent = perf.avg_paid_dkk_kwh.toFixed(2);
+  document.getElementById("ins-flat").textContent = perf.flat_dkk_kwh.toFixed(2);
+  const better = perf.difference_pct > 0;
+  // Words rather than a sign: "−1.2%" next to "beating flat" is ambiguous —
+  // a minus reads just as easily as "you did 1.2% worse".
+  document.getElementById("ins-diff").textContent = perf.difference_pct === 0
+    ? "level"
+    : `${Math.abs(perf.difference_pct).toFixed(1)}% ${better ? "cheaper" : "dearer"}`;
+  verdict.textContent = better ? "beating flat" : perf.difference_pct === 0 ? "level" : "behind flat";
+  verdict.className = `pill ${better ? "pill-good" : perf.difference_pct === 0 ? "" : "pill-bad"}`;
+  document.getElementById("insights-paid-note").textContent = better
+    ? `Using power when it is cheaper saved ${perf.difference_dkk.toFixed(2)} kr over ` +
+      `${fmtKwh(perf.kwh)} kWh, against consuming the same amount evenly.`
+    : `Consuming evenly would have cost ${Math.abs(perf.difference_dkk).toFixed(2)} kr less over ` +
+      `${fmtKwh(perf.kwh)} kWh — the usage is falling in the pricier hours.`;
+}
+
+function renderProfile(data) {
+  const host = document.getElementById("insights-profile-chart");
+  const profile = data.hourly_profile || [];
+  renderSmoothChart(host, profile, {
+    series: [{ valueOf: (p) => p.avg_kwh, area: true, gradientId: "insights-profile-gradient" }],
+    tooltipOf: (p) => `${hourLabel(p.hour)} — ${p.avg_kwh.toFixed(2)} kWh average` +
+      (p.avg_price != null ? `, ${p.avg_price.toFixed(2)} kr/kWh` : ""),
+    axisLabelOf: (p, _i, expanded) =>
+      (p.hour % (expanded ? 2 : 4) === 0 ? String(p.hour).padStart(2, "0") : ""),
+    emptyText: "No consumption recorded yet.",
+    ariaLabel: "Average consumption by hour of day",
+    baseline: "zero",
+    // Mostly-zero night hours with a sharp evening peak: an overshooting
+    // spline would draw negative consumption between them.
+    monotone: true,
+  });
+  const busiest = profile.reduce((a, b) => (b.avg_kwh > a.avg_kwh ? b : a), profile[0] || { avg_kwh: 0 });
+  document.getElementById("insights-profile-note").textContent = busiest && busiest.avg_kwh
+    ? `Busiest hour: ${hourLabel(busiest.hour)}, averaging ${busiest.avg_kwh.toFixed(2)} kWh.`
+    : "";
+}
+
+function renderPriceByHour(prices) {
+  const host = document.getElementById("insights-price-chart");
+  if (!prices) {
+    host.innerHTML = '<p class="empty-state">No price history yet.</p>';
+    document.getElementById("ins-cheapest").textContent = "–";
+    document.getElementById("ins-priciest").textContent = "–";
+    return;
+  }
+  renderSmoothChart(host, prices.by_hour, {
+    series: [{ valueOf: (p) => p.avg_price, area: true, gradientId: "insights-price-gradient" }],
+    tooltipOf: (p) => `${hourLabel(p.hour)} — ${p.avg_price.toFixed(2)} kr/kWh average`,
+    axisLabelOf: (p, _i, expanded) =>
+      (p.hour % (expanded ? 2 : 4) === 0 ? String(p.hour).padStart(2, "0") : ""),
+    emptyText: "No price history yet.",
+    ariaLabel: "Average price by hour of day",
+    baseline: "min",
+  });
+  const hours = (list) => list.map((h) => String(h.hour).padStart(2, "0")).join(" · ");
+  document.getElementById("ins-cheapest").textContent = hours(prices.cheapest);
+  document.getElementById("ins-priciest").textContent = hours(prices.priciest);
+}
+
+function renderBaseline(baseline) {
+  const note = document.getElementById("insights-baseline-note");
+  if (!baseline) {
+    ["ins-baseline", "ins-baseline-year", "ins-baseline-share"].forEach(
+      (id) => (document.getElementById(id).textContent = "–"));
+    note.textContent = "Needs at least a day of hourly readings.";
+    return;
+  }
+  document.getElementById("ins-baseline").textContent = baseline.kw.toFixed(2);
+  document.getElementById("ins-baseline-year").textContent = Math.round(baseline.annual_kwh);
+  document.getElementById("ins-baseline-share").textContent =
+    baseline.share_pct == null ? "–" : `${baseline.share_pct.toFixed(0)}%`;
+  note.textContent =
+    "The level the house sits at when nothing in particular is happening — standby draw, " +
+    "the fridge, anything always on. Estimated from the quietest tenth of hours, not the " +
+    "minimum, so one outage hour cannot define it.";
+}
+
+function renderInsightDays(extremes) {
+  const host = document.getElementById("insights-days");
+  if (!extremes) {
+    host.innerHTML = '<p class="empty-state">No days recorded yet.</p>';
+    return;
+  }
+  const row = (label, day, figure) => day
+    ? `<div class="insight-row"><span><strong>${escapeHtml(day.day)}</strong>
+         <span class="insight-label">${escapeHtml(label)}</span></span>
+       <span class="insight-figure">${escapeHtml(figure(day))}</span></div>`
+    : "";
+  host.innerHTML = [
+    row("most used", extremes.most_kwh, (d) => `${d.kwh.toFixed(1)} kWh`),
+    row("most spent", extremes.most_cost, (d) => `${d.cost.toFixed(2)} kr`),
+    row("best rate", extremes.best_rate, (d) => `${(d.cost / d.kwh).toFixed(2)} kr/kWh`),
+    row("worst rate", extremes.worst_rate, (d) => `${(d.cost / d.kwh).toFixed(2)} kr/kWh`),
+  ].join("") || '<p class="empty-state">No days recorded yet.</p>';
+}
+
+function renderInsightEv(ev) {
+  const card = document.getElementById("insights-ev-card");
+  if (!ev || !ev.sessions) {
+    card.hidden = true;
+    return;
+  }
+  card.hidden = false;
+  document.getElementById("ins-ev-kwh").textContent = fmtKwh(ev.energy_kwh);
+  document.getElementById("ins-ev-share").textContent =
+    ev.share_of_house_pct == null ? "–" : `${ev.share_of_house_pct.toFixed(0)}%`;
+  document.getElementById("ins-ev-rate").textContent =
+    ev.avg_dkk_kwh == null ? "–" : ev.avg_dkk_kwh.toFixed(2);
+  let note = `${ev.sessions} charging session${ev.sessions === 1 ? "" : "s"} in this range` +
+    (ev.partial_sessions ? `, ${ev.partial_sessions} only partly costed.` : ".");
+  if (ev.house_behind) {
+    note += " The share is over 100% because Eloverblik's meter readings run a few days behind" +
+      " the charger — the house total does not yet cover all of this charging.";
+  }
+  document.getElementById("insights-ev-note").textContent = note;
+}
+
+async function loadInsights() {
+  let data;
+  try {
+    data = await fetchJSON(`api/insights?days=${state.insightsDays}`);
+  } catch (err) {
+    document.getElementById("insights-empty").hidden = false;
+    document.getElementById("insights-empty").textContent = `Could not load insights: ${err}`;
+    return;
+  }
+  document.getElementById("insights-empty").hidden = true;
+  document.getElementById("insights-range-note").textContent =
+    `${data.from} to ${data.to} · ${data.consumption_hours} hours of readings`;
+  renderPriceConfigWarningInto("insights-config-warning", data.price_config_warning);
+  renderPaid(data.price_performance);
+  renderProfile(data);
+  renderPriceByHour(data.prices);
+  renderBaseline(data.baseline);
+  renderInsightDays(data.extremes);
+  renderInsightEv(data.ev);
+}
+
+function wireTabs() {
+  document.getElementById("tabs").addEventListener("click", (e) => {
+    const btn = e.target.closest(".tab");
+    if (!btn) return;
+    document.querySelectorAll(".tab").forEach((b) => b.classList.toggle("tab-on", b === btn));
+    const active = btn.dataset.tab;
+    document.getElementById("tab-dashboard").hidden = active !== "dashboard";
+    document.getElementById("tab-insights").hidden = active !== "insights";
+    // Loaded on first view rather than at startup: it is a heavier query than
+    // the dashboard needs, and most opens never reach this tab.
+    if (active === "insights") loadInsights();
+  });
+
+  document.getElementById("insights-range-toggle").addEventListener("click", (e) => {
+    const btn = e.target.closest(".seg-btn");
+    if (!btn) return;
+    document.querySelectorAll("#insights-range-toggle .seg-btn").forEach((b) => b.classList.remove("seg-on"));
+    btn.classList.add("seg-on");
+    state.insightsDays = Number(btn.dataset.days);
+    loadInsights();
+  });
+}
+
 // --- Main summary load ---
 
 async function loadSummary() {
@@ -959,6 +1145,7 @@ function init() {
   wireSettingsSheet();
   wireChartToggles();
   wireChartExpansion();
+  wireTabs();
   loadSummary();
   loadConsumptionChart();
   loadChargingHistory();

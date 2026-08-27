@@ -69,6 +69,29 @@ code {
   padding: 0.4rem; cursor: pointer; line-height: 1;
 }
 
+/* Tabs */
+.tabs {
+  display: flex; gap: 0.25rem; padding: 0 1rem; max-width: 640px; margin: 0 auto;
+  border-bottom: 1px solid var(--border);
+}
+.tab {
+  font: inherit; font-size: 0.9rem; font-weight: 600; color: var(--text-muted);
+  background: none; border: none; border-bottom: 2px solid transparent;
+  padding: 0.55rem 0.8rem; cursor: pointer; margin-bottom: -1px;
+}
+.tab.tab-on { color: var(--accent); border-bottom-color: var(--accent); }
+
+/* Insights */
+.insight-row {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 0.6rem;
+  padding: 0.5rem 0; border-top: 1px solid var(--border); font-size: 0.86rem;
+}
+.insight-row:first-child { border-top: none; }
+.insight-label { color: var(--text-muted); font-size: 0.78rem; }
+.insight-figure { font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pill-good { background: var(--success-soft); color: var(--success); border-color: transparent; }
+.pill-bad { background: var(--danger-soft); color: var(--danger); border-color: transparent; }
+
 /* Page + cards */
 .page { padding: 0.5rem 1rem 1rem; max-width: 640px; margin: 0 auto; }
 .card {

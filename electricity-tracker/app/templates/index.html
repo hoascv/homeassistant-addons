@@ -14,7 +14,12 @@
   <button type="button" class="topbar-icon-btn" id="settings-open-btn" aria-label="Settings">⚙️</button>
 </header>
 
-<main class="page">
+<nav class="tabs" id="tabs" role="tablist">
+  <button type="button" class="tab tab-on" data-tab="dashboard" role="tab">Dashboard</button>
+  <button type="button" class="tab" data-tab="insights" role="tab">Insights</button>
+</nav>
+
+<main class="page" id="tab-dashboard">
 
   <!-- Price now -->
   <section class="card" id="now-card">
@@ -141,6 +146,92 @@
     <p class="muted" id="charging-note"></p>
     <p class="empty-state" id="charging-empty" hidden>No charging sessions recorded yet in this range.</p>
   </section>
+
+</main>
+
+<main class="page" id="tab-insights" hidden>
+
+  <section class="card">
+    <div class="card-head">
+      <h2>Insights</h2>
+      <div class="seg" id="insights-range-toggle" role="tablist" aria-label="Range">
+        <button type="button" class="seg-btn" data-days="7">7d</button>
+        <button type="button" class="seg-btn seg-on" data-days="30">30d</button>
+        <button type="button" class="seg-btn" data-days="90">90d</button>
+      </div>
+    </div>
+    <p class="muted" id="insights-range-note">–</p>
+    <p class="notice notice-warn" id="insights-config-warning" hidden></p>
+  </section>
+
+  <!-- The headline: did being on a spot tariff pay? -->
+  <section class="card" id="insights-paid-card">
+    <div class="card-head"><h2>What you paid</h2><span class="pill" id="insights-verdict">–</span></div>
+    <div class="mini-stats">
+      <div class="mini-stat"><span class="mini-value" id="ins-paid">–</span><span class="mini-label">Your kr/kWh</span></div>
+      <div class="mini-stat"><span class="mini-value" id="ins-flat">–</span><span class="mini-label">Flat consumer</span></div>
+      <div class="mini-stat"><span class="mini-value" id="ins-diff">–</span><span class="mini-label">Difference</span></div>
+    </div>
+    <p class="muted" id="insights-paid-note"></p>
+    <p class="empty-state" id="insights-paid-empty" hidden>
+      No priced consumption yet. This needs Eloverblik (or Saveeye) connected and
+      at least a few hours of readings.
+    </p>
+  </section>
+
+  <!-- The shape of a day -->
+  <section class="card" id="insights-profile-card">
+    <div class="card-head">
+      <h2>Your day</h2>
+      <button type="button" class="chart-expand-btn" data-chart="insights-profile-chart"
+              data-title="Consumption by hour" aria-label="Expand consumption by hour chart" title="Expand">⤢</button>
+    </div>
+    <div id="insights-profile-chart" class="chart-host"></div>
+    <p class="muted" id="insights-profile-note"></p>
+  </section>
+
+  <section class="card" id="insights-price-card">
+    <div class="card-head">
+      <h2>When power is cheapest</h2>
+      <button type="button" class="chart-expand-btn" data-chart="insights-price-chart"
+              data-title="Average price by hour" aria-label="Expand average price by hour chart" title="Expand">⤢</button>
+    </div>
+    <div id="insights-price-chart" class="chart-host"></div>
+    <div class="mini-stats">
+      <div class="mini-stat"><span class="mini-value" id="ins-cheapest">–</span><span class="mini-label">Cheapest hours</span></div>
+      <div class="mini-stat"><span class="mini-value" id="ins-priciest">–</span><span class="mini-label">Priciest hours</span></div>
+    </div>
+  </section>
+
+  <!-- What is always on -->
+  <section class="card" id="insights-baseline-card">
+    <div class="card-head"><h2>Always on</h2></div>
+    <div class="mini-stats">
+      <div class="mini-stat"><span class="mini-value" id="ins-baseline">–</span><span class="mini-label">Baseline kW</span></div>
+      <div class="mini-stat"><span class="mini-value" id="ins-baseline-year">–</span><span class="mini-label">kWh a year</span></div>
+      <div class="mini-stat"><span class="mini-value" id="ins-baseline-share">–</span><span class="mini-label">of everything</span></div>
+    </div>
+    <p class="muted" id="insights-baseline-note"></p>
+  </section>
+
+  <!-- Days worth looking at -->
+  <section class="card" id="insights-days-card">
+    <div class="card-head"><h2>Days worth a look</h2></div>
+    <div id="insights-days"></div>
+  </section>
+
+  <!-- The car -->
+  <section class="card" id="insights-ev-card" hidden>
+    <div class="card-head"><h2>The car's share</h2></div>
+    <div class="mini-stats">
+      <div class="mini-stat"><span class="mini-value" id="ins-ev-kwh">–</span><span class="mini-label">kWh charged</span></div>
+      <div class="mini-stat"><span class="mini-value" id="ins-ev-share">–</span><span class="mini-label">of the house</span></div>
+      <div class="mini-stat"><span class="mini-value" id="ins-ev-rate">–</span><span class="mini-label">kr/kWh charging</span></div>
+    </div>
+    <p class="muted" id="insights-ev-note"></p>
+  </section>
+
+  <p class="empty-state" id="insights-empty" hidden></p>
 
   <footer class="foot">
     <span id="last-price-sync">–</span>
