@@ -331,6 +331,27 @@ which also means the published port is off by default. `restrict_to_user_ids`
 narrows ingress access to specific Home Assistant users on top of
 `panel_admin: true`.
 
+## Backup and restore
+
+**Settings → Backup & restore** downloads the whole database as a `.db` file,
+and takes one back. Nothing needs configuring for it: it goes through Home
+Assistant's ingress, which is already authenticated, so there is no port to open
+and no token to set.
+
+The download is taken through SQLite's own backup API rather than read off
+disk — the background sync writes on its own connection, so streaming the file
+could hand out a snapshot taken mid-write.
+
+**Restoring replaces everything currently stored.** The file is validated as one
+of this add-on's databases before anything is touched, and written to a
+temporary path first, so a truncated upload or somebody else's backup cannot
+leave the add-on without a database. The migrations re-run afterwards, so a
+backup taken before a column existed comes back usable rather than with a schema
+the current code cannot query.
+
+`/data` is inside Home Assistant's own add-on backups too; this is for when you
+want a copy in your own hands, or to move to another install.
+
 ## Notes
 
 - Prices are stored keyed by Danish local wall-clock time; consumption is

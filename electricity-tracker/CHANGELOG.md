@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.11.0
+
+- **Backup and restore**, in Settings. Download the whole database as a file, or
+  put one back. It goes through ingress, which is already authenticated, so
+  unlike the existing `/api/export` there is no port to open and no `api_token`
+  to set — which was the only way to get the data out before this.
+- Brings this add-on in line with Goal Tracker and Coop Tracker, which have had
+  `/api/backup` and `/api/restore` for a while. Same shape: the download is
+  taken through SQLite's own backup API rather than read off disk, since the
+  background sync writes on its own connection and streaming the file could hand
+  out a mid-write snapshot.
+- Restore validates the file as one of *this* add-on's databases before
+  replacing anything, and writes to a temporary path first — a truncated upload
+  or another add-on's backup cannot leave this one with no database. The
+  migrations re-run afterwards, so a backup from an older release comes back
+  usable rather than with a schema the current code cannot query.
+- **Fixed a leak while implementing it**: the sibling add-ons clean up their
+  snapshot with `response.call_on_close`, and that callback does not reliably
+  fire — leaving a full second copy of the database on disk after every
+  download. Here the temporary copy is deleted before the response is built, so
+  it cannot survive, and a test downloads three times and asserts nothing is
+  left behind. The same latent leak exists in Goal Tracker and Coop Tracker.
+
 ## 1.10.0
 
 - **A new Insights tab**, over 7/30/90 days, asking questions of the data
