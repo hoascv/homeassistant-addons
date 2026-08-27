@@ -272,6 +272,17 @@
     <h3>Saveeye connection</h3>
     <div id="saveeye-status" class="diag-output">saveeye_enabled is off.</div>
 
+    <h3>Backup &amp; restore</h3>
+    <p class="muted">
+      Download the whole database as a file, or restore one you saved earlier.
+      Restoring <strong>replaces everything</strong> currently stored.
+    </p>
+    <div class="btn-row">
+      <a class="btn-secondary" id="backup-download-btn" href="api/backup">Download backup</a>
+      <label class="btn-secondary file-btn">Restore…<input type="file" id="restore-input" accept=".db" hidden></label>
+    </div>
+    <p class="muted" id="restore-result"></p>
+
     <h3>Easee connection</h3>
     <button type="button" class="btn-secondary full" id="easee-test-btn">Test Easee connection</button>
     <div id="easee-test-result"></div>

@@ -1,10 +1,12 @@
 import hmac
 import html
+import io
 import json
 import os
 import signal
 import sqlite3
 import sys
+import tempfile
 import threading
 import time
 import urllib.error
@@ -12,14 +14,14 @@ import urllib.request
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from flask import Flask, Response, g, jsonify, render_template, request
+from flask import Flask, Response, g, jsonify, render_template, request, send_file
 
 import energidataservice
 import eloverblik
 import saveeye
 import easee
 
-APP_VERSION = "1.10.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.11.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("ELECTRICITY_DB_PATH", "/data/electricity.db")
 OPTIONS_PATH = os.environ.get("ELECTRICITY_OPTIONS_PATH", "/data/options.json")
@@ -217,6 +219,18 @@ def get_db():
         g.db = sqlite3.connect(DB_PATH)
         g.db.row_factory = sqlite3.Row
     return g.db
+
+
+def close_db():
+    """Close this request's connection, so the file can be replaced under it.
+
+    Only the restore path needs this: SQLite will happily let a file be swapped
+    while a handle is open, and the handle then reads a database that no longer
+    exists.
+    """
+    db = g.pop("db", None)
+    if db is not None:
+        db.close()
 
 
 @app.teardown_appcontext
@@ -1939,6 +1953,81 @@ def api_stats():
             "db_bytes": size,
         }
     )
+
+
+@app.route("/api/backup")
+def api_backup():
+    """The whole database as a file, for keeping or moving to another install.
+
+    Copied through SQLite's own backup API rather than sent straight off disk:
+    the background sync writes on its own connection, so streaming the file
+    could hand out a snapshot taken mid-write.
+    """
+    db = get_db()
+    db.commit()
+    filename = f"electricity-tracker-backup-{datetime.now(LOCAL_TZ).strftime('%Y%m%d-%H%M%S')}.db"
+
+    # A unique path per request, deleted before the response is built rather
+    # than through response.call_on_close — that callback does not reliably
+    # fire, which leaves a full copy of the database beside it after every
+    # download. Reading it into memory first is a brief spike on a file this
+    # size, and it is the only way the temporary copy is certain to go away.
+    handle, snapshot = tempfile.mkstemp(prefix="electricity-backup-", suffix=".db")
+    os.close(handle)
+    try:
+        target = sqlite3.connect(snapshot)
+        try:
+            db.backup(target)
+        finally:
+            target.close()
+        with open(snapshot, "rb") as source:
+            data = source.read()
+    finally:
+        if os.path.exists(snapshot):
+            os.remove(snapshot)
+
+    return send_file(
+        io.BytesIO(data), as_attachment=True, download_name=filename,
+        mimetype="application/vnd.sqlite3",
+    )
+
+
+def _is_valid_backup(path):
+    """Whether this file is one of *this* add-on's databases.
+
+    Checked before anything is replaced: restoring a Goal Tracker backup here
+    would swap a working database for one with none of the right tables, and the
+    add-on would come back up empty with no way back.
+    """
+    try:
+        conn = sqlite3.connect(path)
+        tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        conn.close()
+    except sqlite3.Error:
+        return False
+    return {"prices", "consumption"}.issubset(tables)
+
+
+@app.route("/api/restore", methods=["POST"])
+def api_restore():
+    """Replace the database with an uploaded backup.
+
+    Validated before the swap and written to a temporary path first, so a
+    truncated upload or somebody else's backup cannot leave this add-on without
+    a database at all.
+    """
+    uploaded = request.files.get("file")
+    if uploaded is None or uploaded.filename == "":
+        return jsonify({"error": "no file provided"}), 400
+    tmp_path = DB_PATH + ".upload"
+    uploaded.save(tmp_path)
+    if not _is_valid_backup(tmp_path):
+        os.remove(tmp_path)
+        return jsonify({"error": "not a valid Electricity Tracker backup file"}), 400
+    close_db()
+    os.replace(tmp_path, DB_PATH)
+    init_db()  # backfill any columns added since the backup was taken
+    return jsonify({"status": "restored"}), 200
 
 
 @app.route("/api/export")

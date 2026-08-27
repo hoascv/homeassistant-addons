@@ -239,6 +239,9 @@ code {
 .btn-primary { background: var(--accent); color: #fff; }
 .btn-secondary { background: var(--surface-2); color: var(--text); border-color: var(--border); }
 .btn-primary.full, .btn-secondary.full { width: 100%; margin-top: 0.4rem; }
+.btn-row { display: flex; gap: 0.4rem; flex-wrap: wrap; margin: 0.6rem 0; }
+.btn-row > * { flex: 1; min-width: 9rem; }
+.file-btn { cursor: pointer; }
 
 /* Sheets */
 .sheet-backdrop {

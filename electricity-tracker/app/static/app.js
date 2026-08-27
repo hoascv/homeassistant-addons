@@ -1083,6 +1083,31 @@ function wireSettingsSheet() {
     }
   });
 
+  document.getElementById("restore-input").addEventListener("change", async (e) => {
+    const file = e.target.files[0];
+    const result = document.getElementById("restore-result");
+    if (!file) return;
+    // A restore swaps the whole database. One deliberate confirmation, because
+    // there is no undo and the file picker is one tap away from the download.
+    if (!window.confirm("Restore this backup? It replaces all current data.")) {
+      e.target.value = "";
+      return;
+    }
+    result.textContent = "Restoring…";
+    const form = new FormData();
+    form.append("file", file);
+    try {
+      const res = await fetch("api/restore", { method: "POST", body: form });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || `server returned ${res.status}`);
+      result.textContent = "Restored. Reloading…";
+      setTimeout(() => location.reload(), 900);
+    } catch (err) {
+      result.textContent = `Restore failed: ${err.message}`;
+    }
+    e.target.value = "";
+  });
+
   document.getElementById("easee-test-btn").addEventListener("click", async () => {
     const btn = document.getElementById("easee-test-btn");
     const out = document.getElementById("easee-test-result");
