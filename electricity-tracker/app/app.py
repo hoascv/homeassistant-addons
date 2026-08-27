@@ -22,7 +22,7 @@ import eloverblik
 import saveeye
 import easee
 
-APP_VERSION = "1.12.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.12.1"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("ELECTRICITY_DB_PATH", "/data/electricity.db")
 OPTIONS_PATH = os.environ.get("ELECTRICITY_OPTIONS_PATH", "/data/options.json")
@@ -1757,16 +1757,32 @@ def build_insights(conn, options, days=30, now_local=None):
     # compares timing and must stay on energy alone — the standing charge is
     # identical however you time your consumption, so including it there would
     # dilute the comparison without changing what it measures.
-    fixed = fixed_charge_for_window(opts, start, end)
-    energy_cost = sum(r["cost_dkk"] for r in rows if r["cost_dkk"] is not None)
-    energy_kwh = sum(r["kwh"] for r in rows if r["cost_dkk"] is not None)
-    all_in = {
-        "energy_dkk": round(energy_cost, 2),
-        "fixed_dkk": round(fixed, 2),
-        "total_dkk": round(energy_cost + fixed, 2),
-        "kwh": round(energy_kwh, 2),
-        "all_in_dkk_kwh": round((energy_cost + fixed) / energy_kwh, 4) if energy_kwh > 0 else None,
-    } if energy_kwh > 0 else None
+    priced = [r for r in rows if r["cost_dkk"] is not None]
+    energy_cost = sum(r["cost_dkk"] for r in priced)
+    energy_kwh = sum(r["kwh"] for r in priced)
+    all_in = None
+    if priced and energy_kwh > 0:
+        # The standing charge is accrued over the span the *priced* energy
+        # covers, not the whole requested range. Price history usually starts
+        # later than consumption history, so charging a full month against ten
+        # days of energy would inflate the rate several-fold and quietly make
+        # this figure incomparable with the bill it exists to be compared with.
+        covered_start = datetime.fromisoformat(priced[0]["time_dk"]).replace(tzinfo=LOCAL_TZ)
+        covered_end = (
+            datetime.fromisoformat(priced[-1]["time_dk"]).replace(tzinfo=LOCAL_TZ) + timedelta(hours=1)
+        )
+        fixed = fixed_charge_for_window(opts, covered_start, covered_end)
+        all_in = {
+            "energy_dkk": round(energy_cost, 2),
+            "fixed_dkk": round(fixed, 2),
+            "total_dkk": round(energy_cost + fixed, 2),
+            "kwh": round(energy_kwh, 2),
+            "all_in_dkk_kwh": round((energy_cost + fixed) / energy_kwh, 4),
+            # Said out loud, because it is often shorter than the range asked
+            # for and that changes how the figure should be read.
+            "covers_from": covered_start.date().isoformat(),
+            "covers_to": (covered_end - timedelta(hours=1)).date().isoformat(),
+        }
 
     return {
         "days": days,

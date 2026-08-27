@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.12.1
+
+- **Fixed the all-in rate charging a full window of standing charge against a
+  shorter span of energy.** Price history usually starts later than consumption
+  history, so a 30-day window could carry 30 days of standing charge over ten
+  days of priced energy — inflating the figure roughly threefold and making it
+  incomparable with the bill it exists to be compared against. It is now accrued
+  over the span the priced energy actually covers, and the payload says what
+  that span is.
+- Found within the hour of shipping 1.12.0, while checking a real database:
+  the all-in rate read 1.79 kr/kWh against an invoice's 1.38, and the
+  explanation offered at the time — a low-consumption month — was wrong. On the
+  same data it now reads 1.46 over the twelve days it genuinely covers.
+
 ## 1.12.0
 
 - **Two options that were the difference between this add-on and a bill.**

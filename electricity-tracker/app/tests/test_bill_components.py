@@ -5,7 +5,7 @@ energy line was 57.5%, the pass-through tariff 26.9%, and a flat "Transport
 fast" standing charge 14.9%. Without the last two the add-on was reporting
 about 58% of what was actually being paid.
 """
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import app as electricityapp
 
@@ -125,3 +125,50 @@ def test_the_real_invoice_reconciles(conn):
     start = datetime(2026, 3, 1, tzinfo=electricityapp.LOCAL_TZ)
     end = datetime(2026, 6, 1, tzinfo=electricityapp.LOCAL_TZ)
     assert round(electricityapp.fixed_charge_for_window(opts, start, end), 2) == round(268.59 * 1.25, 2)
+
+
+# --- the all-in rate must compare like with like ---
+
+
+def test_the_standing_charge_covers_the_same_span_as_the_energy(conn, client, set_options):
+    """Price history usually starts later than consumption history. Charging a
+    full month of standing charge against ten days of priced energy inflates
+    the rate several-fold and makes it incomparable with the bill it exists to
+    be compared against."""
+    from datetime import datetime as _dt
+
+    set_options(eloverblik_refresh_token="t", eloverblik_metering_point="mp1",
+                transmission_tariff=0.0, grid_tariff_normal=0.0, electricity_tax=0.0,
+                fixed_charge_monthly=310.0)  # 10 kr/day in August
+
+    now = _dt.now(electricityapp.LOCAL_TZ)
+    day = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    # Twenty days of consumption, but prices for only the last two of them.
+    for offset in range(20, 0, -1):
+        stamp = day - timedelta(days=offset)
+        for hour in range(24):
+            ts = (stamp + timedelta(hours=hour)).astimezone(timezone.utc).isoformat()
+            conn.execute("INSERT OR REPLACE INTO consumption (time_utc, metering_point, kwh, quality, "
+                         "fetched_at) VALUES (?, 'mp1', 1.0, 'A04', 'x')", (ts,))
+        if offset <= 2:
+            for hour in range(24):
+                for minute in (0, 15, 30, 45):
+                    conn.execute(
+                        "INSERT OR REPLACE INTO prices (time_dk, price_area, spot_price_dkk_kwh, "
+                        "fetched_at) VALUES (?, 'DK2', 1.0, 'x')",
+                        ((stamp + timedelta(hours=hour, minutes=minute)).replace(tzinfo=None).isoformat(),),
+                    )
+    conn.commit()
+
+    all_in = client.get("/api/insights?days=30").get_json()["all_in"]
+    assert all_in is not None
+    # Two days of priced energy must carry about two days of standing charge,
+    # not thirty. At 10 kr/day + VAT that is ~25 kr, not ~375.
+    assert all_in["fixed_dkk"] < 40
+    assert all_in["covers_from"] == all_in["covers_to"] or all_in["covers_from"] < all_in["covers_to"]
+
+
+def test_the_all_in_rate_says_what_it_covers(conn, client, set_options):
+    set_options(eloverblik_refresh_token="t", eloverblik_metering_point="mp1")
+    data = client.get("/api/insights?days=30").get_json()
+    assert "all_in" in data
