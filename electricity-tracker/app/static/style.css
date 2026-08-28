@@ -203,6 +203,10 @@ code {
 /* Invisible, larger-than-the-mark hit target — the actual hover surface. */
 .chart-hit { fill: transparent; cursor: pointer; }
 .chart-axis-label { font-size: 8px; fill: var(--text-muted); }
+/* Value gridlines sit behind the curve and should stay there: a hairline you
+   read a level off, not a second set of lines competing with the data. */
+.chart-grid-line { stroke: var(--grid); stroke-width: 1; }
+.chart-axis-value { font-variant-numeric: tabular-nums; }
 
 /* Charging history */
 .session-row {

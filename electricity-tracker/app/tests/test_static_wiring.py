@@ -96,6 +96,44 @@ def test_the_expanded_chart_modal_is_wired():
         assert element_id in JS, f"{element_id} never used by app.js"
 
 
+# --- The y axis ---
+
+
+def _chart_calls():
+    """The argument text of every renderSmoothChart call, by paren matching —
+    the options are nested object literals, so a regex cannot find their end."""
+    calls = []
+    for start in (m.end() for m in re.finditer(r"(?<!function )renderSmoothChart\(", JS)):
+        depth, i = 1, start
+        while depth:
+            depth += {"(": 1, ")": -1}.get(JS[i], 0)
+            i += 1
+        calls.append(JS[start:i - 1])
+    return calls
+
+
+def test_every_chart_labels_its_y_axis_with_a_unit():
+    """A curve with no unit on it shows the shape and hides the scale: 0.30 and
+    3.00 kr/kWh draw the identical picture. The expanded re-render inherits the
+    unit along with the rest of the options it spreads."""
+    for call in _chart_calls():
+        if "...saved.opts" in call:
+            continue
+        aria = re.search(r'ariaLabel: "([^"]+)"', call)
+        assert "yUnit:" in call, f"chart without a y-axis unit: {aria.group(1) if aria else call[:60]}"
+
+
+def test_the_y_axis_units_are_the_ones_the_rest_of_the_page_quotes():
+    units = set(re.findall(r'yUnit: "([^"]+)"', JS))
+    assert units == {"kWh", "kr/kWh"}, f"unexpected axis units: {sorted(units)}"
+
+
+def test_the_gridlines_and_value_labels_are_styled():
+    for class_name in ("chart-grid-line", "chart-axis-value"):
+        assert f".{class_name}" in CSS, f"{class_name} has no style rule"
+        assert class_name in JS, f"{class_name} is styled but never rendered"
+
+
 def test_the_expanded_render_uses_a_distinct_gradient_id():
     """Both charts are in the document at once, and url(#id) resolves to the
     first match — so reusing the small chart's gradient id is a latent bug."""

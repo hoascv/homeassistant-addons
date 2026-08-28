@@ -220,6 +220,54 @@ function smoothLinePath(points) {
   return d;
 }
 
+// --- The y axis ---
+//
+// Without one, a curve shows the shape and hides the scale: 0.30 kr/kWh and
+// 3.00 kr/kWh draw the identical picture, and a consumption chart says nothing
+// about whether the evening peak is half a kWh or five. Ticks land on round
+// numbers rather than on the data's own extremes — a gridline at 2.00 is worth
+// reading, one at 1.87 is just the highest point restated — and the topmost
+// label carries the unit, so the axis says what it measures without spending a
+// whole row on a caption.
+function yAxisTicks(min, max, unit, expanded) {
+  const wanted = expanded ? 5 : 3;
+  const span = max - min;
+  // 1, 2 or 5 times a power of ten: the intervals people read without doing
+  // arithmetic. Anything else and a gridline needs working out. The thresholds
+  // are the midpoints between those choices, so the step picked is the one
+  // whose tick count comes closest to what was asked for.
+  const rough = span / wanted;
+  const magnitude = Math.pow(10, Math.floor(Math.log10(rough)));
+  const normalised = rough / magnitude;
+  // Never finer than 0.01: that is the last digit anything here is quoted in
+  // (0.01 kr/kWh, 0.01 kWh), and a 0.005 step would have to label its own
+  // gridlines with a rounded number they do not sit on.
+  const step = Math.max(0.01,
+    (normalised < 1.5 ? 1 : normalised < 3 ? 2 : normalised < 7 ? 5 : 10) * magnitude);
+  const decimals = Math.max(0, Math.ceil(-Math.log10(step)));
+
+  const ticks = [];
+  const seen = new Set();
+  // A thousandth of a step of slack at each end: a tick sitting exactly on min
+  // or max is a real tick, and floating-point drift should not drop it.
+  const slack = step / 1000;
+  for (let v = Math.ceil((min - slack) / step) * step; v <= max + slack; v += step) {
+    const label = v.toFixed(decimals);
+    // A flat series rounds several ticks to the same text; one gridline for it.
+    if (seen.has(label)) continue;
+    seen.add(label);
+    ticks.push({ value: v, label });
+  }
+  if (!ticks.length) ticks.push({ value: min, label: min.toFixed(decimals) });
+  ticks[ticks.length - 1].label += ` ${unit}`;
+
+  // 8px type runs about 4.6 user units to the character, and the gutter has to
+  // hold the widest label, unit and all — measuring it here is what keeps the
+  // axis from overlapping the curve.
+  const widest = Math.max(...ticks.map((t) => t.label.length));
+  return { ticks, gutter: Math.round(widest * 4.6) + 8 };
+}
+
 // One shared renderer for the price curve and both consumption views — same
 // shape (a time series), same treatment (smooth line, soft area wash,
 // per-point hover, sparse axis labels), differing only in baseline,
@@ -249,7 +297,7 @@ function renderSmoothChart(host, rows, opts) {
 
   // Expanded renders pass their own box; the default is the in-card size.
   const W = opts.width || 600, H = opts.height || 160;
-  const padTop = 14, padBottom = 20, padX = 3;
+  const padTop = 14, padBottom = 20, padRight = 3;
   const values = [];
   rows.forEach((r) => series.forEach((s) => {
     const v = s.valueOf(r);
@@ -258,16 +306,32 @@ function renderSmoothChart(host, rows, opts) {
   const min = opts.baseline === "zero" ? 0 : Math.min(...values);
   const max = Math.max(...values, min + 0.01);
   const range = max - min;
-  const innerW = W - padX * 2;
-  const stepX = rows.length > 1 ? innerW / (rows.length - 1) : 0;
   const baselineY = H - padBottom;
+  const yFor = (v) => padTop + (1 - (v - min) / range) * (H - padTop - padBottom);
+
+  // The gutter holds the value labels, so it has to be measured before
+  // anything is placed horizontally.
+  const yAxis = opts.yUnit ? yAxisTicks(min, max, opts.yUnit, Boolean(opts.expanded)) : null;
+  const padLeft = yAxis ? yAxis.gutter : padRight;
+  const innerW = W - padLeft - padRight;
+  const stepX = rows.length > 1 ? innerW / (rows.length - 1) : 0;
 
   const pointAt = (s, r, i) => {
     const v = s.valueOf(r);
     if (v == null) return null;
-    return [padX + i * stepX, padTop + (1 - (v - min) / range) * (H - padTop - padBottom)];
+    return [padLeft + i * stepX, yFor(v)];
   };
   const seriesPoints = series.map((s) => rows.map((r, i) => pointAt(s, r, i)));
+
+  // Gridlines first: they belong behind the data, not across it.
+  const grid = !yAxis ? "" : yAxis.ticks.map(({ value, label }) => {
+    const y = yFor(value).toFixed(2);
+    return (
+      `<line class="chart-grid-line" x1="${padLeft}" y1="${y}" x2="${(W - padRight).toFixed(2)}" y2="${y}"/>` +
+      `<text class="chart-axis-label chart-axis-value" x="${(padLeft - 5).toFixed(2)}" y="${y}"` +
+      ` text-anchor="end" dominant-baseline="middle">${escapeHtml(label)}</text>`
+    );
+  }).join("");
 
   let defs = "";
   let areas = "";
@@ -333,12 +397,12 @@ function renderSmoothChart(host, rows, opts) {
 
   const labels = rows.map((r, i) => {
     const text = opts.axisLabelOf(r, i, Boolean(opts.expanded));
-    return text ? `<text class="chart-axis-label" x="${(padX + i * stepX).toFixed(2)}" y="${H - 4}">${text}</text>` : "";
+    return text ? `<text class="chart-axis-label" x="${(padLeft + i * stepX).toFixed(2)}" y="${H - 4}">${text}</text>` : "";
   }).join("");
 
   host.innerHTML = (
     `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="${escapeHtml(opts.ariaLabel)}">` +
-    `<defs>${defs}</defs>` + areas + lines + extras + hitTargets + labels +
+    `<defs>${defs}</defs>` + grid + areas + lines + extras + hitTargets + labels +
     `</svg>`
   );
   return { seriesPoints };
@@ -441,6 +505,7 @@ function renderPriceChart(rows, highlightKey) {
     },
     emptyText: "No price data yet.",
     ariaLabel: "Electricity price today",
+    yUnit: "kr/kWh",
     baseline: "min",
     nowIndex,
     extremeDots: true,
@@ -656,6 +721,7 @@ function renderChargingHistory(data) {
     },
     emptyText: "No charging in this range.",
     ariaLabel: "Charging energy per day",
+    yUnit: "kWh",
     baseline: "zero",
     // Most days are zero with occasional big nights; an overshooting spline
     // would draw negative charging between them.
@@ -765,6 +831,7 @@ function renderHourlyChart(rows) {
       (Number(r.time_dk.slice(11, 13)) % (expanded ? 1 : 3) === 0 ? r.time_dk.slice(11, 13) : ""),
     emptyText: "No consumption data yet today.",
     ariaLabel: "Hourly consumption today, measured and live estimate",
+    yUnit: "kWh",
     baseline: "zero",
   });
 }
@@ -788,6 +855,7 @@ function renderDailyChart(rows) {
       ? d.day.slice(5) : ""),
     emptyText: "No consumption data yet.",
     ariaLabel: "Daily consumption, measured and live estimate",
+    yUnit: "kWh",
     baseline: "zero",
   });
 }
@@ -863,6 +931,7 @@ function renderProfile(data) {
       (p.hour % (expanded ? 2 : 4) === 0 ? String(p.hour).padStart(2, "0") : ""),
     emptyText: "No consumption recorded yet.",
     ariaLabel: "Average consumption by hour of day",
+    yUnit: "kWh",
     baseline: "zero",
     // Mostly-zero night hours with a sharp evening peak: an overshooting
     // spline would draw negative consumption between them.
@@ -889,6 +958,7 @@ function renderPriceByHour(prices) {
       (p.hour % (expanded ? 2 : 4) === 0 ? String(p.hour).padStart(2, "0") : ""),
     emptyText: "No price history yet.",
     ariaLabel: "Average price by hour of day",
+    yUnit: "kr/kWh",
     baseline: "min",
   });
   const hours = (list) => list.map((h) => String(h.hour).padStart(2, "0")).join(" · ");

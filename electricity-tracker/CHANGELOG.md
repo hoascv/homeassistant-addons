@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.13.0
+
+- **Every chart now has a y axis.** A few gridlines on round values with the
+  figure in the left gutter, and the unit — `kr/kWh` or `kWh` — on the
+  topmost label. Until now the charts showed the shape of a day and hid its
+  scale: an evening peak looked identical whether it cost 0.50 or 1.50 kr/kWh,
+  and the only way to get a number out was to hover a point.
+- Ticks land on round numbers rather than on the data's own minimum and
+  maximum. A gridline at 2.00 is worth reading; one at 1.87 only restates the
+  highest point. The step never goes finer than 0.01, the last digit anything
+  here is quoted in, so a label always names the value its gridline sits on.
+- Expanding a chart gives it more gridlines, the same way it already gave it
+  more time labels.
+
 ## 1.12.2
 
 - **Fixed the tariff warning nagging people who had configured their tariffs

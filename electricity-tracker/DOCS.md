@@ -269,12 +269,19 @@ collected — nothing extra is stored or synced for it.
 
 ## Dashboard
 
-Every chart has an **⤢** button in its card header. A chart in a card is about
-160 px tall, which is enough to see a shape and not enough to read a value off;
-expanding re-renders the same data more than twice as tall and full width, with
-denser axis labels — hourly instead of three-hourly on the price curve, and
-roughly twice as many dates on the daily charts. Hover or long-press still
-gives the exact value. Close with **✕**, **Escape**, or by tapping outside.
+Every chart carries its scale on the left: a few gridlines on round values,
+the topmost one labelled with the unit — **kr/kWh** on the price
+curves, **kWh** on consumption and charging. It is the difference between
+seeing the shape of a day and knowing whether the evening peak cost 0.50 or
+1.50 kr/kWh.
+
+Every chart also has an **⤢** button in its card header. A chart in a card is
+about 160 px tall, which is enough to see a shape and not enough to read a
+value off; expanding re-renders the same data more than twice as tall and full
+width, with denser labels on both axes — hourly instead of three-hourly on the
+price curve, roughly twice as many dates on the daily charts, and more
+gridlines to read a value against. Hover or long-press still gives the exact
+value. Close with **✕**, **Escape**, or by tapping outside.
 
 - **Price now** — the current 15-minute price, full end-user total, with the
   spot/tariff/tax/VAT breakdown underneath and today's cheapest/priciest hour.
