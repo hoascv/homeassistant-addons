@@ -4,3 +4,6 @@ pytest>=7.4,<9
 # pip resolves in one pass rather than backtracking.
 pyspark==4.1.1
 delta-spark==4.3.1
+# Coverage is measured in CI against a floor (see test.yml), so a change
+# that drops coverage fails the build rather than passing quietly.
+pytest-cov>=5.0,<8

@@ -4,3 +4,6 @@ pytest>=7.4,<9
 # to speak to MinIO directly rather than through Airflow's S3Hook, so there is
 # no existing test double for it to reuse.
 moto[s3]>=5.0,<6
+# Coverage is measured in CI against a per-add-on floor (see test.yml), so
+# a change that drops coverage fails the build rather than passing quietly.
+pytest-cov>=5.0,<8

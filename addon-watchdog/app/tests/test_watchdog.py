@@ -6,9 +6,12 @@ worth pinning down is the mapping from (Supervisor state, probe outcome) to a
 single word, because that word becomes a sensor state people write automations
 against.
 """
+import contextlib
+import http.server
 import json
 import pathlib
 import socket
+import threading
 import time
 
 import yaml
@@ -135,6 +138,121 @@ def test_no_probe_or_no_hostname_yields_nothing():
     is not the same as the service being down."""
     assert watchdog.run_probe(None, "host", 1) is None
     assert watchdog.run_probe(watchdog.PROBES["pipeline-postgres"], None, 1) is None
+
+
+@contextlib.contextmanager
+def _http_server(handler):
+    """A real socket on an ephemeral port, because probe_http's whole job is to
+    turn what actually comes back off the wire into ok/not-ok. Stubbing urlopen
+    would test the stub."""
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802 - BaseHTTPRequestHandler's spelling
+            handler(self)
+
+        def log_message(self, *_args):
+            pass  # keep the test output clean
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield server.server_address[1]
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def _respond(status, body=b"", content_type="text/plain"):
+    def handler(request):
+        request.send_response(status)
+        request.send_header("Content-Type", content_type)
+        request.send_header("Content-Length", str(len(body)))
+        request.end_headers()
+        if body:
+            request.wfile.write(body)
+
+    return handler
+
+
+def test_http_probe_counts_a_200_as_alive():
+    with _http_server(_respond(200, b"hello")) as port:
+        result = watchdog.probe_http("127.0.0.1", port, "/", timeout=5)
+    assert result.ok is True
+    assert "200" in result.detail
+
+
+def test_http_probe_counts_a_401_as_alive():
+    """The Journal case, and the reason it can be probed at all.
+
+    Journal is ingress-only: it refuses every request without Home Assistant's
+    ingress user header, so 401 is what a perfectly healthy Journal answers.
+    Reading that as a failure would report a working add-on as degraded — and
+    the watchdog is given no credential to get any further in, deliberately.
+    """
+    with _http_server(_respond(401, b'{"error": "unauthorized"}')) as port:
+        result = watchdog.probe_http("127.0.0.1", port, "/", timeout=5)
+    assert result.ok is True
+    assert "401" in result.detail
+
+
+def test_journal_is_probed_on_the_web_ui():
+    """Pins the wiring the 401 rule exists for, so removing one without the
+    other is a test failure rather than a silently unmonitored journal."""
+    probe = watchdog.PROBES["journal"]
+    assert (probe.kind, probe.port, probe.path) == ("http", 8099, "/")
+    assert "journal" not in watchdog.STATS_PATHS
+
+
+def test_http_probe_counts_a_500_as_down():
+    """The distinction the add-on exists to make: something is listening, but
+    the service behind it is broken."""
+    with _http_server(_respond(500, b"boom")) as port:
+        result = watchdog.probe_http("127.0.0.1", port, "/", timeout=5)
+    assert result.ok is False
+    assert "500" in result.detail
+
+
+def test_http_probe_reports_a_closed_port_as_unreachable():
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        closed_port = sock.getsockname()[1]
+    result = watchdog.probe_http("127.0.0.1", closed_port, "/", timeout=2)
+    assert result.ok is False
+    assert "unreachable" in result.detail
+
+
+def test_http_probe_reports_airflow_components_when_it_gets_them():
+    """Airflow's monitor endpoint says which half is broken; the detail should
+    carry that rather than flatten it to `HTTP 200`."""
+    body = json.dumps(
+        {
+            "metadatabase": {"status": "healthy"},
+            "scheduler": {"status": "unhealthy"},
+            "triggerer": {"status": "healthy"},
+        }
+    ).encode()
+    with _http_server(_respond(200, body, "application/json")) as port:
+        result = watchdog.probe_http("127.0.0.1", port, "/api/v2/monitor/health", timeout=5)
+    assert result.ok is True
+    assert "scheduler=unhealthy" in result.detail
+    assert "metadatabase=healthy" in result.detail
+
+
+def test_http_probe_falls_back_to_the_status_code_for_a_non_json_body():
+    """Something else on that port, or a different Airflow version. Reporting
+    the code is honest; inventing component names would not be."""
+    with _http_server(_respond(200, b"<html>not airflow</html>", "text/html")) as port:
+        result = watchdog.probe_http("127.0.0.1", port, "/api/v2/monitor/health", timeout=5)
+    assert result.ok is True
+    assert result.detail == "HTTP 200"
+
+
+def test_http_probe_falls_back_when_the_json_has_no_components():
+    with _http_server(_respond(200, b'{"unrelated": true}', "application/json")) as port:
+        result = watchdog.probe_http("127.0.0.1", port, "/", timeout=5)
+    assert result.detail == "HTTP 200"
 
 
 # --- collect() degrades rather than raising -----------------------------------

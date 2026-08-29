@@ -1,3 +1,6 @@
 -r requirements.txt
 -r requirements-advanced.txt
 pytest>=7.4,<9
+# Coverage is measured in CI against a per-add-on floor (see test.yml), so
+# a change that drops coverage fails the build rather than passing quietly.
+pytest-cov>=5.0,<8

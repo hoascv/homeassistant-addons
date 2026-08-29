@@ -4,3 +4,8 @@ __pycache__/
 .DS_Store
 .venv/
 .pytest_cache/
+# Coverage data and reports; the .coveragerc files are committed, these are not.
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/

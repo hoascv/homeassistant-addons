@@ -229,3 +229,139 @@ def test_an_unreadable_directory_is_a_refusal_not_a_traceback(tmp_path):
     data, err = diskio.run_benchmark(data_dir=str(tmp_path / "absent"))
     assert data is None
     assert "cannot check free space" in err
+
+
+# --- the benchmark, when it works ---------------------------------------------
+
+
+def _fio_output(iops, bw_kb, p95_ns, side="read"):
+    """The shape fio actually emits with --output-format=json, trimmed to the
+    fields read here."""
+    import json as _json
+    return _json.dumps({"jobs": [{side: {
+        "iops": iops, "bw": bw_kb,
+        "clat_ns": {"percentile": {"95.000000": p95_ns}},
+    }}]})
+
+
+def _fio(monkeypatch, tmp_path, outputs):
+    """Stub fio itself, so the parsing and the file handling are what run."""
+    monkeypatch.setattr(diskio, "_free_bytes", lambda path: 50 * 1073741824)
+    monkeypatch.setattr(diskio.shutil, "which", lambda name: "/usr/bin/fio")
+    monkeypatch.setattr(diskio, "BENCHMARK_FILE", str(tmp_path / "benchmark.json"))
+    calls = []
+
+    class _Proc:
+        def __init__(self, stdout):
+            self.returncode = 0
+            self.stdout = stdout
+            self.stderr = ""
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        return _Proc(outputs[len(calls) - 1])
+
+    monkeypatch.setattr(diskio.subprocess, "run", fake_run)
+    return calls
+
+
+def test_a_benchmark_measures_both_directions_and_converts_the_units(tmp_path, monkeypatch):
+    """fio reports bandwidth in KB/s and latency in nanoseconds; the page shows
+    MB/s and milliseconds. Getting either conversion wrong is off by 1000."""
+    _fio(monkeypatch, tmp_path, [
+        _fio_output(5000.4, 40960, 1_500_000, side="read"),
+        _fio_output(900.6, 8192, 12_000_000, side="write"),
+    ])
+    result, err = diskio.run_benchmark(size_mb=64, seconds=2, data_dir=str(tmp_path))
+
+    assert err is None
+    assert result["randread"] == {"iops": 5000.4, "mb_s": 40.0, "latency_ms_p95": 1.5}
+    assert result["randwrite"] == {"iops": 900.6, "mb_s": 8.0, "latency_ms_p95": 12.0}
+    assert result["block_size"] == "8k"
+    assert "floor on the device" in result["note"]
+
+
+def test_the_configured_size_and_runtime_reach_fio(tmp_path, monkeypatch):
+    calls = _fio(monkeypatch, tmp_path, [
+        _fio_output(1, 1, 1, side="read"), _fio_output(1, 1, 1, side="write"),
+    ])
+    diskio.run_benchmark(size_mb=256, seconds=15, data_dir=str(tmp_path))
+    assert "--size=256m" in calls[0]
+    assert "--runtime=15" in calls[0]
+    assert "--rw=randread" in calls[0]
+    assert "--rw=randwrite" in calls[1]
+
+
+def test_a_benchmark_is_saved_so_it_survives_a_restart(tmp_path, monkeypatch):
+    """The ceiling is measured on demand and compared against on every scan; a
+    number that vanished on restart would make the saturation column blank until
+    someone pressed the button again."""
+    _fio(monkeypatch, tmp_path, [
+        _fio_output(4000, 32768, 1_000_000, side="read"),
+        _fio_output(800, 6144, 9_000_000, side="write"),
+    ])
+    written, _ = diskio.run_benchmark(data_dir=str(tmp_path))
+    assert diskio.load_benchmark() == written
+
+
+def test_a_failing_fio_reports_its_own_stderr(tmp_path, monkeypatch):
+    monkeypatch.setattr(diskio, "_free_bytes", lambda path: 50 * 1073741824)
+    monkeypatch.setattr(diskio.shutil, "which", lambda name: "/usr/bin/fio")
+
+    class _Proc:
+        returncode = 1
+        stdout = ""
+        stderr = "  no such device  "
+
+    monkeypatch.setattr(diskio.subprocess, "run", lambda cmd, **kw: _Proc())
+    result, err = diskio.run_benchmark(data_dir=str(tmp_path))
+    assert result is None
+    assert err == "fio randread failed: no such device"
+
+
+def test_a_benchmark_that_hangs_is_given_up_on(tmp_path, monkeypatch):
+    """--time_based bounds fio's own runtime, so a run that outlasts the timeout
+    is wedged rather than slow, and waiting longer will not help."""
+    monkeypatch.setattr(diskio, "_free_bytes", lambda path: 50 * 1073741824)
+    monkeypatch.setattr(diskio.shutil, "which", lambda name: "/usr/bin/fio")
+
+    def hang(cmd, **kwargs):
+        raise diskio.subprocess.TimeoutExpired(cmd, kwargs.get("timeout", 1))
+
+    monkeypatch.setattr(diskio.subprocess, "run", hang)
+    result, err = diskio.run_benchmark(data_dir=str(tmp_path))
+    assert result is None and err == "fio timed out"
+
+
+def test_unrecognisable_fio_output_is_reported_not_raised(tmp_path, monkeypatch):
+    """A different fio version reshaping its JSON should degrade to a message,
+    not a traceback on a background thread."""
+    _fio(monkeypatch, tmp_path, ['{"jobs": []}', '{"jobs": []}'])
+    result, err = diskio.run_benchmark(data_dir=str(tmp_path))
+    assert result is None
+    assert err.startswith("fio produced no usable result:")
+
+
+def test_a_benchmark_file_that_is_missing_or_corrupt_reads_as_none(tmp_path, monkeypatch):
+    monkeypatch.setattr(diskio, "BENCHMARK_FILE", str(tmp_path / "absent.json"))
+    assert diskio.load_benchmark() is None
+
+    corrupt = tmp_path / "corrupt.json"
+    corrupt.write_text("{half written")
+    monkeypatch.setattr(diskio, "BENCHMARK_FILE", str(corrupt))
+    assert diskio.load_benchmark() is None
+
+
+# --- diskstats the kernel would not normally emit -----------------------------
+
+
+def test_a_truncated_row_is_skipped(tmp_path):
+    """Older kernels emit fewer columns; taking parts[12] from one of those rows
+    would be an IndexError on a background thread."""
+    devices = diskio.read_diskstats(_write(tmp_path, " 259 0 nvme0n1 1000 0 8000\n"))
+    assert devices == {}
+
+
+def test_a_row_with_unparsable_numbers_is_skipped(tmp_path):
+    stats = " 259       0 nvme0n1 x 0 8000 500 2000 0 16000 1000 0 5000 1500\n"
+    assert diskio.read_diskstats(_write(tmp_path, stats)) == {}

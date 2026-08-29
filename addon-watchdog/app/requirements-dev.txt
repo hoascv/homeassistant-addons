@@ -5,3 +5,6 @@ pytest>=7.4,<9
 # reads YAML, and it was missing here until the tests first ran outside a
 # machine that happened to have PyYAML installed.
 pyyaml>=6.0,<7
+# Coverage is measured in CI against a per-add-on floor (see test.yml), so
+# a change that drops coverage fails the build rather than passing quietly.
+pytest-cov>=5.0,<8

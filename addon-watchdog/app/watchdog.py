@@ -64,6 +64,12 @@ PROBES = {
     # Same reasoning as detection-hub: the dashboard can answer fine with a
     # dead tcpdump process behind it, so /api/health rather than /.
     "network-traffic": Probe("http", 8099, "/api/health", "capture running"),
+    # Ingress-only, so every request without Home Assistant's ingress user
+    # header gets a 401 — including this one. That is the healthy answer here,
+    # and probe_http already counts anything under 500 as alive: what is being
+    # asked is whether Flask is up and speaking HTTP, not whether the watchdog
+    # can get in. It deliberately cannot, and it holds no journal credential.
+    "journal": Probe("http", 8099, "/", "web UI answers"),
     "pipeline-postgres": Probe("tcp", 5432, None, "accepting connections"),
     # The replica publishes 5433 on the host but still listens on 5432 inside
     # its container, and probes go to container ports.

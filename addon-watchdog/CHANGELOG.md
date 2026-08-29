@@ -1,5 +1,30 @@
 # Changelog
 
+## 1.14.2
+
+- **The Journal add-on was invisible here.** Same gap as Knowledge in 1.14.1,
+  and caught by the same test: Journal shipped without a `PROBES` entry, so it
+  did not appear on the dashboard and nothing reported on it. Probed on `/`.
+- That probe expects a **401** and treats it as healthy. Journal is ingress-only
+  and refuses any request without Home Assistant's ingress user header, so a 401
+  is what a live Journal answers — `probe_http` already counts anything under
+  500 as alive. The watchdog gets no further in, and holds no credential that
+  would let it: the question is whether the service is up, not what it contains.
+- No `/api/stats` entry, deliberately. Journal publishes a streak sensor with
+  counts and dates but never content, and there is no records endpoint for a
+  watchdog to read.
+- **A malformed `fio` result no longer escapes its own error handler.**
+  `run_benchmark` catches "fio produced no usable result" for exactly this, but
+  an output with `jobs` present and empty raises `IndexError`, which was not in
+  the caught set — so it surfaced from the background thread as
+  `benchmark raised IndexError` instead. Found by the new benchmark tests.
+- Also added `journal` to the CI test matrix. Its suite had never run in CI —
+  the same drift 1.14.1 corrected for two other add-ons.
+- Tests: coverage of this add-on goes from 71% to 93%. `probe_http`, `publish`,
+  the Supervisor call layer, `fetch_stats`, the scan loop, the I/O sampler and
+  the benchmark had no tests at all; the first two are what every sensor rests
+  on, and `publish` is the only part nothing else would have caught.
+
 ## 1.14.1
 
 - **The Knowledge add-on was invisible here.** It shipped without a `PROBES`

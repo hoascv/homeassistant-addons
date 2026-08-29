@@ -268,7 +268,11 @@ def run_benchmark(size_mb=1024, seconds=30, min_free_gb=2, data_dir=None):
             }
     except subprocess.TimeoutExpired:
         return None, "fio timed out"
-    except (OSError, ValueError, KeyError) as exc:
+    # IndexError belongs here with the rest: `jobs` present but empty is what a
+    # differently-shaped fio output actually produces, and it was the one way
+    # through this handler — it surfaced as "benchmark raised IndexError" from
+    # the thread above rather than as the message written for this case.
+    except (OSError, ValueError, KeyError, IndexError) as exc:
         return None, f"fio produced no usable result: {exc}"
     finally:
         # Always, including on failure: a stale gigabyte in /data is exactly the

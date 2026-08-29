@@ -1,0 +1,21 @@
+# Scoped to jobs/ — the code the tests import and the DAG imports at runtime.
+#
+# dags/ is deliberately outside this. The DAG modules pull in `airflow.sdk` and
+# two providers and build their DAGs on import, which is why the logic worth
+# testing was moved into jobs/ in the first place (see tests/conftest.py).
+# Measuring them would mean making Airflow itself a test dependency to buy a
+# number, not a test.
+[run]
+source = jobs
+branch = true
+omit =
+    tests/*
+    .venv/*
+
+[report]
+show_missing = true
+skip_covered = true
+exclude_also =
+    if __name__ == .__main__.:
+    if TYPE_CHECKING:
+    raise NotImplementedError

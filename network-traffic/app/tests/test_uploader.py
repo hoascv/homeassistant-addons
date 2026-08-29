@@ -229,3 +229,157 @@ def test_clear_prefix_on_an_empty_prefix_deletes_nothing(monkeypatch):
     deleted_count, deleted_bytes, err = uploader.clear_prefix(client, "raw", "network_traffic")
 
     assert (deleted_count, deleted_bytes, err) == (0, 0, None)
+
+
+# --- what MinIO refusing looks like -------------------------------------------
+#
+# moto answers correctly, which is what makes it useful above and useless here:
+# every branch below is a MinIO that is down, full, or refusing the credential,
+# and the point of each is that the add-on returns the reason rather than
+# raising it into the lifecycle thread.
+
+
+def _client_error(code, operation="HeadBucket"):
+    return ClientError({"Error": {"Code": code, "Message": "denied"}}, operation)
+
+
+class _Failing:
+    """A client whose named methods raise; anything else returns an empty dict."""
+
+    def __init__(self, **failures):
+        self._failures = failures
+        self.calls = []
+
+    def __getattr__(self, name):
+        def _call(*args, **kwargs):
+            self.calls.append(name)
+            if name in self._failures:
+                raise self._failures[name]
+            return {}
+
+        return _call
+
+
+def test_a_bucket_check_refused_for_a_reason_other_than_absence_is_reported():
+    """403 means the credential is wrong; creating the bucket would fail too,
+    and reporting "created" would be a lie."""
+    client = _Failing(head_bucket=_client_error("403"))
+    err = uploader.ensure_bucket(client, "raw")
+    assert err and "denied" in err
+    assert "create_bucket" not in client.calls
+
+
+def test_a_transport_failure_checking_the_bucket_is_reported():
+    from botocore.exceptions import EndpointConnectionError
+
+    client = _Failing(head_bucket=EndpointConnectionError(endpoint_url="http://x"))
+    err = uploader.ensure_bucket(client, "raw")
+    assert err and "http://x" in err
+
+
+def test_a_failed_bucket_creation_is_reported_not_raised():
+    client = _Failing(head_bucket=_client_error("404"),
+                      create_bucket=_client_error("AccessDenied", "CreateBucket"))
+    err = uploader.ensure_bucket(client, "raw")
+    assert err and "denied" in err
+
+
+def test_an_unreadable_lifecycle_configuration_is_reported():
+    """Anything other than "there is no rule yet" means the call itself failed,
+    and overwriting rules we could not read would clobber somebody else's."""
+    client = _Failing(get_bucket_lifecycle_configuration=_client_error(
+        "AccessDenied", "GetBucketLifecycleConfiguration"))
+    err = uploader.ensure_lifecycle(client, "raw", "network_traffic", 7)
+    assert err and "denied" in err
+    assert "put_bucket_lifecycle_configuration" not in client.calls
+
+
+def test_a_transport_failure_reading_the_lifecycle_rules_is_reported():
+    from botocore.exceptions import EndpointConnectionError
+
+    client = _Failing(get_bucket_lifecycle_configuration=EndpointConnectionError(
+        endpoint_url="http://x"))
+    assert uploader.ensure_lifecycle(client, "raw", "network_traffic", 7)
+
+
+def test_a_failed_rule_write_is_reported():
+    client = _Failing(
+        get_bucket_lifecycle_configuration=_client_error(
+            "NoSuchLifecycleConfiguration", "GetBucketLifecycleConfiguration"),
+        put_bucket_lifecycle_configuration=_client_error(
+            "AccessDenied", "PutBucketLifecycleConfiguration"),
+    )
+    err = uploader.ensure_lifecycle(client, "raw", "network_traffic", 7)
+    assert err and "denied" in err
+
+
+def test_counting_reports_what_it_managed_before_the_failure():
+    """The usage tile would rather show a floor than nothing at all."""
+    class _Paginator:
+        def paginate(self, **kwargs):
+            yield {"Contents": [{"Key": "network_traffic/a.pcap", "Size": 100}]}
+            raise _client_error("InternalError", "ListObjectsV2")
+
+    class _Client:
+        def get_paginator(self, _name):
+            return _Paginator()
+
+    count, total, err = uploader.count_prefix(_Client(), "raw", "network_traffic")
+    assert (count, total) == (1, 100)
+    assert err
+
+
+def test_a_delete_that_partly_fails_reports_both_halves():
+    """MinIO answers 200 with a per-key Errors list, which a bare try/except
+    around the call would miss — the count would claim keys that still exist."""
+    class _Paginator:
+        def paginate(self, **kwargs):
+            yield {"Contents": [
+                {"Key": "network_traffic/a.pcap", "Size": 100},
+                {"Key": "network_traffic/b.pcap", "Size": 200},
+            ]}
+
+    class _Client:
+        def get_paginator(self, _name):
+            return _Paginator()
+
+        def delete_objects(self, **kwargs):
+            return {
+                "Deleted": [{"Key": "network_traffic/a.pcap"}],
+                "Errors": [{"Key": "network_traffic/b.pcap", "Message": "locked"}],
+            }
+
+    count, freed, err = uploader.clear_prefix(_Client(), "raw", "network_traffic")
+    assert (count, freed) == (1, 100)
+    assert "network_traffic/b.pcap: locked" in err
+
+
+def test_a_long_list_of_delete_failures_is_truncated():
+    """One line per failed key would fill the log with a thousand of them."""
+    keys = [{"Key": f"network_traffic/{i}.pcap", "Size": 1} for i in range(12)]
+
+    class _Paginator:
+        def paginate(self, **kwargs):
+            yield {"Contents": keys}
+
+    class _Client:
+        def get_paginator(self, _name):
+            return _Paginator()
+
+        def delete_objects(self, **kwargs):
+            return {"Deleted": [], "Errors": [
+                {"Key": k["Key"], "Message": "locked"} for k in keys]}
+
+    _, _, err = uploader.clear_prefix(_Client(), "raw", "network_traffic")
+    assert err.count("locked") == 5
+    assert "(+7 more)" in err
+
+
+def test_a_delete_that_cannot_start_is_reported():
+    class _Client:
+        def get_paginator(self, _name):
+            raise _client_error("AccessDenied", "ListObjectsV2")
+
+    count, freed, err = uploader.clear_prefix(_Client(), "raw", "network_traffic")
+    assert (count, freed) == (0, 0)
+    assert err
