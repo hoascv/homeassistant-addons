@@ -1,0 +1,6 @@
+flask>=3.0,<4.0
+waitress>=3.0,<4.0
+# AES-GCM. The KDF (scrypt) is in the standard library; the cipher is not, and
+# rolling one by hand for a file that holds someone's journal is not a trade
+# worth making to save a dependency. Ships manylinux wheels for both arches.
+cryptography>=42,<47

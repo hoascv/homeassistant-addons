@@ -30,6 +30,13 @@ Personal Home Assistant add-on repository.
   questions, a practical task and spaced-repetition flashcards. It never calls
   an LLM itself — it writes you a prompt to run anywhere you have a connection,
   and you paste the reply back, so the studying works with no internet at all.
+- **[Journal](journal/DOCS.md)** — an encrypted daily journal: semi-structured
+  entries behind a master password, goals you check in against day by day, and
+  any past date a tap away. Everything written is AES-256-GCM at rest under a
+  key derived from a password the add-on never stores, so the database, and the
+  backup it sits in, are unreadable without it — and there is no recovery if
+  you forget it. Ingress only, with a streak sensor that carries counts and
+  dates but never a word of the content.
 - **[Network Traffic Monitor](network-traffic/DOCS.md)** — full packet capture
   from the host: a rotating raw `.pcap` plus a parsed `.jsonl` record per
   packet (DNS queries, TLS SNI, plaintext HTTP where present), shipped

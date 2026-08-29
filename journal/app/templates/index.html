@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<title>Journal</title>
+<link rel="stylesheet" href="static/style.css?v={{ app_version }}">
+</head>
+<body>
+<header class="topbar">
+  <span class="topbar-icon">📓</span>
+  <h1>Journal</h1>
+  <span class="pill" id="streak-pill" hidden>–</span>
+  <button type="button" class="topbar-icon-btn" id="lock-btn" aria-label="Lock the journal" title="Lock" hidden>🔒</button>
+  <button type="button" class="topbar-icon-btn" id="settings-open-btn" aria-label="Settings" title="Settings" hidden>⚙️</button>
+</header>
+
+<main class="page">
+
+  <!-- The lock. One card, two faces: first run sets a password, every run after asks for it. -->
+  <section class="card lock-card" id="lock-card" hidden>
+    <div id="lock-setup" hidden>
+      <h2>Set a master password</h2>
+      <p class="muted">
+        Everything you write here is encrypted with this password. It is never stored — not
+        hashed, not hinted, not recoverable.
+      </p>
+      <p class="warn-box">
+        <strong>If you forget it, the journal is gone.</strong> There is no reset and no back
+        door: not for you, not for anyone with the file, not for whoever wrote this add-on.
+        Put it in your password manager now, before you type it here.
+      </p>
+      <label class="field">
+        <span>Master password</span>
+        <input type="password" id="setup-password" autocomplete="new-password" placeholder="At least 8 characters">
+      </label>
+      <label class="field">
+        <span>Again</span>
+        <input type="password" id="setup-password-2" autocomplete="new-password">
+      </label>
+      <button type="button" class="btn-primary full" id="setup-btn">Create my journal</button>
+    </div>
+
+    <div id="lock-unlock" hidden>
+      <h2>Locked</h2>
+      <p class="muted" id="unlock-blurb">Enter the master password to read and write today.</p>
+      <label class="field">
+        <span>Master password</span>
+        <input type="password" id="unlock-password" autocomplete="current-password">
+      </label>
+      <button type="button" class="btn-primary full" id="unlock-btn">Unlock</button>
+      <p class="muted" id="locked-stats"></p>
+    </div>
+
+    <p class="error-text" id="lock-error" hidden></p>
+  </section>
+
+  <div id="journal" hidden>
+
+    <!-- Which day you are looking at -->
+    <section class="card daybar">
+      <button type="button" class="btn-secondary btn-icon" id="day-prev" aria-label="Previous day">‹</button>
+      <div class="daybar-middle">
+        <input type="date" id="day-input" aria-label="Jump to a date">
+        <div class="muted" id="day-label">–</div>
+      </div>
+      <button type="button" class="btn-secondary btn-icon" id="day-next" aria-label="Next day">›</button>
+      <button type="button" class="btn-secondary btn-small" id="day-today">Today</button>
+      <button type="button" class="btn-secondary btn-icon" id="search-open-btn" aria-label="Search the journal" title="Search">🔍</button>
+    </section>
+
+    <!-- The entry itself -->
+    <section class="card" id="entry-card">
+      <div class="card-head">
+        <h2 id="entry-heading">Today</h2>
+        <span class="pill" id="save-state">–</span>
+      </div>
+      <div id="sections-host"></div>
+
+      <div class="mood-block">
+        <span class="field-label">How was it?</span>
+        <div class="mood-row" id="mood-row"></div>
+      </div>
+
+      <label class="field">
+        <span class="field-label">Tags</span>
+        <input type="text" id="tags-input" placeholder="work, family, ran — comma separated">
+      </label>
+      <div class="chips" id="tags-chips"></div>
+
+      <div class="btn-row">
+        <button type="button" class="btn-primary" id="save-btn">Save</button>
+        <button type="button" class="btn-danger btn-small" id="delete-btn">Delete this day</button>
+      </div>
+    </section>
+
+    <!-- Goal check-ins for the day on screen -->
+    <section class="card" id="goals-card">
+      <div class="card-head">
+        <h2>Goals</h2>
+        <button type="button" class="btn-secondary btn-small" id="goals-open-btn">Manage</button>
+      </div>
+      <div id="goals-host"></div>
+      <p class="empty-state" id="goals-empty" hidden>
+        No goals yet. Add one and every day gets a line to say what moved.
+      </p>
+    </section>
+
+    <!-- Twelve weeks at a glance -->
+    <section class="card" id="calendar-card">
+      <div class="card-head">
+        <h2>Recent weeks</h2>
+        <span class="pill" id="calendar-count">–</span>
+      </div>
+      <div class="calendar-strip" id="calendar-host"></div>
+      <p class="muted calendar-legend">
+        Each square is a day; colour is the mood you gave it, an outline means written with no
+        mood, empty means nothing written. Tap one to open it.
+      </p>
+    </section>
+
+    <!-- The same date, earlier years -->
+    <section class="card" id="onthisday-card" hidden>
+      <div class="card-head">
+        <h2>On this day</h2>
+      </div>
+      <div id="onthisday-host"></div>
+    </section>
+  </div>
+</main>
+
+<!-- Search -->
+<div class="sheet-backdrop" id="search-backdrop">
+  <div class="sheet">
+    <div class="sheet-head">
+      <h2>Search</h2>
+      <button type="button" class="topbar-icon-btn" data-close="search-backdrop" aria-label="Close">✕</button>
+    </div>
+    <p class="muted">
+      Every entry is decrypted and read here, in this add-on, one at a time — there is no
+      index, because an index over a journal is a summary of it lying in the clear.
+    </p>
+    <input type="search" id="search-input" placeholder="A word, a name, a tag…">
+    <div id="search-results"></div>
+  </div>
+</div>
+
+<!-- Goals -->
+<div class="sheet-backdrop" id="goals-backdrop">
+  <div class="sheet">
+    <div class="sheet-head">
+      <h2>Goals</h2>
+      <button type="button" class="topbar-icon-btn" data-close="goals-backdrop" aria-label="Close">✕</button>
+    </div>
+    <label class="field">
+      <span>New goal</span>
+      <input type="text" id="goal-title" placeholder="Run a half marathon">
+    </label>
+    <label class="field">
+      <span>Why it matters <span class="muted">(optional)</span></span>
+      <input type="text" id="goal-why" placeholder="Because I want my knees back">
+    </label>
+    <label class="field">
+      <span>Target date <span class="muted">(optional)</span></span>
+      <input type="date" id="goal-target">
+    </label>
+    <button type="button" class="btn-primary full" id="goal-add-btn">Add goal</button>
+    <div id="goals-manage-host"></div>
+  </div>
+</div>
+
+<!-- A single goal's history -->
+<div class="sheet-backdrop" id="timeline-backdrop">
+  <div class="sheet">
+    <div class="sheet-head">
+      <h2 id="timeline-title">Goal</h2>
+      <button type="button" class="topbar-icon-btn" data-close="timeline-backdrop" aria-label="Close">✕</button>
+    </div>
+    <div id="timeline-host"></div>
+  </div>
+</div>
+
+<!-- Settings -->
+<div class="sheet-backdrop" id="settings-backdrop">
+  <div class="sheet">
+    <div class="sheet-head">
+      <h2>Settings</h2>
+      <button type="button" class="topbar-icon-btn" data-close="settings-backdrop" aria-label="Close">✕</button>
+    </div>
+
+    <h3>Sections</h3>
+    <p class="muted">
+      The shape of every day. Rename, reorder, add or remove — entries you have already
+      written keep the headings they were written under.
+    </p>
+    <div id="sections-editor"></div>
+    <div class="btn-row">
+      <button type="button" class="btn-secondary btn-small" id="section-add-btn">+ Section</button>
+      <button type="button" class="btn-primary btn-small" id="sections-save-btn">Save sections</button>
+    </div>
+
+    <h3>Master password</h3>
+    <p class="muted">
+      Changing it re-encrypts every entry and goal in one go. There is still no recovery
+      afterwards.
+    </p>
+    <label class="field">
+      <span>Current password</span>
+      <input type="password" id="pw-old" autocomplete="current-password">
+    </label>
+    <label class="field">
+      <span>New password</span>
+      <input type="password" id="pw-new" autocomplete="new-password">
+    </label>
+    <label class="field">
+      <span>New password again</span>
+      <input type="password" id="pw-new-2" autocomplete="new-password">
+    </label>
+    <button type="button" class="btn-secondary full" id="pw-change-btn">Change password</button>
+    <p class="error-text" id="pw-error" hidden></p>
+
+    <h3>Your journal, elsewhere</h3>
+    <p class="muted">
+      The add-on's database is already in your Home Assistant backups, encrypted. This export
+      is the other thing: every entry <strong>in plain text</strong>, for reading outside this
+      add-on. Whatever you do with the file, it has no password on it.
+    </p>
+    <button type="button" class="btn-secondary full" id="export-btn">Download plain-text export</button>
+
+    <h3>This journal</h3>
+    <div class="diag-output" id="settings-stats">–</div>
+  </div>
+</div>
+
+<script src="static/app.js?v={{ app_version }}"></script>
+</body>
+</html>

@@ -1,0 +1,47 @@
+name: "Journal"
+version: "1.0.0"
+slug: "journal"
+description: "An encrypted daily journal: semi-structured entries behind a master password, with goals you check in against and any past day a click away"
+url: "https://github.com/hoascv/homeassistant-addons/tree/main/journal"
+arch:
+  - aarch64
+  - amd64
+startup: application
+boot: auto
+init: false
+ingress: true
+ingress_port: 8099
+# No `ports` block, deliberately, and no api_token. Every other add-on here can
+# publish a direct port for the data pipeline to read; this one holds a
+# journal, and a token-authenticated port that hands back decrypted entries
+# would quietly undo the master password. Ingress only — Home Assistant's own
+# login, then the password.
+panel_icon: mdi:notebook-edit
+panel_title: "Journal"
+# Only Home Assistant admin-group users get the sidebar entry (the default,
+# stated explicitly). restrict_to_user_ids narrows it further, per user.
+panel_admin: true
+homeassistant_api: true
+options:
+  # Minutes of inactivity before the key is dropped from memory and the
+  # journal locks itself again. 0 never auto-locks — the padlock in the
+  # header still locks on demand, and a restart always locks.
+  auto_lock_minutes: 60
+  # An active goal you have not checked in against for this many days is
+  # flagged in the app. 0 turns the flagging off.
+  goal_nudge_days: 7
+  # Optional daily reminder through a Home Assistant notify service — the bare
+  # service name, e.g. "mobile_app_pixel", not "notify.mobile_app_pixel". The
+  # message never contains anything you wrote; it cannot, since the add-on is
+  # locked unless someone has unlocked it.
+  notify_service: ""
+  daily_reminder_enabled: false
+  daily_reminder_time: "21:00"
+  restrict_to_user_ids: ""
+schema:
+  auto_lock_minutes: "int(0,1440)"
+  goal_nudge_days: "int(0,90)"
+  notify_service: "str?"
+  daily_reminder_enabled: "bool"
+  daily_reminder_time: "str"
+  restrict_to_user_ids: "str?"
