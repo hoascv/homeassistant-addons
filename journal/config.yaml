@@ -1,5 +1,5 @@
 name: "Journal"
-version: "1.0.0"
+version: "1.1.0"
 slug: "journal"
 description: "An encrypted daily journal: semi-structured entries behind a master password, with goals you check in against and any past day a click away"
 url: "https://github.com/hoascv/homeassistant-addons/tree/main/journal"

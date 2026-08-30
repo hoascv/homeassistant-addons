@@ -219,11 +219,28 @@
     <button type="button" class="btn-secondary full" id="pw-change-btn">Change password</button>
     <p class="error-text" id="pw-error" hidden></p>
 
+    <h3>Backup</h3>
+    <p class="muted">
+      A copy of the database, <strong>still encrypted</strong>. It opens with this same master
+      password and with nothing else, so it is the safe one to keep or carry to another
+      machine. Your Home Assistant backups already contain the same thing.
+    </p>
+    <button type="button" class="btn-secondary full" id="backup-btn">Download encrypted backup</button>
+
+    <p class="muted restore-note">
+      Restoring <strong>replaces this journal entirely</strong> — anything written since the
+      backup was taken is gone, and there is no undo. The restored journal opens with the
+      password it had when the backup was made, which may not be this one.
+    </p>
+    <input type="file" id="restore-file" accept=".db" hidden>
+    <button type="button" class="btn-secondary full" id="restore-btn">Restore from backup…</button>
+    <p class="error-text" id="restore-error" hidden></p>
+
     <h3>Your journal, elsewhere</h3>
     <p class="muted">
-      The add-on's database is already in your Home Assistant backups, encrypted. This export
-      is the other thing: every entry <strong>in plain text</strong>, for reading outside this
-      add-on. Whatever you do with the file, it has no password on it.
+      The backup above is encrypted. This export is the other thing: every entry
+      <strong>in plain text</strong>, for reading outside this add-on. Whatever you do with
+      the file, it has no password on it.
     </p>
     <button type="button" class="btn-secondary full" id="export-btn">Download plain-text export</button>
 

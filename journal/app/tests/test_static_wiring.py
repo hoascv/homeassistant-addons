@@ -82,3 +82,41 @@ def test_the_export_says_it_is_plain_text():
     """The one action here that takes the encryption off. It must not be a
     button labelled merely "Export"."""
     assert "plain text" in HTML.lower() or "plain-text" in HTML.lower()
+
+
+def test_the_backup_and_restore_controls_are_wired():
+    for element_id in ("backup-btn", "restore-btn", "restore-file", "restore-error"):
+        assert element_id in TEMPLATE_IDS, f"{element_id} missing from index.html"
+        assert element_id in JS, f"{element_id} never used by app.js"
+
+
+def test_the_backup_says_it_is_still_encrypted():
+    """The counterpart to the plain-text warning next to it. Two download
+    buttons side by side, one safe to keep and one not — if the page does not
+    say which is which, the labels are the only thing telling them apart."""
+    backup = re.search(r"<h3>Backup</h3>(.*?)<h3>", HTML, re.DOTALL).group(1)
+    assert "encrypted" in backup.lower()
+
+
+def test_the_restore_warns_that_it_replaces_everything():
+    """There is no undo and no second copy on the machine, so the warning has
+    to be on the page and not only in the confirm dialog."""
+    backup = re.search(r"<h3>Backup</h3>(.*?)<h3>", HTML, re.DOTALL).group(1).lower()
+    assert "replaces" in backup
+    assert "no undo" in backup or "cannot be undone" in backup
+
+
+def test_the_restore_confirms_before_destroying_anything():
+    """A file picker that acted the moment a file was chosen would destroy a
+    journal on a misclick."""
+    restore = re.search(r"async function restoreFromFile\(.*?\n}", JS, re.DOTALL).group(0)
+    assert "confirm(" in restore
+    assert restore.index("confirm(") < restore.index('fetch("api/restore"')
+
+
+def test_the_page_reloads_after_a_restore():
+    """The restore closed every session, this one included; carrying on with a
+    token for a vault that no longer exists would fail on the next click."""
+    restore = re.search(r"async function restoreFromFile\(.*?\n}", JS, re.DOTALL).group(0)
+    assert "location.reload()" in restore
+

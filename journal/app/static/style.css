@@ -230,3 +230,15 @@ input:focus, textarea:focus { outline: 2px solid var(--accent-soft); border-colo
 .section-edit-fields input { font-size: 0.84rem; }
 .section-edit-buttons { display: flex; flex-direction: column; gap: 0.25rem; }
 .section-edit-buttons button { font-size: 0.7rem; padding: 0.2rem 0.4rem; }
+
+/* The restore warning. Deliberately not .muted like the help text around it:
+   this is the one control on the page that destroys writing with no undo, and
+   it should not read as another quiet aside. */
+.restore-note {
+  border-left: 3px solid var(--warn);
+  background: var(--warn-soft);
+  padding: 0.6rem 0.75rem;
+  border-radius: 0 6px 6px 0;
+  margin-top: 1rem;
+}
+

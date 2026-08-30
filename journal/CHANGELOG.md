@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.1.0
+
+- **Backup and restore, without taking the encryption off.** Settings (⚙️) →
+  *Download encrypted backup* writes out the whole database as it sits on disk:
+  the same AES-256-GCM ciphertext, opened by the same master password and by
+  nothing else. It is the copy that is safe to keep on a memory stick, which
+  the plain-text export next to it never was.
+- **Restore replaces this journal with an uploaded backup.** The file is
+  checked for the right tables first, so another add-on's backup is refused
+  rather than swapped in over a journal that cannot be got back. A rejected
+  upload changes nothing and leaves nothing behind.
+- The restored journal opens with **the password it had when the backup was
+  taken**, which is not necessarily the one used to unlock. Every open session
+  is dropped on restore for that reason — the key held in memory belongs to a
+  vault that no longer exists — and the page returns to the lock screen.
+- **Backup requires the journal to be unlocked; restore requires it only when
+  there is already a vault.** The file is unreadable either way, but asking for
+  the password to obtain it stops someone with sidebar access but no password
+  carrying the ciphertext off to attack at leisure. Restore is the exception on
+  purpose: a fresh install has no vault to unlock, and moving a journal to a new
+  machine is exactly what this is for.
+
 ## 1.0.0
 
 First release.

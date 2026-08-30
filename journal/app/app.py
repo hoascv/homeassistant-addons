@@ -18,22 +18,25 @@ Two consequences worth stating plainly, both of them deliberate:
   direct port and no API token, because a token that returns decrypted entries
   would be a second key to the same lock.
 """
+import io
 import json
 import os
 import signal
+import sqlite3
 import sys
+import tempfile
 import threading
 import time
 import urllib.error
 import urllib.request
 from datetime import date, datetime, time as dtime
 
-from flask import Flask, Response, g, jsonify, render_template, request
+from flask import Flask, Response, g, jsonify, render_template, request, send_file
 
 import crypto
 import store
 
-APP_VERSION = "1.0.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.1.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("JOURNAL_DB_PATH", "/data/journal.db")
 OPTIONS_PATH = os.environ.get("JOURNAL_OPTIONS_PATH", "/data/options.json")
@@ -531,6 +534,126 @@ def api_goal_timeline(key, goal_id):
 
 
 # --- Routes: the rest ---
+
+
+@app.route("/api/backup")
+@unlocked
+def api_backup(key):  # noqa: ARG001 - @unlocked passes the key; the file is already ciphertext
+    """The whole database as a file, for keeping or moving to another install.
+
+    Unlike every other add-on here, this backup is *already unreadable*: what it
+    contains is the same AES-256-GCM ciphertext that sits on disk, and the same
+    master password opens it or nothing does. That is what makes it the right
+    thing to hand out rather than the plain-text export next to it.
+
+    It is still behind `@unlocked`. The file is safe on its own, but requiring
+    the password to obtain it means an ingress-admin who does not know it cannot
+    walk off with the ciphertext and attack it offline at leisure — which is
+    exactly the threat the encryption exists for. Somebody who can unlock can
+    already read the journal, so this costs them nothing.
+
+    Copied through SQLite's own backup API rather than streamed off disk: the
+    background loop writes on its own connection, so sending the file directly
+    could hand out a snapshot taken mid-write.
+    """
+    db = get_db()
+    db.commit()
+    filename = f"journal-backup-{_today().isoformat()}.db"
+
+    # A unique path per request, read into memory and deleted before the
+    # response is built rather than through response.call_on_close — that
+    # callback does not reliably fire, and what it would leave behind here is a
+    # complete copy of somebody's journal sitting in the temp directory.
+    handle, snapshot = tempfile.mkstemp(prefix="journal-backup-", suffix=".db")
+    os.close(handle)
+    try:
+        target = sqlite3.connect(snapshot)
+        try:
+            db.backup(target)
+        finally:
+            target.close()
+        with open(snapshot, "rb") as source:
+            data = source.read()
+    finally:
+        if os.path.exists(snapshot):
+            os.remove(snapshot)
+
+    return send_file(
+        io.BytesIO(data), as_attachment=True, download_name=filename,
+        mimetype="application/vnd.sqlite3",
+    )
+
+
+def _is_valid_backup(path):
+    """Whether this file is one of *this* add-on's databases.
+
+    Checked before anything is replaced. Restoring another add-on's backup here
+    would swap a working journal for a database with none of the right tables,
+    and there is no undo: the file it overwrote was the only copy on the
+    machine. `vault` is the table that makes it a journal rather than merely
+    SQLite — without it there is nothing a password could ever open.
+    """
+    try:
+        conn = sqlite3.connect(path)
+        try:
+            tables = {
+                row[0] for row in
+                conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+            }
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return False
+    return {"vault", "entries", "goals"}.issubset(tables)
+
+
+@app.route("/api/restore", methods=["POST"])
+def api_restore():
+    """Replace the database with an uploaded backup.
+
+    The lock rule here is deliberately not a plain `@unlocked`, because that
+    would make the main use for this impossible. A fresh install has no vault at
+    all, so nothing can ever unlock it — and "move my journal to a new machine"
+    is precisely the case where the journal being replaced does not exist yet.
+
+    So: an existing vault must be unlocked first. Restoring destroys writing
+    that cannot be recovered, and the password is the proof that it is yours to
+    destroy. An empty vault has nothing to protect and lets the file in.
+
+    Note the restored journal comes with its *own* password — the one that was
+    set when the backup was taken, which is not necessarily the one just used to
+    unlock. Every open session is dropped for that reason: the keys held in
+    memory belong to a vault that no longer exists.
+    """
+    conn = get_db()
+    if store.vault_exists(conn) and session_key() is None:
+        return locked_response()
+
+    uploaded = request.files.get("file")
+    if uploaded is None or not uploaded.filename:
+        return jsonify({"error": "no file provided"}), 400
+
+    tmp_path = DB_PATH + ".upload"
+    uploaded.save(tmp_path)
+    if not _is_valid_backup(tmp_path):
+        os.remove(tmp_path)
+        return jsonify({
+            "error": "not a valid Journal backup file",
+            "detail": "This file is not a Journal database. Nothing was changed.",
+        }), 400
+
+    # Close this request's handle before the swap; a connection left open on the
+    # replaced file would keep writing to a database nobody can reach any more.
+    db = g.pop("db", None)
+    if db is not None:
+        db.close()
+    os.replace(tmp_path, DB_PATH)
+    # Backfill anything added to the schema since the backup was taken, so an
+    # older file comes back usable rather than missing a column.
+    store.init_db(DB_PATH)
+    SESSIONS.close_all()
+    _log("database restored from an uploaded backup; all sessions closed")
+    return jsonify({"status": "restored", "locked": True}), 200
 
 
 @app.route("/api/export")

@@ -136,16 +136,43 @@ still works. You stay unlocked afterwards.
 
 ## Backups and getting your journal out
 
-- **The database** (`/data/journal.db`) is in every Home Assistant backup
-  already, and it is encrypted there. Restoring a backup restores the journal;
-  the same master password opens it.
+There are two files you can download, and they are not interchangeable.
+
+- **The encrypted backup** (Settings → *Download encrypted backup*) is the
+  whole database exactly as it sits on disk: AES-256-GCM ciphertext that the
+  same master password opens and nothing else does. This is the one that is
+  safe to keep on a memory stick or carry to another machine. The journal has
+  to be unlocked to download it — the file is unreadable either way, but that
+  stops somebody with sidebar access and no password taking the ciphertext away
+  to work on at leisure.
 - **The plain-text export** (Settings → *Download plain-text export*) is a JSON
   file of everything — entries, goals, sections — **with no encryption on it at
   all**. It exists so your journal is not trapped in this add-on. Treat the
   file as you would the journal itself.
+- **The database** (`/data/journal.db`) is in every Home Assistant backup
+  already, and it is encrypted there. Restoring a Home Assistant backup
+  restores the journal; the same master password opens it.
 
-There is no import. The database is the migration path: restore the backup, or
-copy `journal.db` into the new install's `/data`.
+### Restoring
+
+Settings → **Restore from backup…**, and pick a `.db` file taken from this
+add-on.
+
+- It **replaces this journal entirely**. Anything written since that backup was
+  taken is gone, there is no undo, and the file it overwrites was the only copy
+  on the machine. You are asked to confirm.
+- The restored journal opens with **the password it had when the backup was
+  made** — not necessarily the one you just unlocked with. Every open session
+  is closed and the page returns to the lock screen, because the key held in
+  memory belongs to a vault that no longer exists.
+- A file that is not one of this add-on's databases is refused before anything
+  is touched, so another add-on's backup cannot be swapped in by mistake.
+- A journal that already has a master password must be unlocked before it can
+  be replaced. A **fresh install has no password to give**, so it accepts a
+  restore straight away — that is how you move a journal to a new machine.
+
+Copying `journal.db` into the new install's `/data` by hand still works and is
+the same thing.
 
 ## Home Assistant
 

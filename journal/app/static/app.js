@@ -594,21 +594,70 @@ async function refreshSettingsStats() {
   ].join("\n");
 }
 
+async function downloadBackup() {
+  const res = await fetch("api/backup", { headers: { "X-Journal-Session": token() } });
+  if (!res.ok) {
+    showToastError("Backup failed.");
+    return;
+  }
+  await saveBlob(await res.blob(), `journal-backup-${state.today}.db`);
+}
+
+async function restoreFromFile(event) {
+  const input = event.target;
+  const file = input.files && input.files[0];
+  // Clear the input either way, so picking the same file twice still fires a
+  // change event — otherwise a cancelled restore cannot be retried.
+  input.value = "";
+  if (!file) return;
+
+  const error = el("restore-error");
+  error.hidden = true;
+  if (!confirm(
+    `Replace this journal with "${file.name}"?\n\n` +
+    "Everything currently in it is deleted, including anything written since " +
+    "that backup was taken. This cannot be undone.\n\n" +
+    "The restored journal opens with the password it had when the backup was " +
+    "made, which may not be the one you just used."
+  )) return;
+
+  const body = new FormData();
+  body.append("file", file);
+  const res = await fetch("api/restore", {
+    method: "POST",
+    headers: { "X-Journal-Session": token() },
+    body,
+  });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({}));
+    error.textContent = detail.detail || detail.error || "Restore failed.";
+    error.hidden = false;
+    return;
+  }
+  // The restore closed every session, this one included. Reloading is the
+  // honest thing to do: the page is holding a token for a vault that is gone,
+  // and the lock screen is where somebody has to start again anyway.
+  window.location.reload();
+}
+
+async function saveBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
 async function downloadExport() {
   const res = await fetch("api/export", { headers: { "X-Journal-Session": token() } });
   if (!res.ok) {
     showToastError("Export failed.");
     return;
   }
-  const blob = await res.blob();
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = `journal-${state.today}.json`;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  URL.revokeObjectURL(url);
+  await saveBlob(await res.blob(), `journal-${state.today}.json`);
 }
 
 function showToastError(message) {
@@ -821,6 +870,11 @@ function wireSettings() {
   });
 
   el("export-btn").addEventListener("click", downloadExport);
+  el("backup-btn").addEventListener("click", downloadBackup);
+  // The button opens the file picker; the picker's change event does the work,
+  // so nothing happens until a file has actually been chosen.
+  el("restore-btn").addEventListener("click", () => el("restore-file").click());
+  el("restore-file").addEventListener("change", restoreFromFile);
   el("lock-btn").addEventListener("click", lockNow);
 }
 
