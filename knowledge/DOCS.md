@@ -65,6 +65,15 @@ tells you when it is getting low, and the sidebar sensor does too.
 
 - **Briefing** — a few hundred words teaching the subtopic. Collapsed once the
   lesson is done, so returning to an old day is not a wall of text.
+
+  Rendered as **Markdown**: headings, bold, lists, tables, inline code and
+  fenced code blocks. A fenced block keeps its spacing exactly and is shown in
+  a monospace font, so ASCII diagrams line up — worth knowing when you write
+  the prompt, because it means asking for one is worthwhile.
+
+  The rendering happens on the server, and the escaping happens before any
+  Markdown rule runs, so nothing an assistant pastes can become live markup in
+  the page. Anything the renderer does not understand is left as plain text.
 - **Quiz** — multiple choice, graded instantly, with the explanation revealed
   after you answer. The correct answer is not in the page until you have
   answered: it is withheld from the payload, not merely hidden, because anything

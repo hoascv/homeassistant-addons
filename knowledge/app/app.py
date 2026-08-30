@@ -29,10 +29,11 @@ from datetime import date, datetime, time as dtime, timedelta
 from flask import Flask, Response, g, jsonify, render_template, request
 
 import importer
+import markdown
 import prompts
 import srs
 
-APP_VERSION = "1.0.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.1.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("KNOWLEDGE_DB_PATH", "/data/knowledge.db")
 OPTIONS_PATH = os.environ.get("KNOWLEDGE_OPTIONS_PATH", "/data/options.json")
@@ -741,7 +742,13 @@ def lesson_payload(conn, lesson):
             "title": subtopic["title"],
             "summary": subtopic["summary"],
             "briefing": subtopic["briefing"],
+            # Rendered here rather than in the page: the briefing is whatever an
+            # assistant produced, so turning it into HTML is security-sensitive
+            # and belongs somewhere it can be unit-tested. The raw text is kept
+            # alongside so nothing is lost if the renderer is ever wrong.
+            "briefing_html": markdown.render(subtopic["briefing"]),
             "practical_task": subtopic["practical_task"],
+            "practical_task_html": markdown.render(subtopic["practical_task"]),
         },
         "questions": questions,
         "answered_count": answered,

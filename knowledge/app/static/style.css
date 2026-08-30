@@ -231,3 +231,50 @@ textarea:focus, input[type="text"]:focus, select:focus { outline: 2px solid var(
   white-space: pre-wrap; word-break: break-word; -webkit-user-select: text; user-select: text;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
+
+/* --- Rendered briefings -------------------------------------------------
+   The container keeps white-space: pre-wrap for the plain-text fallback, so
+   it has to be switched off once the content is real markup — otherwise every
+   newline between the emitted tags becomes a visible blank line. */
+.md { white-space: normal; }
+.md > :first-child { margin-top: 0; }
+.md > :last-child { margin-bottom: 0; }
+
+.md .md-p { margin: 0 0 0.7rem; }
+.md .md-h { margin: 1.1rem 0 0.45rem; font-size: 0.95rem; color: var(--accent); }
+.md h5.md-h, .md h6.md-h { font-size: 0.9rem; color: var(--text); opacity: 0.85; }
+.md .md-list { margin: 0 0 0.7rem; padding-left: 1.2rem; }
+.md .md-list li { margin-bottom: 0.25rem; }
+.md .md-quote {
+  margin: 0 0 0.7rem; padding: 0.4rem 0.7rem;
+  border-left: 3px solid var(--border); opacity: 0.9;
+}
+
+/* Diagrams live in here. Monospace and an untouched white-space value are what
+   make box-drawing line up; the scroll container stops a wide diagram forcing
+   the whole page sideways on a phone. */
+.md .md-code {
+  margin: 0 0 0.8rem; padding: 0.65rem 0.75rem;
+  background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px;
+  overflow-x: auto; white-space: pre; line-height: 1.45;
+}
+.md .md-code code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.82rem; background: none; padding: 0; white-space: pre;
+}
+.md .md-inline {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85em; padding: 0.1em 0.32em;
+  background: var(--surface-1); border-radius: 4px;
+}
+
+.md .md-table {
+  border-collapse: collapse; margin: 0 0 0.8rem; width: 100%;
+  display: block; overflow-x: auto; font-size: 0.85rem;
+}
+.md .md-table th, .md .md-table td {
+  border: 1px solid var(--border); padding: 0.35rem 0.55rem; text-align: left;
+  vertical-align: top;
+}
+.md .md-table th { background: var(--surface-1); font-weight: 600; }
+

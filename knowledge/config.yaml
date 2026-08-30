@@ -1,5 +1,5 @@
 name: "Knowledge"
-version: "1.0.0"
+version: "1.1.0"
 slug: "knowledge"
 description: "A topic a day: syllabus, quiz, exercises and flashcards, loaded from any LLM without this add-on ever going online"
 url: "https://github.com/hoascv/homeassistant-addons/tree/main/knowledge"

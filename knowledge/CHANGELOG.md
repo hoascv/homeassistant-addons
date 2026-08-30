@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.1.0
+
+- **Briefings are rendered as Markdown.** Headings, bold, lists, tables, inline
+  code and fenced code blocks. Until now a briefing was inserted as escaped
+  plain text, so the `##` and the triple backticks that assistants reliably
+  produce were displayed literally — every pack imported so far has them.
+- **Fenced blocks are monospace, with the spacing untouched.** That is what
+  makes a diagram drawn with `─` and `│` line up; in the page's proportional
+  font it never could. Wide blocks scroll inside their own box rather than
+  pushing the page sideways on a phone.
+- Rendered **server-side, in `markdown.py`, with tests**. A briefing is whatever
+  an assistant produced and the result goes into the DOM, so this is the one
+  security-sensitive path in the add-on. Doing it in Python rather than in
+  `app.js` is what makes it unit-testable — there is no JavaScript test runner
+  in this repository, and an untested HTML sanitiser is not worth having.
+- The escaping happens **before** any rule runs, so no tag in a briefing can
+  survive to become a tag in the output. There is no allow-list to keep in sync
+  and no sanitiser to outwit. Eight injection payloads are asserted against.
+- The raw text is still sent alongside the HTML, and the page falls back to it,
+  so a briefing is never lost to a renderer bug.
+- Adds `test_static_wiring.py`, which the other add-ons here have had for a
+  while and Knowledge did not. It caught an unrelated pre-existing lookup on
+  first run.
+
 ## 1.0.0
 
 First release.

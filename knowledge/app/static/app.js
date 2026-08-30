@@ -99,14 +99,14 @@ function renderLesson(lesson) {
       ${s.briefing ? `
         <details class="briefing-wrap" ${done ? "" : "open"}>
           <summary>Briefing</summary>
-          <div class="briefing">${escapeHtml(s.briefing)}</div>
+          <div class="briefing md">${s.briefing_html || escapeHtml(s.briefing)}</div>
         </details>` : ""}
       ${mcq.length ? `<div class="section-label">Quiz — ${lesson.correct_count}/${lesson.graded_count || 0} right so far</div>
         ${mcq.map((q) => renderMcq(lesson.id, q)).join("")}` : ""}
       ${short.length ? `<div class="section-label">In your own words</div>
         ${short.map((q) => renderShort(lesson.id, q)).join("")}` : ""}
       ${s.practical_task ? `<div class="section-label">Do this</div>
-        <div class="task">${escapeHtml(s.practical_task)}</div>` : ""}
+        <div class="task md">${s.practical_task_html || escapeHtml(s.practical_task)}</div>` : ""}
       ${done ? "" : `<button type="button" class="btn-secondary full js-complete" data-lesson="${lesson.id}">
         Mark this subtopic done</button>`}
     </article>`;
