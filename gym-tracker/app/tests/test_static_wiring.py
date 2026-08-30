@@ -113,3 +113,28 @@ def test_the_stylesheet_keeps_the_toast_above_the_player():
     player_z = int(re.search(r"\.player \{[^}]*z-index: (\d+)", css, re.S).group(1))
     toast_z = int(re.search(r"\.toast \{[^}]*z-index: (\d+)", css, re.S).group(1))
     assert toast_z > player_z, f"toast {toast_z} would be hidden behind the player {player_z}"
+
+
+def test_the_meals_card_is_wired():
+    html = _read(os.path.join(TEMPLATES, "index.html"))
+    js = _read(os.path.join(STATIC, "app.js"))
+    assert "meals-card" in html, "the card itself is missing from index.html"
+    # These three are read by app.js; meals-card is only a container.
+    for element_id in ("meals-rows", "meals-recorded", "meals-summary"):
+        assert element_id in html, f"{element_id} missing from index.html"
+        assert element_id in js, f"{element_id} never used by app.js"
+
+
+def test_the_meal_states_are_visually_distinct():
+    """Untouched must not look like either answer. 'Nobody recorded this' is a
+    real state here, not a missing value, so it needs its own appearance."""
+    css = _read(os.path.join(STATIC, "style.css"))
+    for name in ("meal-btn", "meal-on-ate", "meal-on-skipped"):
+        assert f".{name}" in css, f"{name} is emitted by app.js but never styled"
+
+
+def test_the_card_never_shows_a_bare_recorded_count():
+    """A bare '2' invites reading the third meal as eaten — the exact
+    inference this feature refuses to make."""
+    js = _read(os.path.join(STATIC, "app.js"))
+    assert "of ${data.expected} recorded" in js

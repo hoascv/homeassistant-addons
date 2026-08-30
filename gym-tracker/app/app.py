@@ -18,8 +18,9 @@ from datetime import date, datetime, time as dtime, timedelta
 from flask import Flask, Response, g, jsonify, render_template, request, send_file
 
 import garmin_client
+import meals
 
-APP_VERSION = "1.40.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.41.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("GYM_DB_PATH", "/data/gym.db")
 OPTIONS_PATH = os.environ.get("GYM_OPTIONS_PATH", "/data/options.json")
@@ -268,6 +269,11 @@ def get_reminders_config():
         "quote_enabled": bool(opts.get("stoic_quote_enabled", True)),
         "quote_time": opts.get("stoic_quote_time", "07:00"),
     }
+
+
+def get_meals_config():
+    """The meal names to track, from the add-on options."""
+    return meals.configured_meals(_read_options().get("meals"))
 
 
 def get_garmin_config():
@@ -742,6 +748,7 @@ TRACKED_TABLES = {
     "garmin_daily": "day",
     "garmin_activities": "activity_id",
     "exercise_images": "exercise_id",
+    "meal_logs": "id",
 }
 # Never serialised into the feed: a picture is fetched from its own endpoint.
 BLOB_COLUMNS = {("exercise_images", "image")}
@@ -915,6 +922,12 @@ def _migrate_columns(conn):
     # Items used to belong to a single implicit challenge; give them a real
     # one so several can coexist. The default's start date is backdated to the
     # earliest completion so its statistics cover the history that exists.
+    # Meal adherence. Its own module and its own table rather than challenge
+    # items, because a challenge tick means "done" by its presence and "not
+    # done" by its absence — a two-state model that cannot say "nobody
+    # recorded this", which is the distinction meals exist to preserve.
+    meals.create_schema(conn)
+
     change_cols = {row[1] for row in conn.execute("PRAGMA table_info(change_log)")}
     if "actor" not in change_cols:
         # Left null on existing rows: those changes genuinely predate the
@@ -3737,6 +3750,86 @@ def _challenge_order(view):
     if view["due_today"] is False:
         return 2
     return 1 if view["complete_today"] else 0
+
+
+# --- Meals -------------------------------------------------------------------
+
+
+def _is_iso_date(value):
+    try:
+        date.fromisoformat(value)
+        return True
+    except (ValueError, TypeError):
+        return False
+
+
+
+def _meal_day_payload(db, day):
+    summary = meals.day_summary(db, day, get_meals_config())
+    summary["streak"] = meals.current_streak(db, get_meals_config(), today=date.today().isoformat())
+    return summary
+
+
+@app.route("/api/meals")
+def api_meals_day():
+    """One day's meals, each with a status or null for never recorded."""
+    day = (request.args.get("day") or date.today().isoformat()).strip()
+    if not _is_iso_date(day):
+        return jsonify({"error": "day must be a date, as YYYY-MM-DD"}), 400
+    return jsonify(_meal_day_payload(get_db(), day))
+
+
+@app.route("/api/meals", methods=["POST"])
+def api_log_meal():
+    """Record a meal as eaten or skipped. Re-posting the same meal replaces it."""
+    data = request.get_json(force=True, silent=True) or {}
+    day = (data.get("day") or date.today().isoformat()).strip()
+    if not _is_iso_date(day):
+        return jsonify({"error": "day must be a date, as YYYY-MM-DD"}), 400
+    db = get_db()
+    try:
+        meals.log_meal(db, day, data.get("meal"), data.get("status"), data.get("note"))
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    db.commit()
+    return jsonify(_meal_day_payload(db, day))
+
+
+@app.route("/api/meals", methods=["DELETE"])
+def api_clear_meal():
+    """Return a meal to unknown.
+
+    Deliberately not the same as logging a skip: this says the record should
+    not have been made, not that the meal did not happen.
+    """
+    data = request.get_json(force=True, silent=True) or {}
+    day = (data.get("day") or date.today().isoformat()).strip()
+    if not _is_iso_date(day):
+        return jsonify({"error": "day must be a date, as YYYY-MM-DD"}), 400
+    db = get_db()
+    meals.clear_meal(db, day, data.get("meal"))
+    db.commit()
+    return jsonify(_meal_day_payload(db, day))
+
+
+@app.route("/api/meals/summary")
+def api_meals_summary():
+    """Adherence over a window. Rates are out of what was recorded, never out
+    of what could have been — see meals.py for why that distinction is the
+    whole point."""
+    end = (request.args.get("end") or date.today().isoformat()).strip()
+    if not _is_iso_date(end):
+        return jsonify({"error": "end must be a date, as YYYY-MM-DD"}), 400
+    try:
+        days = min(365, max(1, int(request.args.get("days", 30))))
+    except (TypeError, ValueError):
+        days = 30
+    start = (date.fromisoformat(end) - timedelta(days=days - 1)).isoformat()
+    db = get_db()
+    body = meals.range_summary(db, start, end, get_meals_config())
+    body["skipped_days"] = meals.skipped_days(db, start, end)
+    body["notes"] = meals.recent_notes(db)
+    return jsonify(body)
 
 
 @app.route("/api/challenges")

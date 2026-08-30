@@ -1,5 +1,31 @@
 # Changelog
 
+## 1.41.0
+
+- **Meal adherence.** A card on Home with a row per meal and two taps: *Ate* or
+  *Skipped*. No calories, no portions, no food database — this records whether
+  you ate, not what.
+- **Three states, not two.** Eaten, skipped, and *nothing recorded* are kept
+  distinct, and the third is never inferred as either. A day nobody logged
+  contributes to neither side of any figure. The alternative — treating a
+  missing row as a skip, which is how the daily challenge next door works — would
+  make a fortnight's holiday the worst adherence in the history and poison
+  exactly the correlation this exists to support.
+- Because of that, every figure states its denominator: *2 of 3 recorded*,
+  and a skip rate out of what was recorded rather than out of what was
+  possible. `coverage` is reported separately so you can see how much the
+  numbers are worth.
+- Tapping the button that is already on **clears** the record, which is the way
+  back to "not recorded" without a third button. Distinct from logging a skip:
+  one says the record was a mistake, the other says the meal did not happen.
+- An optional **note** per meal — "skipped lunch, long meeting" — because a run
+  of skips is uninterpretable months later without one.
+- Meals are configurable and free text (`meals` in the add-on options). Renaming
+  or dropping one keeps its history, shown as retired rather than lost.
+- `meal_logs` joins the change feed, `/api/stats` and `/api/export`, so it
+  reaches the lakehouse like everything else.
+- New `meals.py` rather than more of `app.py`, which is already 5,000 lines.
+
 ## 1.40.0
 
 - **The exercise picker now puts what you actually do at the top.** Within each

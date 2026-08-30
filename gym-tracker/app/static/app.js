@@ -238,6 +238,96 @@ document.getElementById("main-tabs").addEventListener("click", (e) => {
 // resize without refetching.
 let weightData = null;
 
+// --- Meals -------------------------------------------------------------------
+//
+// Adherence only: eaten, skipped, or nothing recorded. The third state is the
+// point of the feature, so an untouched meal renders as neither button pressed
+// rather than defaulting to either — see meals.py.
+
+let mealsToday = null;
+
+async function loadMeals() {
+  try {
+    mealsToday = await fetchJSON("api/meals");
+  } catch (e) {
+    return;
+  }
+  renderMeals(mealsToday);
+}
+
+function renderMeals(data) {
+  const host = document.getElementById("meals-rows");
+  if (!host) return;
+
+  host.innerHTML = data.meals.map((m) => {
+    const ate = m.status === "ate";
+    const skipped = m.status === "skipped";
+    return `
+      <div class="meal-row${m.retired ? " meal-retired" : ""}">
+        <span class="meal-name">${escapeHtml(m.meal)}${m.retired ? " <em>(retired)</em>" : ""}</span>
+        <div class="meal-actions">
+          <button type="button" class="meal-btn${ate ? " meal-on-ate" : ""}"
+            data-meal="${escapeHtml(m.meal)}" data-status="ate">Ate</button>
+          <button type="button" class="meal-btn${skipped ? " meal-on-skipped" : ""}"
+            data-meal="${escapeHtml(m.meal)}" data-status="skipped">Skipped</button>
+        </div>
+      </div>
+      ${m.note ? `<div class="meal-note">${escapeHtml(m.note)}</div>` : ""}`;
+  }).join("");
+
+  const recorded = document.getElementById("meals-recorded");
+  // Always "n of m recorded", never a bare count — a bare 2 invites reading the
+  // third meal as eaten, which is exactly the inference this feature refuses
+  // to make.
+  if (recorded) recorded.textContent = `${data.recorded} of ${data.expected} recorded`;
+
+  const summary = document.getElementById("meals-summary");
+  if (summary) {
+    const parts = [];
+    if (data.skipped) parts.push(`${data.skipped} skipped today`);
+    if (data.streak) parts.push(`${data.streak}-day full-meal streak`);
+    if (data.recorded < data.expected) {
+      parts.push(`${data.expected - data.recorded} not recorded`);
+    }
+    summary.textContent = parts.length ? parts.join(" · ") : "Nothing recorded yet today.";
+  }
+}
+
+async function setMeal(meal, status) {
+  const current = (mealsToday && mealsToday.meals.find((m) => m.meal === meal)) || {};
+  try {
+    // Tapping the button that is already on clears the record rather than
+    // re-asserting it — the way back to "not recorded" without a third button.
+    if (current.status === status) {
+      mealsToday = await fetchJSON("api/meals", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ meal }),
+      });
+    } else {
+      mealsToday = await fetchJSON("api/meals", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ meal, status }),
+      });
+    }
+  } catch (e) {
+    toast(e.message);
+    return;
+  }
+  renderMeals(mealsToday);
+}
+
+function wireMeals() {
+  const host = document.getElementById("meals-rows");
+  if (!host) return;
+  host.addEventListener("click", (event) => {
+    const btn = event.target.closest(".meal-btn");
+    if (btn) setMeal(btn.dataset.meal, btn.dataset.status);
+  });
+}
+
+
 async function loadHome() {
   let data;
   try {
@@ -1604,6 +1694,7 @@ document.getElementById("log-weight-btn").addEventListener("click", () => {
 document.getElementById("weight-close-btn").addEventListener("click", () => {
   closeSheet("weight-backdrop");
   loadHome();
+  loadMeals();
 });
 
 function resetWeightForm() {
@@ -2885,6 +2976,7 @@ document.getElementById("settings-open-btn").addEventListener("click", () => {
 document.getElementById("settings-close-btn").addEventListener("click", () => {
   closeSheet("settings-backdrop");
   loadHome();
+  loadMeals();
 });
 
 async function loadSettings() {
@@ -3457,6 +3549,8 @@ async function pingStatus() {
 // --- Boot ------------------------------------------------------------------
 
 loadHome();
+wireMeals();
+loadMeals();
 loadChallenge();
 loadChallengeStats();
 loadSessions();

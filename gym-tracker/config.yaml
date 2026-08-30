@@ -1,5 +1,5 @@
 name: "Goal Tracker"
-version: "1.40.0"
+version: "1.41.0"
 slug: "gym-tracker"
 description: "Track a weight/body-fat goal, home workouts, and a daily challenge with reminders"
 url: "https://github.com/hoascv/homeassistant-addons/tree/main/gym-tracker"
@@ -33,6 +33,11 @@ options:
   weighin_reminder_time: "08:00"
   stoic_quote_enabled: true
   stoic_quote_time: "07:00"
+  # Which meals to track, comma-separated. Free text because meal names are
+  # personal — four meals, or calling the evening one "tea", is nobody's
+  # business but yours. Renaming one keeps the history logged under the old
+  # name; it is shown as retired rather than lost.
+  meals: "Breakfast, Lunch, Dinner"
   restrict_to_user_ids: ""
   garmin_auto_sync: true
   garmin_sync_interval_hours: 6
@@ -48,6 +53,7 @@ schema:
   weighin_reminder_time: "str"
   stoic_quote_enabled: "bool"
   stoic_quote_time: "str"
+  meals: "str?"
   restrict_to_user_ids: "str?"
   garmin_auto_sync: "bool"
   garmin_sync_interval_hours: "int(1,168)"

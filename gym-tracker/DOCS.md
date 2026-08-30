@@ -56,6 +56,53 @@ The forecast is a simple linear trend — good for spotting whether the last
 few weeks point at your goal, not a precise prediction. More weigh-ins make
 it steadier.
 
+## Meals
+
+A card on **Home** with a row per meal and two buttons: **Ate** and **Skipped**.
+
+This is adherence, not nutrition. There are no calories, no portions and no food
+database, deliberately — a field nobody fills in honestly is worse than no
+field, because it still looks like evidence.
+
+### The three states
+
+| | |
+|---|---|
+| **Ate** | You recorded that the meal happened |
+| **Skipped** | You recorded that it did not |
+| *Nothing* | You recorded nothing — and this is never read as either |
+
+That third state is the point. If a missing record counted as a skip, every day
+you did not open the app would read as skipping every meal, and a fortnight away
+would become the worst run in your history — which would ruin the very thing
+this is for, namely looking at the weight chart and knowing whether you were
+eating.
+
+So the card always says **"2 of 3 recorded"** rather than a bare count, and the
+skip rate is out of what you actually recorded, not out of what you could have.
+A separate **coverage** figure says how much of the window has any record at
+all, so you can judge how much weight the numbers carry.
+
+### Using it
+
+- Tap **Ate** or **Skipped**. Tapping again on the same button **clears** the
+  record and returns the meal to *nothing* — the way to undo a mis-tap without a
+  third button. That is not the same as logging a skip.
+- Meals can carry an optional **note** ("skipped lunch, long meeting"). A run of
+  skips is hard to interpret months later without one.
+- A **streak** counts consecutive days where every configured meal was eaten. A
+  day with anything unrecorded ends it rather than being skipped over — counting
+  it would make the streak a measure of how often you opened the app.
+
+### Configuring the meals
+
+The `meals` option is free text, comma-separated, defaulting to
+`Breakfast, Lunch, Dinner`. Four meals, or calling the evening one *tea*, is
+entirely up to you.
+
+Renaming or removing a meal **keeps its history**: anything logged under the old
+name still shows, marked *retired*, and does not count towards today's total.
+
 ## Logging weight
 
 Tap **Log weight** on the home screen. Enter your weight and, optionally, a

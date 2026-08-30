@@ -667,3 +667,36 @@ p.tpl-meta { margin: 0 0 0.6rem; white-space: normal; }
   from { filter: brightness(1.5); }
   to   { filter: none; }
 }
+
+/* --- Meals ---------------------------------------------------------------
+   Two buttons per meal, neither pressed until something is recorded. The
+   untouched state has to be visually distinct from both, because "nobody
+   recorded this" is a real answer here and not a missing value. */
+.meal-row {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 0.6rem; padding: 0.45rem 0; border-top: 1px solid var(--border);
+}
+.meal-row:first-child { border-top: none; }
+.meal-retired { opacity: 0.55; }
+.meal-name { font-size: 0.92rem; font-weight: 600; }
+.meal-name em { font-weight: 400; font-size: 0.8rem; color: var(--text-muted); }
+.meal-actions { display: flex; gap: 0.35rem; }
+.meal-btn {
+  font: inherit; font-size: 0.82rem; padding: 0.3rem 0.7rem; cursor: pointer;
+  background: var(--surface-2); color: var(--text-muted);
+  border: 1px solid var(--border); border-radius: 999px;
+}
+.meal-btn:hover { border-color: var(--accent); }
+.meal-on-ate {
+  background: var(--success-soft); color: var(--success);
+  border-color: transparent; font-weight: 600;
+}
+.meal-on-skipped {
+  background: var(--warn-soft); color: var(--warn);
+  border-color: transparent; font-weight: 600;
+}
+.meal-note {
+  font-size: 0.8rem; color: var(--text-muted); line-height: 1.45;
+  padding: 0 0 0.4rem 0.2rem; border-left: 2px solid var(--border); margin-left: 0.2rem;
+}
+
