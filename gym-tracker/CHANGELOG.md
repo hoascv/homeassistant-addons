@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.42.0
+
+- **Skipped meals are marked on the weight chart.** A short tick at the foot of
+  the weight panel for every day with an explicit skip, so a dip in the line
+  sits directly above the thing that might account for it. Hovering a tick says
+  which meals.
+- Drawn as a rug rather than as full-height lines: skips come in runs, and
+  vertical lines through the plot would compete with the series they exist to
+  explain.
+- **Only explicitly skipped days are drawn.** A day nobody recorded produces no
+  mark, so a gap in the rug means "not known", never "ate" — the same rule the
+  rest of the meal feature follows. Reading a gap as compliance is exactly the
+  inference the three-state design refuses to make.
+- The card says how many marked days there are, rather than putting a legend on
+  the chart: a legend under the weight panel collides with the x-axis labels
+  when there is no body-fat panel below it.
+
 ## 1.41.0
 
 - **Meal adherence.** A card on Home with a row per meal and two taps: *Ate* or

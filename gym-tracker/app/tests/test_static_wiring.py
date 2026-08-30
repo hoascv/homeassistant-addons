@@ -138,3 +138,30 @@ def test_the_card_never_shows_a_bare_recorded_count():
     inference this feature refuses to make."""
     js = _read(os.path.join(STATIC, "app.js"))
     assert "of ${data.expected} recorded" in js
+
+
+def test_skipped_days_are_marked_on_the_weight_chart():
+    js = _read(os.path.join(STATIC, "app.js"))
+    css = _read(os.path.join(STATIC, "style.css"))
+    assert "drawSkipRug" in js
+    assert "chart-skip-tick" in js
+    assert ".chart-skip-tick" in css, "the ticks are drawn but never styled"
+
+
+def test_the_rug_draws_only_explicit_skips():
+    """A day nobody recorded has nothing known about it. If the rug were fed
+    anything but skipped_days, a gap in it could be misread as 'ate'."""
+    js = _read(os.path.join(STATIC, "app.js"))
+    rug = js[js.index("function drawSkipRug"):]
+    rug = rug[:rug.index("\n  }")]
+    assert "skippedDays" in rug
+    assert "mealsToday" not in rug, "the rug must not draw from today's card state"
+
+
+def test_each_tick_says_which_meals_were_skipped():
+    """A bare mark raises a question it cannot answer; the title element is
+    what makes an individual tick worth hovering."""
+    js = _read(os.path.join(STATIC, "app.js"))
+    assert 'createElementNS(NS, "title")' in js
+    assert "skipped ${names}" in js
+

@@ -94,6 +94,22 @@ all, so you can judge how much weight the numbers carry.
   day with anything unrecorded ends it rather than being skipped over — counting
   it would make the streak a measure of how often you opened the app.
 
+### On the weight chart
+
+Every day with an explicit skip gets a short tick at the foot of the weight
+panel, in the same amber as the **Skipped** button. Hover one to see which meals.
+
+This is the reason the feature exists. Weight swings of two or three kilos
+between consecutive morning weigh-ins are usually glycogen and the water bound
+to it — roughly 3 g of water per gram of glycogen — rather than anything
+happening to fat or muscle. Under-eating for a day partially empties that store
+and the scale drops; eating normally refills it and the scale jumps back. With
+the ticks in place you can see whether your low readings are the mornings after
+skip days, instead of arguing about it from memory.
+
+A gap in the ticks means **nothing was recorded**, not that you ate. The chart
+cannot tell you about days you did not log.
+
 ### Configuring the meals
 
 The `meals` option is free text, comma-separated, defaulting to

@@ -700,3 +700,15 @@ p.tpl-meta { margin: 0 0 0.6rem; white-space: normal; }
   padding: 0 0 0.4rem 0.2rem; border-left: 2px solid var(--border); margin-left: 0.2rem;
 }
 
+/* A skipped-meal day on the weight chart. A short tick at the foot of the
+   weight panel rather than a full-height line: there can be a run of them, and
+   lines through the plot would compete with the series they exist to explain.
+   Warn-coloured to match the Skipped button on the meals card, so the two read
+   as the same fact in two places. */
+.chart-skip-tick {
+  stroke: var(--warn);
+  stroke-width: 2;
+  stroke-linecap: round;
+  opacity: 0.75;
+}
+

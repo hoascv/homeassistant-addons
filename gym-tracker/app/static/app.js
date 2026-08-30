@@ -245,6 +245,24 @@ let weightData = null;
 // rather than defaulting to either — see meals.py.
 
 let mealsToday = null;
+// Days carrying at least one explicit skip, for the weight chart's rug. Only
+// explicit skips — a day nobody recorded produces no mark, because there is
+// nothing known about it to draw.
+let skippedDays = [];
+
+async function loadSkippedDays() {
+  try {
+    const body = await fetchJSON("api/meals/summary?days=365");
+    skippedDays = body.skipped_days || [];
+  } catch (e) {
+    skippedDays = [];
+  }
+  // The chart may already be on screen; redraw so the marks appear without
+  // waiting for the next weight log.
+  if (weightData) {
+    renderWeightChart(weightData.logs || [], weightData.goal || {}, weightData.forecast);
+  }
+}
 
 async function loadMeals() {
   try {
@@ -289,6 +307,10 @@ function renderMeals(data) {
     if (data.recorded < data.expected) {
       parts.push(`${data.expected - data.recorded} not recorded`);
     }
+    if (skippedDays.length) {
+      parts.push(`${skippedDays.length} skipped-meal day${skippedDays.length === 1 ? "" : "s"} `
+                 + "marked on the weight chart");
+    }
     summary.textContent = parts.length ? parts.join(" · ") : "Nothing recorded yet today.";
   }
 }
@@ -316,6 +338,7 @@ async function setMeal(meal, status) {
     return;
   }
   renderMeals(mealsToday);
+  loadSkippedDays();
 }
 
 function wireMeals() {
@@ -603,6 +626,37 @@ function renderWeightChart(logs, goal, forecast, opts) {
     return sy;
   }
 
+  // A rug of short ticks along the bottom of the weight panel, one per day
+  // with an explicit skipped meal.
+  //
+  // Drawn as a rug rather than as full-height lines on purpose: there can be a
+  // run of them, and vertical lines through the plot would compete with the
+  // series they exist to explain. Down here they sit directly under the dip
+  // they might account for, which is the whole question being asked.
+  //
+  // Only explicitly skipped days are drawn. A day nobody recorded has nothing
+  // known about it, so it gets no mark — the same rule the rest of the feature
+  // follows, and the reason a gap in the rug must never be read as "ate".
+  function drawSkipRug(panelTop, panelHeight) {
+    if (!skippedDays.length) return;
+    const tickH = opts.expanded ? 8 : 5;
+    const y2 = panelTop + panelHeight;
+
+    skippedDays.forEach((entry) => {
+      // Midday, so the mark sits in the middle of the day it belongs to rather
+      // than on the boundary with the one before.
+      const t = new Date(`${entry.day}T12:00:00`).getTime();
+      if (isNaN(t) || t < tMin || t > tMax) return;
+      const x = sx(t);
+      const line = add("line", { x1: x, x2: x, y1: y2 - tickH, y2 }, "chart-skip-tick");
+      const title = document.createElementNS(NS, "title");
+      const names = entry.meals.join(", ");
+      title.textContent = `${entry.day} — skipped ${names}`;
+      line.appendChild(title);
+    });
+
+  }
+
   const fc = forecast || {};
   const target = goal.target_weight_kg;
   // One gridline per ~45px of panel height: gives the card its 2 (or 3, with
@@ -624,6 +678,7 @@ function renderWeightChart(logs, goal, forecast, opts) {
         : null,
     trendLabel: "Projected",
   });
+  drawSkipRug(padT, wH);
 
   let syBf = null;
   if (showBf) {
@@ -3551,6 +3606,7 @@ async function pingStatus() {
 loadHome();
 wireMeals();
 loadMeals();
+loadSkippedDays();
 loadChallenge();
 loadChallengeStats();
 loadSessions();
