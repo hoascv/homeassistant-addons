@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.14.0
+
+- **Charging by calendar month**, with a **12m** range on the history card. A
+  row per month — sessions, kWh, kroner — and the average across them, which is
+  the figure "how much do I charge in a month" actually asks for. The 30d range
+  was the closest thing available and it is a rolling window, so it could never
+  compare July against August.
+- **The current month is shown but never averaged.** It is marked *so far* and
+  left out of the mean: four days into a month is not a month, and including it
+  would make every early-in-the-month glance look like usage had collapsed.
+- **A month with any unpriced session shows no cost.** `easee_charging_totals`
+  already refused to report "a suspiciously cheap month" for one window; a
+  table makes the trap worse, because a month missing half its spot prices sits
+  next to complete ones and invites the comparison. The energy is still shown,
+  because that part is known.
+- The average says how many months it covers, and separately how many of those
+  had a full cost — an average over three of five months is a fact, the same
+  number presented as covering five would be a guess.
+- `/api/easee/history` now returns `monthly` on every path, including when
+  Easee is disabled, so the response shape no longer depends on configuration.
+
 ## 1.13.0
 
 - **Every chart now has a y axis.** A few gridlines on round values with the

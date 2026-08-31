@@ -680,6 +680,61 @@ function shortDay(iso) {
   return iso.slice(5).replace("-", "/");
 }
 
+function renderChargingMonths(monthly) {
+  const host = document.getElementById("charging-monthly");
+  if (!host) return;
+
+  // Only worth showing once there is something to compare. One month of data
+  // in a monthly table is the same number twice.
+  if (!monthly || !monthly.months || monthly.months.length < 2) {
+    host.hidden = true;
+    host.innerHTML = "";
+    return;
+  }
+
+  const monthName = (m) => {
+    const [y, mm] = m.split("-");
+    return `${["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep",
+               "Oct", "Nov", "Dec"][Number(mm) - 1]} ${y.slice(2)}`;
+  };
+
+  const rows = monthly.months.map((m) => `
+    <tr${m.partial ? ' class="month-partial"' : ""}>
+      <td>${monthName(m.month)}${m.partial ? " <em>so far</em>" : ""}</td>
+      <td class="num">${m.sessions}</td>
+      <td class="num">${m.energy_kwh.toFixed(1)}</td>
+      <td class="num">${m.cost_dkk == null ? "–" : m.cost_dkk.toFixed(0)}</td>
+    </tr>`).join("");
+
+  const avg = monthly.average;
+  // The average row states how many months it is over. An average across three
+  // complete months presented as if it covered five would be a guess, and the
+  // partial current month is deliberately not among them.
+  const avgRow = !avg ? "" : `
+    <tr class="month-average">
+      <td>avg / month<em> · ${avg.months} complete</em></td>
+      <td class="num">${avg.sessions}</td>
+      <td class="num">${avg.energy_kwh.toFixed(1)}</td>
+      <td class="num">${avg.cost_dkk == null ? "–" : avg.cost_dkk.toFixed(0)}</td>
+    </tr>`;
+
+  const missing = monthly.months.filter((m) => m.cost_dkk == null).length;
+  const note = missing
+    ? `<p class="muted">${missing} month${missing > 1 ? "s have" : " has"} `
+      + "sessions without a full price, so no cost is shown for them — a partly "
+      + "priced month would look cheaper than it was.</p>"
+    : "";
+
+  host.innerHTML = `
+    <table class="month-table">
+      <thead><tr><th>Month</th><th class="num">Sessions</th>
+        <th class="num">kWh</th><th class="num">kr</th></tr></thead>
+      <tbody>${rows}${avgRow}</tbody>
+    </table>${note}`;
+  host.hidden = false;
+}
+
+
 function renderChargingHistory(data) {
   const card = document.getElementById("charging-history-card");
   if (!data.enabled) {
@@ -702,10 +757,12 @@ function renderChargingHistory(data) {
     empty.hidden = false;
     chart.innerHTML = "";
     list.innerHTML = "";
+    renderChargingMonths(null);
     document.getElementById("charging-note").textContent = "";
     return;
   }
   empty.hidden = true;
+  renderChargingMonths(data.monthly);
 
   renderSmoothChart(chart, data.daily, {
     series: [{ valueOf: (d) => d.kwh, area: true, gradientId: "charging-area-gradient" }],

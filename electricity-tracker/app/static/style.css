@@ -268,3 +268,19 @@ code {
   border: 1px solid var(--border); font-size: 0.72rem; line-height: 1.4;
   white-space: pre-wrap; word-break: break-word; -webkit-user-select: text; user-select: text;
 }
+
+/* Charging, by calendar month. A table rather than a chart: twelve rows of
+   four numbers is something you read across, and a bar chart of monthly kWh
+   answers fewer questions than the figures themselves. */
+.month-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; margin: 0.4rem 0 0.6rem; }
+.month-table th, .month-table td { padding: 0.35rem 0.5rem; border-bottom: 1px solid var(--border); }
+.month-table th { text-align: left; font-size: 0.72rem; text-transform: uppercase;
+  letter-spacing: 0.04em; color: var(--text-muted); font-weight: 700; }
+.month-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+.month-table em { font-style: normal; font-weight: 400; color: var(--text-muted); font-size: 0.8em; }
+/* The month still being lived through — shown, but visibly not a full one, and
+   excluded from the average below it. */
+.month-table .month-partial td { color: var(--text-muted); }
+.month-table .month-average td { border-top: 2px solid var(--border); border-bottom: none;
+  font-weight: 700; padding-top: 0.45rem; }
+

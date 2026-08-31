@@ -132,6 +132,7 @@
           <button type="button" class="seg-btn seg-on" data-days="7">7d</button>
           <button type="button" class="seg-btn" data-days="30">30d</button>
           <button type="button" class="seg-btn" data-days="90">90d</button>
+          <button type="button" class="seg-btn" data-days="365">12m</button>
         </div>
         <button type="button" class="chart-expand-btn" data-chart="charging-chart" data-title="Charging" aria-label="Expand charging chart" title="Expand">⤢</button>
       </div>
@@ -143,6 +144,7 @@
       <div class="mini-stat"><span class="mini-value" id="ch-avg">–</span><span class="mini-label">kr/kWh avg</span></div>
     </div>
     <div id="charging-chart" class="chart-host"></div>
+    <div id="charging-monthly" hidden></div>
     <div id="charging-sessions"></div>
     <p class="muted" id="charging-note"></p>
     <p class="empty-state" id="charging-empty" hidden>No charging sessions recorded yet in this range.</p>

@@ -39,8 +39,16 @@ def test_the_charging_history_card_is_fully_wired():
 
 
 def test_the_range_toggle_offers_the_ranges_the_api_accepts():
+    """The invariant, rather than the current list: /api/easee/history clamps
+    `days` to 1..365, so a button outside that would silently give a different
+    range than its label promises. Asserting the literal set instead just
+    breaks whenever a range is added, which is not a bug."""
     toggle = re.search(r'id="charging-range-toggle".*?</div>', HTML, re.DOTALL).group(0)
-    assert sorted(re.findall(r'data-days="(\d+)"', toggle)) == ["30", "7", "90"]
+    offered = [int(d) for d in re.findall(r'data-days="(\d+)"', toggle)]
+    assert offered, "no ranges offered at all"
+    assert len(set(offered)) == len(offered), "a range is offered twice"
+    for days in offered:
+        assert 1 <= days <= 365, f"{days}d is outside what the API will honour"
 
 
 def test_every_class_the_history_rows_use_is_styled():

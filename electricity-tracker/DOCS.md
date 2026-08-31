@@ -310,12 +310,26 @@ value. Close with **✕**, **Escape**, or by tapping outside.
   live instant power plus what that costs per hour at the current price.
 - **EV charging** — once Easee is enabled: status, live power, and the
   current/last session's energy and cost.
-- **Charging history** — every past charging session over 7/30/90 days (kWh,
-  cost, duration, and the average rate that session actually paid), a per-day
-  chart of energy charged, and the roll-up: sessions, kWh, kr and the average
-  kr/kWh across the range. The per-session rate is the interesting one if you
-  charge on spot prices — it is what tells you whether the cheap hours are
-  being caught.
+- **Charging history** — every past charging session over 7/30/90 days or 12
+  months (kWh, cost, duration, and the average rate that session actually
+  paid), a per-day chart of energy charged, and the roll-up: sessions, kWh, kr
+  and the average kr/kWh across the range. The per-session rate is the
+  interesting one if you charge on spot prices — it is what tells you whether
+  the cheap hours are being caught.
+
+  Once the range covers more than one month, a **per-month table** appears
+  underneath: sessions, kWh and kroner for each calendar month, with the average
+  across them at the bottom. That average is what answers "how much do I charge
+  in a typical month" — the 30d range is a rolling window and cannot compare one
+  month against another.
+
+  Two things it deliberately will not do. **The current month is shown but not
+  averaged**, marked *so far*, because four days into a month is not a month and
+  averaging it in makes every early-month glance look like a collapse. And **a
+  month containing any session without a full price shows no cost at all** —
+  the kWh are still known, but a partly priced month sitting next to complete
+  ones would look like a bargain it never was. The average row says how many
+  months it covers and how many of those had a complete cost.
 - **Settings → Test Eloverblik connection** — a live round-trip to Eloverblik
   with your configured token, listing every metering point it can see.
 - **Settings → Saveeye connection** — live MQTT connection status and the

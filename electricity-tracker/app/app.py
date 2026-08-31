@@ -1540,6 +1540,80 @@ def easee_charging_totals(sessions):
     }
 
 
+def easee_monthly_charging(sessions, today=None):
+    """Sessions rolled up per calendar month, newest first, plus the average
+    across the complete ones.
+
+    Calendar months rather than 30-day blocks: "how much did I charge in July"
+    is the question people actually have, and a rolling window cannot answer it.
+
+    Two things are kept honest here, both for the same reason — an average is
+    only worth having if you know what went into it:
+
+    - **The current month is partial** and is excluded from the average. It is
+      still listed, because you want to see it, but a month that is four days
+      old would otherwise drag the mean down and make every August look like a
+      collapse in usage.
+    - **Cost is dropped from a month's total if any session in it is not fully
+      costed.** `easee_charging_totals` already refuses to report a
+      "suspiciously cheap month" for this reason; a monthly table makes the
+      trap worse, because a month missing half its spot prices sits next to
+      complete ones and invites comparison.
+    """
+    if not sessions:
+        return {"months": [], "average": None}
+
+    today = today or datetime.now(LOCAL_TZ).date()
+    current = today.strftime("%Y-%m")
+
+    by_month = {}
+    for session in sessions:
+        month = session["day"][:7]
+        entry = by_month.setdefault(month, {
+            "month": month, "sessions": 0, "energy_kwh": 0.0,
+            "cost_dkk": 0.0, "cost_known": True, "covered_kwh": 0.0,
+        })
+        entry["sessions"] += 1
+        entry["energy_kwh"] += session["energy_kwh"]
+        if session["cost_dkk"] is None or session["cost_is_partial"]:
+            entry["cost_known"] = False
+        else:
+            entry["cost_dkk"] += session["cost_dkk"]
+            entry["covered_kwh"] += session["cost_covers_kwh"]
+
+    months = []
+    for entry in sorted(by_month.values(), key=lambda e: e["month"], reverse=True):
+        known = entry["cost_known"]
+        cost = round(entry["cost_dkk"], 2) if known else None
+        covered = entry["covered_kwh"]
+        months.append({
+            "month": entry["month"],
+            "sessions": entry["sessions"],
+            "energy_kwh": round(entry["energy_kwh"], 2),
+            "cost_dkk": cost,
+            "avg_dkk_kwh": round(cost / covered, 4) if known and covered else None,
+            # True for the month still being lived through: shown, but never
+            # averaged, because it is not finished.
+            "partial": entry["month"] == current,
+        })
+
+    complete = [m for m in months if not m["partial"]]
+    average = None
+    if complete:
+        costed = [m for m in complete if m["cost_dkk"] is not None]
+        average = {
+            "months": len(complete),
+            "sessions": round(sum(m["sessions"] for m in complete) / len(complete), 1),
+            "energy_kwh": round(sum(m["energy_kwh"] for m in complete) / len(complete), 2),
+            # Averaged over the months whose cost is fully known, and saying how
+            # many those were — an average over three of five months is a fact,
+            # an average presented as over five would be a guess.
+            "cost_dkk": round(sum(m["cost_dkk"] for m in costed) / len(costed), 2) if costed else None,
+            "cost_months": len(costed),
+        }
+    return {"months": months, "average": average}
+
+
 def easee_daily_charging(sessions):
     """Per-day totals for the history chart, oldest first and with the empty
     days present — a gap in a time series has to be a zero, not a missing
@@ -2125,10 +2199,12 @@ def api_easee_history():
     opts = get_price_options(options)
     cfg = get_easee_config(options)
     if not cfg["enabled"]:
-        return jsonify({"enabled": False, "sessions": [], "daily": [], "totals": None})
+        return jsonify({"enabled": False, "sessions": [], "daily": [],
+                        "monthly": {"months": [], "average": None}, "totals": None})
     charger_id = cfg["charger_id"] or _easee_token_cache["charger_id"]
     if not charger_id:
-        return jsonify({"enabled": True, "charger_id": None, "sessions": [], "daily": [], "totals": None})
+        return jsonify({"enabled": True, "charger_id": None, "sessions": [], "daily": [],
+                        "monthly": {"months": [], "average": None}, "totals": None})
 
     days = min(365, max(1, request.args.get("days", default=30, type=int) or 30))
     sessions = easee_sessions(db, opts, opts["price_area"], charger_id, days=days)
@@ -2139,6 +2215,7 @@ def api_easee_history():
             "days": days,
             "sessions": sessions,
             "daily": easee_daily_charging(sessions),
+            "monthly": easee_monthly_charging(sessions),
             "totals": easee_charging_totals(sessions),
         }
     )

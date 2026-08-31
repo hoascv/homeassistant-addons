@@ -683,8 +683,13 @@ def test_history_route_shape(conn, client, set_options):
 
 
 def test_history_route_is_quiet_when_easee_is_off(client):
+    """Quiet, but the same shape as when it is on — a caller reading
+    data.monthly should get an empty roll-up, not undefined."""
     data = client.get("/api/easee/history").get_json()
-    assert data == {"enabled": False, "sessions": [], "daily": [], "totals": None}
+    assert data == {
+        "enabled": False, "sessions": [], "daily": [], "totals": None,
+        "monthly": {"months": [], "average": None},
+    }
 
 
 # --- A session is the stretch where energy actually moved ---
