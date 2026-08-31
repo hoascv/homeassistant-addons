@@ -227,3 +227,119 @@ def test_the_page_declines_to_quote_a_projection_it_cannot_support():
     fn = fn[:fn.index("\n}")]
     guard = fn[fn.index("trend_unclear"):]
     assert "projected_weight_kg" not in guard.split("return;")[0]
+
+
+# --- the confidence band ------------------------------------------------------
+
+
+def test_the_band_widens_with_distance_from_the_fitted_data():
+    """The honest shape: narrowest where the readings are, flaring as it
+    extrapolates. A straight dashed line has no way of showing that.
+
+    The readings carry a little scatter, because real ones do — a perfectly
+    collinear series has no residuals and therefore a zero-width band, which is
+    correct and never happens.
+    """
+    points = _pts(*[(d, 100.0 + (84 - d) * 0.02 + (0.4 if d % 14 else -0.4))
+                    for d in range(84, -1, -7)])
+    fc = gymapp._weight_forecast(_logs(points), _goal())
+    band = fc["trend_band"]
+    assert len(band) > 2
+    near = band[0]["hi"] - band[0]["lo"]
+    far = band[-1]["hi"] - band[-1]["lo"]
+    assert far > near, "the band must widen as it projects further out"
+
+
+def test_the_point_estimate_sits_inside_its_own_band():
+    points = _pts(*[(d, 100.0 + (84 - d) * 0.02 + (0.4 if d % 14 else -0.4))
+                    for d in range(84, -1, -7)])
+    fc = gymapp._weight_forecast(_logs(points), _goal())
+    last = fc["trend_band"][-1]
+    assert last["lo"] <= fc["projected_weight_kg"] <= last["hi"]
+
+
+def test_a_noisy_series_produces_a_wider_band_than_a_clean_one():
+    """The band is what makes 'this number is worth little' visible."""
+    clean = _pts(*[(d, 100.0 + (84 - d) * 0.02 + (0.1 if d % 14 else -0.1))
+                   for d in range(84, -1, -7)])
+    noisy = _pts(*[(d, 100.0 + (84 - d) * 0.02 + (1.6 if d % 14 else -1.6))
+                   for d in range(84, -1, -7)])
+    width = lambda pts: (lambda b: b[-1]["hi"] - b[-1]["lo"])(
+        gymapp._weight_forecast(_logs(pts), _goal())["trend_band"])
+    assert width(noisy) > width(clean) * 2
+
+
+def test_two_points_produce_no_band():
+    """A line through two points has no residuals, so there is no scatter to
+    estimate — an interval would be fabricated, not computed."""
+    points = _pts((14, 100.0), (0, 101.0))
+    assert gymapp._weight_forecast(_logs(points), _goal())["trend_band"] == []
+
+
+def test_the_t_value_widens_the_band_for_small_samples():
+    """Four readings should not be given the confidence of forty. The lookup is
+    a table rather than a scipy dependency, so it is worth pinning."""
+    assert gymapp._t95(4) > gymapp._t95(20) > gymapp._t95(200)
+    assert gymapp._t95(200) == pytest.approx(1.96)
+
+
+def test_body_fat_gets_a_band_too():
+    logs = [{"ts": (TODAY - datetime.timedelta(days=d)).isoformat() + "T08:00:00",
+             "weight_kg": 100.0,
+             "body_fat_pct": 30.0 - (84 - d) * 0.05 + (0.3 if d % 14 else -0.3)}
+            for d in range(84, -1, -7)]
+    goal = _goal()
+    goal["target_body_fat_pct"] = 15.0
+    band = gymapp._forecast(logs, goal)["bf_trend_band"]
+    assert len(band) > 2
+    assert band[-1]["hi"] - band[-1]["lo"] > band[0]["hi"] - band[0]["lo"]
+
+
+# --- the chart and the card must agree ----------------------------------------
+
+
+def _js():
+    import os
+    with open(os.path.join(os.path.dirname(__file__), "..", "static", "app.js")) as h:
+        return h.read()
+
+
+def test_no_projection_is_drawn_when_the_trend_is_not_established():
+    """The card says 'no trend to project yet'. A confident dashed line to the
+    target date would contradict it, and the line is the more persuasive of the
+    two."""
+    js = _js()
+    assert "!fc.trend_unclear && fc.trend" in js
+    assert "!fc.bf_trend_unclear && fc.bf_trend" in js
+
+
+def test_the_band_is_drawn_behind_the_trend_line():
+    """Order matters: a filled shape painted after the line would hide it."""
+    js = _js()
+    body = js[js.index("function drawPanel"):js.index("const fc = forecast || {}")]
+    assert body.index("p.band") < body.index("Projected trend line")
+
+
+def test_the_band_is_clipped_to_its_own_panel():
+    """Four months extrapolated from four weeks can be wider than the whole
+    axis; it must not bleed into the panel below."""
+    js = _js()
+    band = js[js.index("if (p.band"):]
+    band = band[:band.index("// Projected trend line")]
+    assert "clip-path" in band
+
+
+def test_both_bands_are_styled():
+    import os
+    with open(os.path.join(os.path.dirname(__file__), "..", "static", "style.css")) as h:
+        css = h.read()
+    assert ".chart-band" in css and ".chart-band-bf" in css
+
+
+def test_a_perfectly_collinear_series_has_a_zero_width_band():
+    """Correct rather than a bug: with no residuals there is no scatter to
+    estimate, so the interval for the mean is zero. Real readings never do
+    this, and the test exists so nobody mistakes it for one."""
+    points = _pts(*[(d, 100.0 + (84 - d) * 0.02) for d in range(84, -1, -7)])
+    band = gymapp._weight_forecast(_logs(points), _goal())["trend_band"]
+    assert band and band[-1]["hi"] == band[-1]["lo"]

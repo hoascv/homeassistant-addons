@@ -67,6 +67,28 @@ If 28 days does not hold at least four readings — which is normal for body fat
 the most recent four are used instead, whatever their age. A slightly stale fit
 beats refusing to answer.
 
+### The band around the projection
+
+The dashed trend is drawn inside a faint **95% band** — narrow where your
+readings are, flaring as it projects forward. That widening is the honest shape
+of an extrapolation: four months predicted from four weeks of weigh-ins is far
+less certain at the end than at the beginning, and a plain dashed line had no
+way of saying so.
+
+It is a confidence interval for the **trend**, not a prediction of what the
+scale will read on a particular morning. The question a goal asks is "where is
+this heading", so the band shows where the underlying line plausibly sits. A
+prediction interval would additionally carry the two or three kilograms of
+day-to-day water movement, and would be so wide as to say nothing.
+
+Read it as: *the narrower the band, the more the projected figure is worth.* A
+band that fills the panel means the number at the end of the dashed line should
+not be planned around.
+
+It needs at least three readings, and it is drawn only when there is a trend to
+draw — see below.
+
+
 ### "Too early"
 
 Sometimes the honest answer is that there is no trend yet.

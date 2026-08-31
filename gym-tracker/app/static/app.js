@@ -652,6 +652,19 @@ function renderWeightChart(logs, goal, forecast, opts) {
       label(W - padR, y - 4, "end", "chart-target-label", p.targetLabel);
     }
 
+    // The 95% band around the projection, drawn first so everything else sits
+    // on top of it. Clipped to the panel: four months extrapolated from four
+    // weeks can be wider than the whole axis, and that is the honest shape —
+    // it just must not escape into the panel below.
+    if (p.band && p.band.length > 1) {
+      const top = p.band.map((q) => `${sx(q.t)},${sy(q.hi)}`);
+      const bottom = p.band.slice().reverse().map((q) => `${sx(q.t)},${sy(q.lo)}`);
+      add("polygon", {
+        points: top.concat(bottom).join(" "),
+        "clip-path": `url(#${clipId})`,
+      }, p.bandClass);
+    }
+
     // Projected trend line (dashed) — drawn under the actual line.
     if (p.trend && p.trend.length === 2) {
       const x1 = sx(p.trend[0].t), y1 = sy(p.trend[0].y);
@@ -737,11 +750,20 @@ function renderWeightChart(logs, goal, forecast, opts) {
     targetLabel: `Target ${target}`,
     lineClass: "chart-line",
     markerClass: "chart-marker",
+    // No dashed line when the trend is not established. The card says "no
+    // trend to project yet"; drawing a confident line to the target date
+    // anyway would contradict it, and the line is the more persuasive of the
+    // two.
     trend:
-      fc.available && fc.trend && fc.trend.length === 2
+      fc.available && !fc.trend_unclear && fc.trend && fc.trend.length === 2
         ? fc.trend.map((q) => ({ t: new Date(q.ts).getTime(), y: q.weight_kg }))
         : null,
     trendLabel: "Projected",
+    band:
+      fc.available && !fc.trend_unclear && fc.trend_band
+        ? fc.trend_band.map((q) => ({ t: new Date(q.ts).getTime(), lo: q.lo, hi: q.hi }))
+        : null,
+    bandClass: "chart-band",
   });
   drawSkipRug(padT, wH);
 
@@ -768,10 +790,15 @@ function renderWeightChart(logs, goal, forecast, opts) {
       lineClass: "chart-line-bf",
       markerClass: "chart-marker-bf",
       trend:
-        fc.bf_available && fc.bf_trend && fc.bf_trend.length === 2
+        fc.bf_available && !fc.bf_trend_unclear && fc.bf_trend && fc.bf_trend.length === 2
           ? fc.bf_trend.map((q) => ({ t: new Date(q.ts).getTime(), y: q.body_fat_pct }))
           : null,
       trendLabel: fc.bf_available ? `Projected ${fc.bf_projected_pct} %` : "Projected",
+      band:
+        fc.bf_available && !fc.bf_trend_unclear && fc.bf_trend_band
+          ? fc.bf_trend_band.map((q) => ({ t: new Date(q.ts).getTime(), lo: q.lo, hi: q.hi }))
+          : null,
+      bandClass: "chart-band-bf",
     });
   }
 

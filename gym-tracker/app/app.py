@@ -20,7 +20,7 @@ from flask import Flask, Response, g, jsonify, render_template, request, send_fi
 import garmin_client
 import meals
 
-APP_VERSION = "1.44.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.45.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("GYM_DB_PATH", "/data/gym.db")
 OPTIONS_PATH = os.environ.get("GYM_OPTIONS_PATH", "/data/options.json")
@@ -1740,6 +1740,63 @@ def _recent_points(points, window_days=TREND_WINDOW_DAYS, min_points=TREND_MIN_P
     return recent if len(recent) >= min_points else points[-min_points:]
 
 
+# Two-tailed t at 95%, by degrees of freedom. A lookup rather than a dependency:
+# this add-on ships flask, waitress and garminconnect, and pulling in scipy to
+# read one number off a table would be the largest thing in the image.
+_T95 = {
+    1: 12.706, 2: 4.303, 3: 3.182, 4: 2.776, 5: 2.571, 6: 2.447, 7: 2.365,
+    8: 2.306, 9: 2.262, 10: 2.228, 11: 2.201, 12: 2.179, 13: 2.160, 14: 2.145,
+    15: 2.131, 16: 2.120, 17: 2.110, 18: 2.101, 19: 2.093, 20: 2.086,
+    21: 2.080, 22: 2.074, 23: 2.069, 24: 2.064, 25: 2.060, 26: 2.056,
+    27: 2.052, 28: 2.048, 29: 2.045, 30: 2.042,
+}
+
+
+def _t95(df):
+    return _T95.get(df, 1.96)  # normal approximation past 30
+
+
+def _trend_band(points, slope, intercept, d0, at_days, samples=14):
+    """95% confidence band for the fitted line, sampled across `at_days`.
+
+    This is the interval for the **mean response** — where the underlying trend
+    plausibly sits — not a prediction interval for a single future weigh-in.
+    The distinction matters and the narrower one is the right choice here: the
+    question a goal answers is "where is this heading", and a prediction
+    interval would additionally carry the two or three kilos of day-to-day water
+    movement, producing a band so wide it says nothing about the trend at all.
+
+    The band is a hyperbola, narrowest at the centre of the fitted data and
+    flaring with distance from it — which is the honest shape. Extrapolating
+    four months from four weeks of readings is uncertain in a way a straight
+    dashed line has no way of showing.
+
+    Returns [] when there is nothing to say: fewer than three points leaves no
+    residuals to estimate scatter from.
+    """
+    n = len(points)
+    if n < 3 or not at_days:
+        return []
+    xs = [(d - d0).days for d, _ in points]
+    xbar = sum(xs) / n
+    sxx = sum((x - xbar) ** 2 for x in xs)
+    if sxx == 0:
+        return []
+    residuals = [v - (intercept + slope * x) for x, (_, v) in zip(xs, points)]
+    s = (sum(r * r for r in residuals) / (n - 2)) ** 0.5
+    t = _t95(n - 2)
+
+    lo_day, hi_day = min(at_days), max(at_days)
+    step = (hi_day - lo_day) / (samples - 1) if samples > 1 else 0
+    out = []
+    for i in range(samples):
+        x = lo_day + step * i
+        half = t * s * ((1.0 / n) + ((x - xbar) ** 2) / sxx) ** 0.5
+        centre = intercept + slope * x
+        out.append((d0 + timedelta(days=round(x)), centre - half, centre + half))
+    return out
+
+
 def _slope_stderr(points, slope, intercept, d0):
     """Standard error of the fitted slope, per day.
 
@@ -1825,6 +1882,12 @@ def _body_fat_forecast(logs, goal, target_date):
         "bf_fit_days": (fitted[-1][0] - d0).days,
         "bf_fit_points": len(fitted),
         "bf_trend_unclear": False,
+        "bf_trend_band": [
+            {"ts": d.isoformat(), "lo": round(lo, 1), "hi": round(hi, 1)}
+            for d, lo, hi in _trend_band(
+                fitted, slope, fit_fn(d0), d0, [0, (target_date - d0).days]
+            )
+        ],
     }
 
     target_bf = goal.get("target_body_fat_pct")
@@ -1967,6 +2030,15 @@ def _weight_forecast(logs, goal):
         # True when the slope is smaller than its own standard error — the data
         # does not establish a direction, whatever the fitted line happens to do.
         "trend_unclear": bool(unclear),
+        # The 95% band around the projection, widening with distance from the
+        # fitted data. Drawn behind the dashed line so the reader can see how
+        # much the number is worth.
+        "trend_band": [
+            {"ts": d.isoformat(), "lo": round(lo, 1), "hi": round(hi, 1)}
+            for d, lo, hi in _trend_band(
+                fitted, slope, intercept, d0, [0, (target_date - d0).days]
+            )
+        ],
         "slope_per_week": round(slope * 7, 2),
         "required_per_week": required_per_week,
         "projected_weight_kg": round(projected, 1),

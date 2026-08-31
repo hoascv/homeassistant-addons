@@ -716,3 +716,9 @@ p.tpl-meta { margin: 0 0 0.6rem; white-space: normal; }
   opacity: 0.75;
 }
 
+/* The 95% band around a projection. Faint on purpose: it is context for the
+   dashed line, not a second series, and a band four months out is large enough
+   that anything stronger would dominate the panel it sits in. */
+.chart-band { fill: var(--accent); opacity: 0.10; stroke: none; }
+.chart-band-bf { fill: var(--success); opacity: 0.10; stroke: none; }
+

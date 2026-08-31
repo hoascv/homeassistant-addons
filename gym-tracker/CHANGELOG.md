@@ -1,5 +1,31 @@
 # Changelog
 
+## 1.45.0
+
+- **The projection is now a cone, not a line.** A faint 95% band around the
+  dashed trend, narrowest where your readings are and flaring as it
+  extrapolates — which is the honest shape. On a noisy series projected four
+  months from four weeks of data the band is enormous, and that is the point:
+  a straight dashed line had no way of showing how little the number was worth.
+- It is a confidence interval for the **trend**, not a prediction interval for
+  a single future weigh-in. The narrower one is right here — the question a
+  goal asks is "where is this heading", and adding the two or three kilos of
+  day-to-day water movement would give a band so wide it says nothing about the
+  trend at all.
+- **The chart and the card now agree.** When the trend is not established the
+  card already said "no trend to project yet", but the chart went on drawing a
+  confident dashed line to the target date. It no longer does — and the line is
+  the more persuasive of the two, so it was the one contradicting the text.
+- Small samples are not given the confidence of large ones: the t value comes
+  from a lookup by degrees of freedom, so four readings widen the band where
+  forty would not. A table rather than a dependency — scipy would be the
+  largest thing in the image, for one number.
+- A band needs three readings. Through two points the line passes exactly,
+  there are no residuals, and an interval would be fabricated rather than
+  computed. A perfectly collinear series gives a zero-width band, which is
+  correct and never happens with real readings.
+- Body fat gets the same band, in its own colour.
+
 ## 1.44.0
 
 - **Trends are now fitted over the last 28 days**, not over everything ever
