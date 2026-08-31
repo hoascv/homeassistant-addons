@@ -349,7 +349,21 @@ function renderSmoothChart(host, rows, opts) {
           `<path class="chart-area" fill="url(#${s.gradientId})" ` +
           `d="${linePath} L${last[0].toFixed(2)},${baselineY} L${first[0].toFixed(2)},${baselineY} Z"/>`;
       }
-      lines += `<path class="chart-line ${s.lineClass || ""}" d="${linePath}"/>`;
+      const stroke = s.stopClassOf ? ` stroke="url(#${s.gradientId}-stroke)"` : "";
+      lines += `<path class="chart-line ${s.lineClass || ""}"${stroke} d="${linePath}"/>`;
+    }
+    // A gradient along the line, one stop per reading, so the curve carries a
+    // second variable in its colour. userSpaceOnUse rather than the default
+    // bounding-box units: a series broken into runs would otherwise map each
+    // run's own extent to 0..1 and recolour every fragment from scratch.
+    if (s.stopClassOf) {
+      const stops = rows.map((r, i) => {
+        const offset = rows.length > 1 ? (i / (rows.length - 1)) * 100 : 0;
+        return `<stop offset="${offset.toFixed(2)}%" class="${s.stopClassOf(r, i)}"/>`;
+      }).join("");
+      defs +=
+        `<linearGradient id="${s.gradientId}-stroke" gradientUnits="userSpaceOnUse" ` +
+        `x1="${padLeft}" y1="0" x2="${padLeft + innerW}" y2="0">${stops}</linearGradient>`;
     }
     if (s.area) {
       defs +=
@@ -483,6 +497,39 @@ function wireChartExpansion() {
 
 // --- Price curve chart ---
 
+// Which prices count as cheap, judged against the rest of the same day.
+//
+// Relative rather than absolute, because a Danish spot day is not comparable to
+// the one before it: 1.5 kr/kWh can be the bargain of one day and the peak of
+// another, so a fixed threshold would paint whole days a single colour and say
+// nothing about when to actually run the washing machine.
+//
+// Thirds rather than a continuous ramp: the question is "is now one of the
+// cheap hours", which has three useful answers, and a smooth rainbow makes
+// every hour look subtly different from its neighbour when most are not.
+function priceBander(rows) {
+  const values = rows.map((r) => r.total_dkk_kwh).filter((v) => v != null).sort((a, b) => a - b);
+  if (!values.length) return () => "price-stop-mid";
+
+  const lo = values[0], hi = values[values.length - 1];
+  const mean = values.reduce((a, b) => a + b, 0) / values.length;
+
+  // A flat day has no cheap hours, and banding one would invent a story out of
+  // a few øre — green at 1.71 and amber at 1.78 reads as a real difference when
+  // it is noise. Below a tenth of the day's own level, leave it uncoloured.
+  if (mean <= 0 || (hi - lo) / mean < 0.10) return () => "price-stop-mid";
+
+  const at = (frac) => values[Math.min(values.length - 1, Math.floor(frac * values.length))];
+  const cheapBelow = at(1 / 3), dearAbove = at(2 / 3);
+  return (v) => {
+    if (v == null) return "price-stop-mid";
+    if (v <= cheapBelow) return "price-stop-cheap";
+    if (v >= dearAbove) return "price-stop-dear";
+    return "price-stop-mid";
+  };
+}
+
+
 function renderPriceChart(rows, highlightKey) {
   const host = document.getElementById("price-chart");
   const empty = document.getElementById("price-chart-empty");
@@ -494,8 +541,14 @@ function renderPriceChart(rows, highlightKey) {
   empty.hidden = true;
 
   const nowIndex = highlightKey ? rows.findIndex((r) => r.time_dk === highlightKey) : -1;
+  const band = priceBander(rows);
   renderSmoothChart(host, rows, {
-    series: [{ valueOf: (r) => r.total_dkk_kwh, area: true, gradientId: "price-area-gradient" }],
+    series: [{
+      valueOf: (r) => r.total_dkk_kwh,
+      area: true,
+      gradientId: "price-area-gradient",
+      stopClassOf: (r) => band(r.total_dkk_kwh),
+    }],
     tooltipOf: (r) => `${hm(r.time_dk)} — ${r.total_dkk_kwh.toFixed(2)} DKK/kWh`,
     axisLabelOf: (r, _i, expanded) => {
       const hourStr = r.time_dk.slice(11, 13);

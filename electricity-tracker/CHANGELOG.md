@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.15.0
+
+- **The price line is now coloured by how cheap it is** — green through the
+  cheapest third of the day, amber through the dearest, the usual blue between.
+  The colour runs along the curve as a gradient, so the cheap window reads at a
+  glance instead of having to be traced against the y-axis.
+- Green already meant cheap here: the day's minimum has been marked with a green
+  dot for a while. The line extends that convention rather than inventing one.
+- **Judged against the same day, not a fixed threshold.** A Danish spot day is
+  not comparable to the one before it — 1.5 kr/kWh can be the bargain of one day
+  and the peak of another — so an absolute cut-off would paint whole days a
+  single colour and answer nothing about when to run the washing machine.
+- **A flat day is left uncoloured.** Where the spread is under a tenth of the
+  day's own level, banding it would invent a story out of a few øre: green at
+  1.71 and amber at 1.78 reads as a real difference when it is noise.
+- Thirds rather than a continuous ramp. The question is "is now one of the cheap
+  hours", which has three useful answers; a smooth rainbow makes every hour look
+  subtly different from its neighbour when most are not.
+
 ## 1.14.0
 
 - **Charging by calendar month**, with a **12m** range on the history card. A

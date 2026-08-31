@@ -310,6 +310,13 @@ value. Close with **✕**, **Escape**, or by tapping outside.
   live instant power plus what that costs per hour at the current price.
 - **EV charging** — once Easee is enabled: status, live power, and the
   current/last session's energy and cost.
+- **Price today / tomorrow** — the day's curve, with the cheapest and dearest
+  readings dotted. The line itself is **coloured by how cheap each reading is**:
+  green through the cheapest third of that day, amber through the dearest. It is
+  judged against the same day rather than a fixed number, because 1.5 kr/kWh can
+  be the bargain of one day and the peak of another. On a flat day — where the
+  spread is under a tenth of the day's level — the line stays one colour, since
+  banding a few øre would invent a difference that is not there.
 - **Charging history** — every past charging session over 7/30/90 days or 12
   months (kWh, cost, duration, and the average rate that session actually
   paid), a per-day chart of energy charged, and the roll-up: sessions, kWh, kr

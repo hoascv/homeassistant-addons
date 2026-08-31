@@ -191,6 +191,18 @@ code {
 /* The smooth line + soft gradient-wash area every chart in this add-on uses. */
 .chart-area-stop-top { stop-color: var(--accent); stop-opacity: 0.25; }
 .chart-area-stop-bottom { stop-color: var(--accent); stop-opacity: 0; }
+/* The price line is coloured by where each reading sits in the day's own
+   spread — green for the cheapest third, amber for the dearest. Green already
+   means cheap here (.chart-dot-cheap marks the day's minimum), so the line is
+   extending a convention rather than inventing one.
+
+   These are gradient stops, not strokes: the colour runs along the path, and
+   the blend between adjacent stops is deliberate. A hard edge would imply the
+   boundary between "cheap" and "middling" is a real thing rather than a third
+   of a sorted list. */
+.price-stop-cheap { stop-color: var(--success); }
+.price-stop-mid { stop-color: var(--accent); }
+.price-stop-dear { stop-color: var(--warn); }
 .chart-line { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .chart-now-line { stroke: var(--text-muted); stroke-width: 1; stroke-dasharray: 2 2; }
 .chart-now-dot { fill: var(--accent); stroke: var(--surface); stroke-width: 1.5; }
