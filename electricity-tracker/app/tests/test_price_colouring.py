@@ -120,3 +120,35 @@ def test_cheap_is_green_and_matches_the_existing_convention():
     dot = re.search(r"\.chart-dot-cheap \{[^}]*\}", css).group(0)
     stop = re.search(r"\.price-stop-cheap \{[^}]*\}", css).group(0)
     assert "--success" in dot and "--success" in stop
+
+
+# --- the bug this shipped with, once -----------------------------------------
+
+
+def test_the_gradient_is_applied_as_a_style_not_a_presentation_attribute():
+    """This shipped broken in 1.15.0 and is the whole reason for this test.
+
+    `stroke="url(#...)"` is an SVG *presentation attribute*, and a presentation
+    attribute loses to any rule in a stylesheet. `.chart-line` sets `stroke`, so
+    the attribute was silently overridden and every line stayed accent-blue —
+    the markup was exactly right and the picture was unchanged.
+
+    An inline style wins, which is why it has to be one.
+    """
+    js = _read("app.js")
+    block = js[js.index("const stroke = s.stopClassOf"):]
+    block = block[:block.index("lines +=")]
+    assert "style=" in block, "must be an inline style to beat the class rule"
+    assert 'stroke="url(' not in block, (
+        "a presentation attribute here is overridden by .chart-line"
+    )
+
+
+def test_the_class_rule_that_would_override_it_still_exists():
+    """The test above only matters while .chart-line sets a stroke. If that ever
+    stops being true this becomes a curiosity — so assert the hazard is real
+    rather than leaving a rule nobody can explain."""
+    css = _read("style.css")
+    rule = re.search(r"\.chart-line \{[^}]*\}", css).group(0)
+    assert "stroke:" in rule
+

@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.15.1
+
+- **The price line colouring in 1.15.0 never appeared.** The gradient was
+  applied with `stroke="url(#...)"`, an SVG *presentation attribute* — and a
+  presentation attribute loses to any rule in a stylesheet. `.chart-line` sets
+  `stroke`, so it overrode the gradient on every render and the line stayed
+  accent-blue. The markup was exactly right and the picture was unchanged, which
+  is why nothing caught it: the tests asserted the attribute was emitted, and it
+  was. It is an inline style now, which wins.
+
 ## 1.15.0
 
 - **The price line is now coloured by how cheap it is** — green through the

@@ -349,7 +349,11 @@ function renderSmoothChart(host, rows, opts) {
           `<path class="chart-area" fill="url(#${s.gradientId})" ` +
           `d="${linePath} L${last[0].toFixed(2)},${baselineY} L${first[0].toFixed(2)},${baselineY} Z"/>`;
       }
-      const stroke = s.stopClassOf ? ` stroke="url(#${s.gradientId}-stroke)"` : "";
+      // An inline style, NOT a stroke="" attribute. A presentation attribute
+      // loses to any stylesheet rule, and .chart-line sets stroke — so the
+      // attribute form is silently overridden and the line stays one colour.
+      const stroke = s.stopClassOf
+        ? ` style="stroke:url(#${s.gradientId}-stroke)"` : "";
       lines += `<path class="chart-line ${s.lineClass || ""}"${stroke} d="${linePath}"/>`;
     }
     // A gradient along the line, one stop per reading, so the curve carries a
