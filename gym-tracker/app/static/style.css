@@ -329,6 +329,10 @@ body {
 .forecast-warn { background: rgba(217, 119, 6, 0.16); color: #d97706; }
 .forecast-bad { background: rgba(220, 38, 38, 0.15); color: var(--danger); }
 .muted-badge { background: var(--surface-2); color: var(--text-muted); border: 1px solid var(--border); }
+/* "Too early" — the trend is smaller than its own uncertainty. Deliberately
+   the quietest badge on the card: it is not a warning about the body, it is a
+   statement about the data, and it should not read as bad news. */
+.forecast-muted { background: var(--surface-2); color: var(--text-muted); border: 1px solid var(--border); }
 .forecast-text { color: var(--text-muted); }
 
 /* Challenge */

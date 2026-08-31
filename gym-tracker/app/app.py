@@ -20,7 +20,7 @@ from flask import Flask, Response, g, jsonify, render_template, request, send_fi
 import garmin_client
 import meals
 
-APP_VERSION = "1.43.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.44.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("GYM_DB_PATH", "/data/gym.db")
 OPTIONS_PATH = os.environ.get("GYM_OPTIONS_PATH", "/data/options.json")
@@ -1711,6 +1711,61 @@ def _forecast(logs, goal):
     return {**forecast, **_body_fat_forecast(logs, goal, target_date)}
 
 
+# How much history a trend is fitted over. A projection four months out is a
+# statement about the current trend, and a fit over everything since July lets a
+# long-abandoned starting point drag on it — with weight, where day-to-day noise
+# is larger than the weekly signal, the whole answer can hinge on which early
+# readings happen to be included.
+TREND_WINDOW_DAYS = 28
+# Below this the window is not used at all. Fewer than four points is too few to
+# be selective about, and dropping any of them would make the fit worse rather
+# than more current.
+TREND_MIN_POINTS = 4
+
+
+def _recent_points(points, window_days=TREND_WINDOW_DAYS, min_points=TREND_MIN_POINTS):
+    """The trailing window of a (date, value) series, widened when it is sparse.
+
+    Anchored on the most recent reading rather than on today: someone who
+    stopped logging a month ago should still get a fit over their last month of
+    data, rather than an empty window and no forecast at all.
+
+    If the window holds fewer than `min_points`, the most recent `min_points`
+    are used regardless of age — a slightly stale fit beats refusing to answer.
+    """
+    if len(points) <= min_points:
+        return points
+    cutoff = points[-1][0] - timedelta(days=window_days)
+    recent = [p for p in points if p[0] >= cutoff]
+    return recent if len(recent) >= min_points else points[-min_points:]
+
+
+def _slope_stderr(points, slope, intercept, d0):
+    """Standard error of the fitted slope, per day.
+
+    The trend is only worth reporting a direction for when it is larger than
+    its own uncertainty. Weight carries several kilos of day-to-day water
+    movement against a weekly signal of a few hundred grams, so a short window
+    can easily produce a slope whose *sign* is arbitrary — and a badge that
+    flips between "behind" and "off track" on nothing teaches people to ignore
+    it. Comparing the slope to this is the cheapest honest guard against that.
+
+    Needs three points: with two the line passes through both exactly, there
+    are no residuals, and the uncertainty is unknowable rather than zero.
+    """
+    n = len(points)
+    if n < 3:
+        return None
+    xs = [(d - d0).days for d, _ in points]
+    xbar = sum(xs) / n
+    sxx = sum((x - xbar) ** 2 for x in xs)
+    if sxx == 0:
+        return None
+    residuals = [v - (intercept + slope * x) for x, (_, v) in zip(xs, points)]
+    variance = sum(r * r for r in residuals) / (n - 2)
+    return (variance / sxx) ** 0.5
+
+
 def _linear_trend(points):
     """Least-squares fit over (date, value) points. Returns (fit_fn, d0, slope)
     where fit_fn(date) -> value, or None if a line can't be defined (fewer than
@@ -1745,7 +1800,11 @@ def _body_fat_forecast(logs, goal, target_date):
         except (ValueError, TypeError):
             continue
         bf_points.append((d, bf))
-    fit = _linear_trend(bf_points)
+    # Same trailing window as the weight trend. Body fat is logged less often,
+    # so the sparse fallback in _recent_points does most of the work here — it
+    # will usually take the last four readings whatever their age.
+    fitted = _recent_points(bf_points)
+    fit = _linear_trend(fitted)
     if fit is None:
         return {"bf_available": False}
     fit_fn, d0, slope = fit
@@ -1763,6 +1822,9 @@ def _body_fat_forecast(logs, goal, target_date):
         "bf_status": None,
         "bf_required_per_week": None,
         "bf_projected_date": None,
+        "bf_fit_days": (fitted[-1][0] - d0).days,
+        "bf_fit_points": len(fitted),
+        "bf_trend_unclear": False,
     }
 
     target_bf = goal.get("target_body_fat_pct")
@@ -1772,8 +1834,9 @@ def _body_fat_forecast(logs, goal, target_date):
         return out
 
     current_bf = bf_points[-1][1]
-    # No start_body_fat_pct on the goal, so the first reading stands in — the
-    # same fallback the weight forecast uses when start_weight_kg is unset.
+    # No start_body_fat_pct on the goal, so the first reading ever stands in —
+    # from the full series, not the window, for the same reason as the weight
+    # forecast: which way counts as progress is a property of the goal.
     start_bf = bf_points[0][1]
     direction = 1.0 if target_bf >= start_bf else -1.0
     signed_margin = (projected - target_bf) * direction
@@ -1782,7 +1845,12 @@ def _body_fat_forecast(logs, goal, target_date):
     # less precisely — bioimpedance drifts with hydration by more than this in
     # a morning — so a tighter band would flip the badge on noise rather than
     # on progress.
-    if slope * direction < 0:
+    bf_stderr = _slope_stderr(fitted, slope, fit_fn(d0), d0)
+    out["bf_trend_unclear"] = bool(bf_stderr is not None and abs(slope) < bf_stderr)
+
+    if out["bf_trend_unclear"]:
+        out["bf_status"] = "unclear"
+    elif slope * direction < 0:
         out["bf_status"] = "off_track"
     elif signed_margin >= 0.5:
         out["bf_status"] = "ahead"
@@ -1826,9 +1894,13 @@ def _weight_forecast(logs, goal):
     except ValueError:
         return {"status": "insufficient", "available": False}
 
-    d0 = points[0][0]
-    xs = [(d - d0).days for d, _ in points]
-    ys = [w for _, w in points]
+    # `points` stays the full history — the start weight and the direction of
+    # improvement are facts about the whole goal. `fitted` is the trailing
+    # window the line is actually drawn through.
+    fitted = _recent_points(points)
+    d0 = fitted[0][0]
+    xs = [(d - d0).days for d, _ in fitted]
+    ys = [w for _, w in fitted]
     n = len(xs)
     xbar = sum(xs) / n
     ybar = sum(ys) / n
@@ -1844,7 +1916,10 @@ def _weight_forecast(logs, goal):
     current_weight = ys[-1]
     start_weight = goal.get("start_weight_kg")
     if start_weight is None:
-        start_weight = ys[0]
+        # The first weigh-in ever, not the first in the window: which way
+        # counts as progress is a property of the goal, and windowing it would
+        # let a fortnight of noise reverse the definition of "ahead".
+        start_weight = points[0][1]
     # Direction of improvement: bulking (target above start) vs cutting.
     direction = 1.0 if target_weight >= start_weight else -1.0
 
@@ -1852,7 +1927,14 @@ def _weight_forecast(logs, goal):
     # How far the projection lands past the target, measured the "good" way.
     signed_margin = (projected - target_weight) * direction
 
-    if slope * direction < 0:
+    # A slope smaller than its own standard error is not a direction, it is
+    # noise. Say so rather than picking a verdict that will reverse next week.
+    stderr = _slope_stderr(fitted, slope, intercept, d0)
+    unclear = stderr is not None and abs(slope) < stderr
+
+    if unclear:
+        status = "unclear"
+    elif slope * direction < 0:
         status = "off_track"  # trending away from the target
     elif signed_margin >= 0.3:
         status = "ahead"
@@ -1878,6 +1960,13 @@ def _weight_forecast(logs, goal):
     return {
         "available": True,
         "status": status,
+        # How much history the line was fitted through, so the page can say so
+        # rather than implying the trend describes everything on the chart.
+        "fit_days": (fitted[-1][0] - d0).days,
+        "fit_points": len(fitted),
+        # True when the slope is smaller than its own standard error — the data
+        # does not establish a direction, whatever the fitted line happens to do.
+        "trend_unclear": bool(unclear),
         "slope_per_week": round(slope * 7, 2),
         "required_per_week": required_per_week,
         "projected_weight_kg": round(projected, 1),

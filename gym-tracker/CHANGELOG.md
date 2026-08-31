@@ -1,5 +1,35 @@
 # Changelog
 
+## 1.44.0
+
+- **Trends are now fitted over the last 28 days**, not over everything ever
+  logged. A projection four months out is a claim about the current trend, and
+  a fit spanning months let a long-abandoned starting point pull on an answer
+  about December.
+- Sparse data widens the window rather than losing the forecast: below four
+  points nothing is dropped, and if 28 days does not hold four readings the
+  most recent four are used whatever their age. Body fat, logged far less often
+  than weight, mostly takes that path.
+- The dashed projection now starts where the fit starts, rather than being drawn
+  back through data it was never fitted on.
+- **A new verdict: "Too early".** Shortening the window exposed something the
+  longer fit was hiding — on a series with three kilos of day-to-day water
+  movement and a weekly signal of about ninety grams, the *sign* of the trend
+  is not established by the data. The badge would have flipped between "Behind"
+  and "Off track" week to week on nothing at all.
+- So the slope is now compared against its own standard error, and when it is
+  smaller the card says so instead of picking a verdict: *"Weight is moving less
+  than the scatter in the readings (−0.09 kg/wk over 26 days). No trend to
+  project yet — keep logging."* No projected figure is quoted, deliberately —
+  naming one would give a number about to change sign the authority of a
+  printed forecast.
+- The guard needs three readings. Through two points the line passes exactly,
+  so its uncertainty is unknown rather than zero.
+- Body fat gets the same treatment, and the badge is the quietest on the card:
+  it is a statement about the data, not bad news about the body.
+- The response carries `fit_days`, `fit_points` and `trend_unclear` so the page
+  can state its basis rather than implying the trend describes the whole chart.
+
 ## 1.43.0
 
 - **A forecast line for body fat**, under the weight one and reading the same

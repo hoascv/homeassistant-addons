@@ -435,6 +435,9 @@ const FORECAST_STATUS = {
   on_track: { cls: "good", badge: "On track" },
   behind: { cls: "warn", badge: "Behind" },
   off_track: { cls: "bad", badge: "Off track" },
+  // The slope is smaller than its own uncertainty: the readings do not
+  // establish a direction. Saying so beats a verdict that reverses next week.
+  unclear: { cls: "muted", badge: "Too early" },
 };
 
 function renderBfForecast(forecast, goal) {
@@ -453,6 +456,17 @@ function renderBfForecast(forecast, goal) {
 
   const rate = forecast.bf_slope_per_week;
   const rateStr = `${rate > 0 ? "+" : ""}${rate} %/wk`;
+
+  if (forecast.bf_trend_unclear) {
+    badge.textContent = FORECAST_STATUS.unclear.badge;
+    badge.className = "forecast-badge forecast-muted";
+    text.textContent =
+      `Body fat is moving less than the scatter in the readings (${rateStr} over `
+      + `${forecast.bf_fit_days} days). No trend to project yet.`;
+    line.hidden = false;
+    return;
+  }
+
   const parts = [`Body fat trending ${rateStr}, projected ${forecast.bf_projected_pct} % by target.`];
 
   const need = forecast.bf_required_per_week;
@@ -493,6 +507,17 @@ function renderForecast(forecast, goal) {
 
   const rate = forecast.slope_per_week;
   const rateStr = `${rate > 0 ? "+" : ""}${rate} kg/wk`;
+
+  if (forecast.trend_unclear) {
+    // No projection quoted on purpose. Naming a number here would give a
+    // figure that is about to change sign the authority of a printed forecast.
+    document.getElementById("forecast-text").textContent =
+      `Weight is moving less than the scatter in the readings (${rateStr} over `
+      + `${forecast.fit_days} days). No trend to project yet — keep logging.`;
+    line.hidden = false;
+    return;
+  }
+
   const parts = [`Trending ${rateStr}, projected ${forecast.projected_weight_kg} kg by target.`];
   if (forecast.status === "behind" && forecast.required_per_week != null) {
     parts.push(`Need ${forecast.required_per_week > 0 ? "+" : ""}${forecast.required_per_week} kg/wk to reach ${goal.target_weight_kg}.`);

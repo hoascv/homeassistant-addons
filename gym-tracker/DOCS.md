@@ -56,6 +56,40 @@ The forecast is a simple linear trend — good for spotting whether the last
 few weeks point at your goal, not a precise prediction. More weigh-ins make
 it steadier.
 
+### What the trend is fitted through
+
+The line is fitted over your **last 28 days**, not over everything you have ever
+logged. A projection four months out is a statement about the current trend, and
+a fit spanning months lets a starting point you have long since moved past pull
+on an answer about December.
+
+If 28 days does not hold at least four readings — which is normal for body fat —
+the most recent four are used instead, whatever their age. A slightly stale fit
+beats refusing to answer.
+
+### "Too early"
+
+Sometimes the honest answer is that there is no trend yet.
+
+Weight carries two or three kilograms of day-to-day water movement, while a
+deliberate gain or loss is a few hundred grams a week. When the fitted slope is
+smaller than its own statistical uncertainty, the *direction* is not established
+by the readings — the line has a sign, but next week's weigh-in could reverse it.
+
+In that case the card says so rather than choosing a verdict:
+
+> **Too early** · Weight is moving less than the scatter in the readings
+> (−0.09 kg/wk over 26 days). No trend to project yet — keep logging.
+
+No projected figure is quoted, on purpose: printing a number would lend a
+figure that is about to change sign the authority of a forecast. The badge is
+the quietest on the card, because this is a statement about the data rather
+than bad news about you.
+
+It needs at least three readings. A line through two points passes through both
+exactly, so its uncertainty is unknown rather than zero.
+
+
 **Body fat gets its own line**, directly under the weight one and reading the
 same way — trend per week, where it lands by the target date, and what rate
 would be needed instead:
