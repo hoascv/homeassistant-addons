@@ -20,7 +20,7 @@ from flask import Flask, Response, g, jsonify, render_template, request, send_fi
 import garmin_client
 import meals
 
-APP_VERSION = "1.42.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.43.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("GYM_DB_PATH", "/data/gym.db")
 OPTIONS_PATH = os.environ.get("GYM_OPTIONS_PATH", "/data/options.json")
@@ -1750,7 +1750,8 @@ def _body_fat_forecast(logs, goal, target_date):
         return {"bf_available": False}
     fit_fn, d0, slope = fit
     projected = fit_fn(target_date)
-    return {
+
+    out = {
         "bf_available": True,
         "bf_slope_per_week": round(slope * 7, 2),
         "bf_projected_pct": round(projected, 1),
@@ -1759,7 +1760,48 @@ def _body_fat_forecast(logs, goal, target_date):
             {"ts": d0.isoformat(), "body_fat_pct": round(fit_fn(d0), 1)},
             {"ts": target_date.isoformat(), "body_fat_pct": round(projected, 1)},
         ],
+        "bf_status": None,
+        "bf_required_per_week": None,
+        "bf_projected_date": None,
     }
+
+    target_bf = goal.get("target_body_fat_pct")
+    if target_bf is None:
+        # A trend is still worth drawing and stating; there is simply nothing
+        # to be ahead of or behind.
+        return out
+
+    current_bf = bf_points[-1][1]
+    # No start_body_fat_pct on the goal, so the first reading stands in — the
+    # same fallback the weight forecast uses when start_weight_kg is unset.
+    start_bf = bf_points[0][1]
+    direction = 1.0 if target_bf >= start_bf else -1.0
+    signed_margin = (projected - target_bf) * direction
+
+    # A wider band than the weight forecast's 0.3 kg. Body fat is measured far
+    # less precisely — bioimpedance drifts with hydration by more than this in
+    # a morning — so a tighter band would flip the badge on noise rather than
+    # on progress.
+    if slope * direction < 0:
+        out["bf_status"] = "off_track"
+    elif signed_margin >= 0.5:
+        out["bf_status"] = "ahead"
+    elif signed_margin <= -0.5:
+        out["bf_status"] = "behind"
+    else:
+        out["bf_status"] = "on_track"
+
+    days_left = (target_date - date.today()).days
+    if days_left > 0:
+        out["bf_required_per_week"] = round((target_bf - current_bf) / (days_left / 7.0), 2)
+
+    # When the trend reaches the target, if it does and it is still ahead.
+    if slope != 0:
+        cross = d0 + timedelta(days=round((target_bf - fit_fn(d0)) / slope))
+        if (cross - date.today()).days >= 0 and slope * direction > 0:
+            out["bf_projected_date"] = cross.isoformat()
+
+    return out
 
 
 def _weight_forecast(logs, goal):

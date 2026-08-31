@@ -386,6 +386,7 @@ async function loadHome() {
   document.getElementById("chart-target-note").textContent =
     goal.target_weight_kg != null ? `· target ${goal.target_weight_kg} kg` : "";
   renderForecast(data.forecast, goal);
+  renderBfForecast(data.forecast, goal);
   renderWeightChart(data.logs || [], goal, data.forecast);
   if (document.getElementById("chart-backdrop").classList.contains("open")) {
     renderExpandedChart();
@@ -435,6 +436,45 @@ const FORECAST_STATUS = {
   behind: { cls: "warn", badge: "Behind" },
   off_track: { cls: "bad", badge: "Off track" },
 };
+
+function renderBfForecast(forecast, goal) {
+  const line = document.getElementById("bf-forecast-line");
+  const badge = document.getElementById("bf-forecast-badge");
+  const text = document.getElementById("bf-forecast-text");
+
+  // Hidden entirely when there is no body-fat goal or no trend. The weight
+  // line above always says *something*, because weight is always the point;
+  // body fat is optional, and a permanent "log some body fat" nag under a goal
+  // nobody set would be noise.
+  if (!forecast || !forecast.bf_available || goal.target_body_fat_pct == null) {
+    line.hidden = true;
+    return;
+  }
+
+  const rate = forecast.bf_slope_per_week;
+  const rateStr = `${rate > 0 ? "+" : ""}${rate} %/wk`;
+  const parts = [`Body fat trending ${rateStr}, projected ${forecast.bf_projected_pct} % by target.`];
+
+  const need = forecast.bf_required_per_week;
+  const needStr = (v) => `${v > 0 ? "+" : ""}${v} %/wk`;
+  if (forecast.bf_status === "behind" && need != null) {
+    parts.push(`Need ${needStr(need)} to reach ${goal.target_body_fat_pct} %.`);
+  } else if (forecast.bf_status === "off_track" && need != null) {
+    parts.push(`Moving the wrong way — need ${needStr(need)}.`);
+  } else if (
+    (forecast.bf_status === "ahead" || forecast.bf_status === "on_track")
+    && forecast.bf_projected_date
+  ) {
+    parts.push(`On this trend you hit ${goal.target_body_fat_pct} % around ${fmtDate(forecast.bf_projected_date)}.`);
+  }
+
+  const meta = FORECAST_STATUS[forecast.bf_status] || FORECAST_STATUS.on_track;
+  badge.textContent = meta.badge;
+  badge.className = `forecast-badge forecast-${meta.cls}`;
+  text.textContent = parts.join(" ");
+  line.hidden = false;
+}
+
 
 function renderForecast(forecast, goal) {
   const line = document.getElementById("forecast-line");

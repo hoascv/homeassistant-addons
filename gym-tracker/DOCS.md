@@ -56,6 +56,28 @@ The forecast is a simple linear trend — good for spotting whether the last
 few weeks point at your goal, not a precise prediction. More weigh-ins make
 it steadier.
 
+**Body fat gets its own line**, directly under the weight one and reading the
+same way — trend per week, where it lands by the target date, and what rate
+would be needed instead:
+
+> **Behind** · Body fat trending −0.33 %/wk, projected 23.6 % by target.
+> Need −0.74 %/wk to reach 15 %.
+
+Its band is wider than the weight forecast's: half a percentage point either
+side of the target rather than 0.3. Body fat is measured far less precisely
+than weight — a bioimpedance scale drifts with hydration by more than a few
+tenths across a single morning — so a tighter band would change the badge on
+water rather than on progress.
+
+The required rate is measured from your **latest reading**, not from the fitted
+line, so it answers "what has to happen from here" rather than "from where the
+regression believes you are".
+
+With no body-fat target the trend is still drawn and stated, but no verdict is
+given — there is nothing to be behind. With no body-fat readings at all the
+line is hidden entirely rather than nagging under a goal you never set.
+
+
 ## Meals
 
 A card on **Home** with a row per meal and two buttons: **Ate** and **Skipped**.

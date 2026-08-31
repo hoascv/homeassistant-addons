@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.43.0
+
+- **A forecast line for body fat**, under the weight one and reading the same
+  way: *"Behind — body fat trending −0.33 %/wk, projected 23.6 % by target.
+  Need −0.74 %/wk to reach 15 %."* The trend was already drawn on the chart;
+  now it says what it means.
+- Same four verdicts as the weight forecast — ahead, on track, behind, off
+  track — and the same shape of advice: the required rate when behind, the
+  crossing date when ahead.
+- **A wider band than the weight forecast's 0.3.** Half a percentage point
+  either side, because bioimpedance drifts with hydration by more than a few
+  tenths across a single morning. A band tuned for kilograms would flip the
+  badge on water rather than on progress.
+- The required rate is measured **from the latest reading**, not from the
+  fitted line — what has to happen from here, rather than from where a
+  regression believes you are.
+- With no body-fat target the trend is still drawn and stated, but no verdict
+  is given: there is nothing to be behind. With no body-fat goal at all the
+  line is hidden entirely rather than nagging under a goal nobody set.
+
 ## 1.42.0
 
 - **Skipped meals are marked on the weight chart.** A short tick at the foot of
