@@ -482,6 +482,27 @@ function renderBfForecast(forecast, goal) {
     parts.push(`On this trend you hit ${goal.target_body_fat_pct} % around ${fmtDate(forecast.bf_projected_date)}.`);
   }
 
+  // What the weight and body-fat projections jointly imply. Stated in
+  // kilograms of fat and lean rather than percentages, because that is the
+  // form a person can check against what they know is possible.
+  if (forecast.implied_lean_change_kg != null) {
+    const lean = forecast.implied_lean_change_kg;
+    const fat = forecast.implied_fat_change_kg;
+    const fmt = (v) => `${v > 0 ? "+" : ""}${v} kg`;
+    if (forecast.implied_lean_implausible) {
+      // The projections are what is wrong here, not the person. Say so
+      // plainly, and let the number make the case.
+      parts.push(
+        `Together these imply ${fmt(lean)} of lean mass `
+        + `(${forecast.implied_lean_kg_per_month} kg/month), which is faster `
+        + "than is generally achievable — so one of the two trends is "
+        + "over-reading rather than this being on the cards."
+      );
+    } else {
+      parts.push(`Together these imply ${fmt(fat)} fat, ${fmt(lean)} lean.`);
+    }
+  }
+
   const meta = FORECAST_STATUS[forecast.bf_status] || FORECAST_STATUS.on_track;
   badge.textContent = meta.badge;
   badge.className = `forecast-badge forecast-${meta.cls}`;

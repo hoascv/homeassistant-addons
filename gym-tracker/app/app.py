@@ -20,7 +20,7 @@ from flask import Flask, Response, g, jsonify, render_template, request, send_fi
 import garmin_client
 import meals
 
-APP_VERSION = "1.45.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.46.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("GYM_DB_PATH", "/data/gym.db")
 OPTIONS_PATH = os.environ.get("GYM_OPTIONS_PATH", "/data/options.json")
@@ -1708,7 +1708,69 @@ def _forecast(logs, goal):
             target_date = None
     if target_date is None:
         return {**forecast, "bf_available": False}
-    return {**forecast, **_body_fat_forecast(logs, goal, target_date)}
+    combined = {**forecast, **_body_fat_forecast(logs, goal, target_date)}
+    return {**combined, **_composition_implication(logs, combined, target_date)}
+
+
+# Lean mass a natural trainee can add, per month, being generous. Published
+# figures cluster around 0.25-0.5 kg for anyone past their first year, and up
+# to about 1 kg for a true novice. The ceiling here is the generous end on
+# purpose: this exists to catch the arithmetically impossible, not to referee
+# anybody's training.
+PLAUSIBLE_LEAN_GAIN_KG_PER_MONTH = 1.0
+
+
+def _composition_implication(logs, forecast, target_date):
+    """What the weight and body-fat projections jointly imply about fat and
+    lean mass — and whether that implication is physically possible.
+
+    The two trends are fitted independently, which is right (they are logged at
+    different rates and fail separately) but leaves nothing checking that the
+    pair makes sense together. They can and do imply nonsense: a projection of
+    +3.2 kg alongside a fall from 27.6% to 16.8% means losing 10.3 kg of fat
+    while adding 13.5 kg of lean, which is roughly seven times any rate a
+    natural trainee achieves.
+
+    Rather than silently correcting either fit, this states the implication in
+    the physical quantities — kilograms of fat and lean, which a person can
+    sanity-check — and flags it when the lean figure is not achievable. The
+    projections are the thing at fault in that case, not the body.
+    """
+    if not forecast.get("available") or not forecast.get("bf_available"):
+        return {}
+
+    latest_w = latest_bf = None
+    for l in logs:
+        if l.get("weight_kg") is not None:
+            latest_w = l["weight_kg"]
+        if l.get("body_fat_pct") is not None:
+            latest_bf = l["body_fat_pct"]
+    if latest_w is None or latest_bf is None:
+        return {}
+
+    proj_w = forecast.get("projected_weight_kg")
+    proj_bf = forecast.get("bf_projected_pct")
+    if proj_w is None or proj_bf is None:
+        return {}
+
+    fat_now, fat_then = latest_w * latest_bf / 100.0, proj_w * proj_bf / 100.0
+    lean_now, lean_then = latest_w - fat_now, proj_w - fat_then
+    lean_delta = lean_then - lean_now
+
+    months = max((target_date - date.today()).days, 1) / 30.44
+    lean_per_month = lean_delta / months
+
+    return {
+        "implied_fat_change_kg": round(fat_then - fat_now, 1),
+        "implied_lean_change_kg": round(lean_delta, 1),
+        "implied_lean_kg_per_month": round(lean_per_month, 2),
+        # Only a gain is checked. Losing lean quickly is unfortunate and
+        # entirely possible; gaining it quickly is not.
+        "implied_lean_implausible": bool(
+            lean_per_month > PLAUSIBLE_LEAN_GAIN_KG_PER_MONTH
+        ),
+        "plausible_lean_kg_per_month": PLAUSIBLE_LEAN_GAIN_KG_PER_MONTH,
+    }
 
 
 # How much history a trend is fitted over. A projection four months out is a

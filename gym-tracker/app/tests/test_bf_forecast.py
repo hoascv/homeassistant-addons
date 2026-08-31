@@ -178,3 +178,86 @@ def test_the_line_is_hidden_rather_than_nagging_when_there_is_no_bf_goal():
     fn = fn[:fn.index("\n}")]
     assert "line.hidden = true" in fn
     assert "target_body_fat_pct == null" in fn
+
+
+# --- what the two projections jointly imply -----------------------------------
+
+
+def _clean(weight_per_step, bf_per_step, steps=5, target_days=120):
+    """A clean trend in both series, so the fits survive the window and the
+    'too early' guard — this check is about the pair, not about noise."""
+    today = datetime.date.today()
+    logs = []
+    for i, d in enumerate(range(7 * (steps - 1), -1, -7)):
+        day = today - datetime.timedelta(days=d)
+        logs.append({
+            "ts": day.isoformat() + "T08:00:00",
+            "weight_kg": 100.0 + i * weight_per_step + (0.05 if i % 2 else -0.05),
+            "body_fat_pct": 29.0 + i * bf_per_step + (0.05 if i % 2 else -0.05),
+        })
+    goal = {"target_weight_kg": 105.0, "target_body_fat_pct": 15.0,
+            "start_weight_kg": 100.0,
+            "target_date": (today + datetime.timedelta(days=target_days)).isoformat()}
+    return gymapp._forecast(logs, goal), goal
+
+
+def test_gaining_weight_while_body_fat_plummets_is_flagged():
+    """The case that started this: +3 kg alongside a fall from 27.6 % to 16.8 %
+    implies adding more lean mass in four months than is achievable in years."""
+    fc, _ = _clean(weight_per_step=0.25, bf_per_step=-0.9)
+    assert fc["implied_lean_change_kg"] > 5
+    assert fc["implied_lean_implausible"] is True
+    assert fc["implied_lean_kg_per_month"] > fc["plausible_lean_kg_per_month"]
+
+
+def test_a_modest_recomposition_is_not_flagged():
+    """Slowly gaining while slowly leaning out is exactly what a good bulk
+    looks like, and must not be called impossible."""
+    fc, _ = _clean(weight_per_step=0.15, bf_per_step=-0.08)
+    assert fc["implied_lean_implausible"] is False
+    assert fc["implied_lean_change_kg"] > 0
+
+
+def test_losing_lean_quickly_is_not_flagged():
+    """Unfortunate and entirely possible. Only a fast *gain* is impossible."""
+    fc, _ = _clean(weight_per_step=-0.6, bf_per_step=0.1)
+    assert fc["implied_lean_change_kg"] < 0
+    assert fc["implied_lean_implausible"] is False
+
+
+def test_the_implication_is_reported_in_kilograms_of_fat_and_lean():
+    """Percentages are what people mis-reason about; kilograms of tissue are
+    what they can check against what they know."""
+    fc, _ = _clean(weight_per_step=0.15, bf_per_step=-0.08)
+    assert "implied_fat_change_kg" in fc
+    assert "implied_lean_change_kg" in fc
+    total = fc["implied_fat_change_kg"] + fc["implied_lean_change_kg"]
+    change = fc["projected_weight_kg"] - 100.0
+    assert total == pytest.approx(change, abs=0.7), (
+        "fat change plus lean change should account for the weight change"
+    )
+
+
+def test_no_implication_without_both_forecasts():
+    """They fail independently, and half a pair implies nothing."""
+    today = datetime.date.today()
+    logs = [{"ts": (today - datetime.timedelta(days=d)).isoformat() + "T08:00:00",
+             "weight_kg": 100.0 + d * 0.01, "body_fat_pct": None}
+            for d in range(28, -1, -7)]
+    goal = {"target_weight_kg": 105.0, "target_body_fat_pct": 15.0,
+            "start_weight_kg": 100.0,
+            "target_date": (today + datetime.timedelta(days=120)).isoformat()}
+    fc = gymapp._forecast(logs, goal)
+    assert fc["bf_available"] is False
+    assert "implied_lean_change_kg" not in fc
+
+
+def test_the_card_blames_the_projection_rather_than_the_person():
+    """A number this wrong means a trend is over-reading, not that somebody is
+    failing at something impossible."""
+    import os
+    static = os.path.join(os.path.dirname(__file__), "..", "static")
+    with open(os.path.join(static, "app.js")) as handle:
+        js = handle.read()
+    assert "implied_lean_implausible" in js
+    assert "over-reading" in js

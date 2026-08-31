@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.46.0
+
+- **The weight and body-fat projections now state what they jointly imply**, in
+  kilograms of fat and lean mass: *"Together these imply −3.4 kg fat, +2.1 kg
+  lean."* Percentages are what people mis-reason about; kilograms of tissue are
+  what you can check against what you know is possible.
+- **And they are checked against each other.** The two trends are fitted
+  independently — correct, since they are logged at different rates and fail
+  separately — but nothing was verifying that the pair made sense. They can
+  imply nonsense: +3.2 kg alongside a fall from 27.6 % to 16.8 % means losing
+  10.3 kg of fat while adding 13.5 kg of lean, roughly seven times any rate a
+  natural trainee achieves.
+- When the implied lean gain exceeds about 1 kg a month, the card says so and
+  says **why it is the projection at fault**, not the person: one of the two
+  trends is over-reading. A generous ceiling on purpose — this exists to catch
+  the arithmetically impossible, not to referee anybody's training.
+- Only a fast *gain* is flagged. Losing lean mass quickly is unfortunate and
+  entirely possible.
+- Nothing is silently corrected. Neither fit is adjusted to make the pair agree,
+  because there is no way to know which of the two is wrong — and quietly
+  reshaping a number to look reasonable is worse than showing an unreasonable
+  one and saying so.
+
 ## 1.45.0
 
 - **The projection is now a cone, not a line.** A faint 95% band around the

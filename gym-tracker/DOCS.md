@@ -67,6 +67,32 @@ If 28 days does not hold at least four readings — which is normal for body fat
 the most recent four are used instead, whatever their age. A slightly stale fit
 beats refusing to answer.
 
+### What the two projections imply together
+
+Weight and body fat are trended separately, and the card states what the pair
+implies in kilograms:
+
+> Together these imply −3.4 kg fat, +2.1 kg lean.
+
+That is a more checkable statement than two percentages, because you can weigh
+it against what you know about how fast tissue actually changes.
+
+It is also checked. Two independently fitted trends can imply something
+impossible — gaining weight while body fat falls steeply means adding lean mass,
+and there is a limit to how fast that happens. If the implied gain exceeds about
+a kilogram a month, the card says so and says the projection is what is wrong:
+
+> Together these imply +13.5 kg of lean mass (3.4 kg/month), which is faster
+> than is generally achievable — so one of the two trends is over-reading
+> rather than this being on the cards.
+
+Neither fit is quietly adjusted to make the numbers agree, because there is no
+way to tell which of the two is over-reading. Showing an unreasonable figure and
+naming it is more useful than reshaping it into a plausible-looking one.
+
+Only a fast *gain* is flagged. Losing lean mass quickly is entirely possible.
+
+
 ### The band around the projection
 
 The dashed trend is drawn inside a faint **95% band** — narrow where your
