@@ -20,7 +20,7 @@ import schema
 import seeding
 import store
 
-APP_VERSION = "1.1.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.2.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("RECIPES_DB_PATH", "/data/recipes.db")
 INGRESS_USER_ID_HEADER = "X-Remote-User-ID"
@@ -93,6 +93,9 @@ def api_summary():
         "default_servings": cfg["default_servings"],
         "staples": cfg["staples"],
         "counts": store.counts(db),
+        # Just the number, so the Recipes tab can show a nudge without every
+        # page load paying for the full grouping query.
+        "duplicate_groups": len(store.duplicate_groups(db)),
     })
 
 
@@ -122,6 +125,19 @@ def api_delete_recipe(recipe_id):
     store.delete_recipe(db, recipe_id)
     db.commit()
     return jsonify({"deleted": recipe_id})
+
+
+@app.route("/api/duplicates")
+def api_duplicates():
+    """Recipes that normalise to the same name and category.
+
+    Reported, never merged here. Two copies that look alike may genuinely
+    differ — one edited with what was actually cooked, one straight from a pack
+    — and picking the wrong one to delete loses work that exists nowhere else.
+    Deleting is done through the ordinary recipe endpoint, one at a time, by
+    somebody who has looked at both.
+    """
+    return jsonify({"groups": store.duplicate_groups(get_db())})
 
 
 # --- importing ----------------------------------------------------------------

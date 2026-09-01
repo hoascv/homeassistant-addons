@@ -103,6 +103,15 @@ async function loadSummary() {
   const select = el("prompt-category");
   select.innerHTML = state.summary.categories
     .map((c) => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join("");
+
+  // Shown only when there is something to act on. A permanent "0 duplicates"
+  // line is one you stop reading, and then miss the day it says 3.
+  const groups = state.summary.duplicate_groups || 0;
+  const nudge = el("dupe-nudge");
+  nudge.hidden = groups === 0;
+  nudge.textContent = groups === 1
+    ? "1 recipe looks like a duplicate — review"
+    : `${groups} recipes look like duplicates — review`;
 }
 
 async function loadRecipes() {
@@ -259,6 +268,62 @@ function renderPlan() {
 
   refreshCount();
 }
+
+// --- possible duplicates ------------------------------------------------------
+//
+// Listed, never merged automatically. Two copies that look alike may genuinely
+// differ — one edited with what was actually cooked, one straight from a pack
+// — and choosing wrongly loses work that exists nowhere else. So this shows
+// both and the keeper decides.
+
+async function openDuplicates() {
+  const data = await fetchJSON("api/duplicates");
+  const host = el("dupe-list");
+  if (!data.groups.length) {
+    host.innerHTML = '<p class="muted">Nothing looks duplicated any more.</p>';
+  } else {
+    host.innerHTML = data.groups.map((group) => `
+      <div class="dupe-group">
+        <h3>${escapeHtml(group.name)} <span class="dupe-cat">${escapeHtml(group.category)}</span></h3>
+        ${group.recipes.map((recipe, index) => `
+          <div class="dupe-row">
+            <span class="dupe-main">
+              <strong>${escapeHtml(recipe.name)}</strong>
+              ${index === 0 ? '<span class="pill-newest">most recent</span>' : ""}
+              <span class="dupe-sub">${recipe.ingredient_count} ingredient${
+                recipe.ingredient_count === 1 ? "" : "s"} ·
+                ${escapeHtml(shortDate(recipe.updated_at))} · ${escapeHtml(recipe.source)}</span>
+            </span>
+            <span class="dupe-actions">
+              <button type="button" class="btn-small" data-dupe-open="${recipe.id}">Open</button>
+              <button type="button" class="btn-small btn-danger" data-dupe-delete="${recipe.id}"
+                >Delete</button>
+            </span>
+          </div>`).join("")}
+      </div>`).join("");
+  }
+  openSheet("dupe-backdrop");
+}
+
+el("dupe-nudge").addEventListener("click", openDuplicates);
+
+el("dupe-list").addEventListener("click", async (event) => {
+  const open = event.target.closest("[data-dupe-open]");
+  if (open) {
+    closeSheet("dupe-backdrop");
+    openRecipe(Number(open.dataset.dupeOpen));
+    return;
+  }
+  const remove = event.target.closest("[data-dupe-delete]");
+  if (!remove) return;
+  // Asked every time. This is the one button here that destroys something, and
+  // the whole point of the panel is that the two rows are hard to tell apart.
+  if (!confirm("Delete this copy? The other one stays.")) return;
+  await fetch(`api/recipes/${remove.dataset.dupeDelete}`, { method: "DELETE" });
+  await loadRecipes();
+  await loadSummary();
+  await openDuplicates();
+});
 
 function refreshCount() {
   const badge = el("list-count");

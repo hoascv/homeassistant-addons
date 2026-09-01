@@ -108,9 +108,15 @@ def save_recipe(conn, recipe, source="import"):
         raise ValueError("a recipe needs a category")
 
     now = _now()
+    key = schema.key_text(name, category)
+    # Matched on the normalised key, not the literal text. Where an older
+    # database already holds several rows that normalise the same way, the most
+    # recently touched one wins, so repeated imports converge on a single
+    # recipe instead of adding to the pile.
     existing = conn.execute(
-        "SELECT id, created_at FROM recipes WHERE name = ? AND category = ?",
-        (name, category),
+        "SELECT id, created_at FROM recipes WHERE dedupe_key = ? "
+        "ORDER BY updated_at DESC, id DESC LIMIT 1",
+        (key,),
     ).fetchone()
 
     values = (
@@ -120,18 +126,23 @@ def save_recipe(conn, recipe, source="import"):
     )
     if existing:
         recipe_id = existing["id"]
+        # Name and category are deliberately left as they are. Reaching here
+        # means they already matched apart from case or spacing, so there is
+        # nothing to learn from the incoming spelling — and taking it would let
+        # one pack written in lower case rename the user's "Family" category to
+        # "family" everywhere it appears.
         conn.execute(
-            "UPDATE recipes SET name=?, category=?, servings=?, method=?, notes=?, "
-            "protein_g=?, kcal=?, minutes=?, source=?, updated_at=? WHERE id=?",
-            values + (now, recipe_id),
+            "UPDATE recipes SET servings=?, method=?, notes=?, "
+            "protein_g=?, kcal=?, minutes=?, source=?, dedupe_key=?, updated_at=? WHERE id=?",
+            values[2:] + (key, now, recipe_id),
         )
         conn.execute("DELETE FROM ingredients WHERE recipe_id = ?", (recipe_id,))
     else:
         cursor = conn.execute(
             "INSERT INTO recipes (name, category, servings, method, notes, protein_g, "
-            "kcal, minutes, source, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            values + (now, now),
+            "kcal, minutes, source, dedupe_key, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            values + (key, now, now),
         )
         recipe_id = cursor.lastrowid
 
@@ -146,6 +157,38 @@ def save_recipe(conn, recipe, source="import"):
              1 if ingredient.get("optional") else 0),
         )
     return recipe_id
+
+
+def duplicate_groups(conn):
+    """Recipes that normalise to the same name and category, grouped.
+
+    Only ever reported, never merged on the user's behalf. Two recipes that
+    look alike may genuinely differ — one edited with the ingredients actually
+    used, one straight from a pack — and deleting the wrong one loses work that
+    only exists here. The screen shows what it found and the keeper chooses.
+    """
+    rows = conn.execute(
+        "SELECT dedupe_key FROM recipes GROUP BY dedupe_key HAVING COUNT(*) > 1"
+    ).fetchall()
+
+    groups = []
+    for row in rows:
+        members = conn.execute(
+            "SELECT r.id, r.name, r.category, r.source, r.created_at, r.updated_at, "
+            "(SELECT COUNT(*) FROM ingredients WHERE recipe_id = r.id) AS ingredient_count "
+            "FROM recipes r WHERE r.dedupe_key = ? "
+            "ORDER BY r.updated_at DESC, r.id DESC",
+            (row["dedupe_key"],),
+        ).fetchall()
+        groups.append({
+            # The first is the one "keep newest" would keep, so the screen can
+            # mark it without repeating the ordering rule in JavaScript.
+            "name": members[0]["name"],
+            "category": members[0]["category"],
+            "recipes": [dict(member) for member in members],
+        })
+    groups.sort(key=lambda group: (group["category"].casefold(), group["name"].casefold()))
+    return groups
 
 
 def delete_recipe(conn, recipe_id):

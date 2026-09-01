@@ -26,6 +26,9 @@
       <input type="search" id="search" placeholder="Search…" aria-label="Search recipes">
     </div>
     <div class="seg" id="category-filter" role="tablist" aria-label="Category"></div>
+    <!-- Only ever appears when there is something to act on: a permanent
+         "0 duplicates" line is a thing you stop reading. -->
+    <button type="button" class="dupe-nudge" id="dupe-nudge" hidden></button>
     <div id="recipe-list"></div>
     <p class="empty-state" id="recipe-empty" hidden>Nothing here yet. Use ＋ to load some.</p>
   </section>
@@ -51,6 +54,22 @@
       <button type="button" class="topbar-icon-btn" data-close="recipe-backdrop" aria-label="Close">✕</button>
     </div>
     <div id="detail-body"></div>
+  </div>
+</div>
+
+<!-- Possible duplicates -->
+<div class="sheet-backdrop" id="dupe-backdrop" hidden data-close="dupe-backdrop">
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="dupe-title">
+    <div class="sheet-head">
+      <h2 id="dupe-title">Possible duplicates</h2>
+      <button type="button" class="topbar-icon-btn" data-close="dupe-backdrop" aria-label="Close">✕</button>
+    </div>
+    <p class="muted">
+      These have the same name and category once case and spacing are ignored.
+      Nothing is deleted for you — open one to check which copy you want before
+      removing the other.
+    </p>
+    <div id="dupe-list"></div>
   </div>
 </div>
 

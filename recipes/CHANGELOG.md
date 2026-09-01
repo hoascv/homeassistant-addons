@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.2.0
+
+- **Recipes are matched on name and category case-folded, with whitespace
+  collapsed.** The only check before was an exact string match, which caught an
+  exact re-import and nothing else — and an assistant spells the same dish
+  differently between one paste and the next. One recipe entered eight ways
+  produced six rows; it now produces one.
+- Danish names fold correctly (`GRØD` and `grød` are the same dish), which
+  `lower()` would not have managed reliably.
+- A re-import updates the content but no longer renames what is there. The
+  names already matched apart from case, so the incoming spelling teaches
+  nothing — and taking it let one lower-case pack rename the `Family` category
+  to `family` everywhere it appeared.
+- The same dish in a different category is still two recipes. A family portion
+  and a bulk portion differ in servings, which is why category is in the key.
+- **A "Possible duplicates" panel** lists copies already in the catalogue, with
+  ingredient counts, dates and source so you can tell them apart. Nothing is
+  merged for you: two copies that look alike may genuinely differ, and deleting
+  the wrong one loses work that exists nowhere else. The nudge above the recipe
+  list appears only when there is something to act on.
+- Upgrading backfills the new key in Python rather than SQL — SQLite's `trim()`
+  removes padding but cannot collapse an internal double space, and a weaker
+  key would leave `Chicken  curry` neither reported nor matched.
+
 ## 1.1.0
 
 - **Recipes say when they were added.** The date was already being recorded —

@@ -133,3 +133,40 @@ whether it can get in.
 - Nothing leaves your instance. There is no outbound call anywhere in the
   add-on — that is the whole reason for the copy-a-prompt arrangement.
 - Quantities are shown Danish-style with a comma: **1,5 kg**.
+
+## Duplicates
+
+Recipes are matched on their **name and category, case-folded with whitespace
+collapsed**. Loading a pack that contains `Chicken Curry` updates the
+`Chicken curry` you already have instead of adding a second row — which is what
+used to happen, because the only check was an exact string match and an
+assistant spells the same dish differently between one paste and the next.
+
+What is deliberately *not* treated as a duplicate:
+
+- **The same dish in another category.** A family portion and a bulk portion
+  are different recipes with different servings; that is why category is part
+  of the match.
+- **Names that merely resemble each other.** `Chicken curry` and
+  `Chicken curry with rice` are two recipes, and guessing otherwise would merge
+  things you meant to keep apart.
+
+A re-import updates the content — servings, method, ingredients — but **not the
+name or category**. Reaching that point means they already matched apart from
+case, so the incoming spelling has nothing to teach; taking it would let one
+lower-case pack rename your `Family` category to `family` everywhere.
+
+### Copies that are already there
+
+Nothing is merged for you. Two copies that look alike may genuinely differ —
+one edited with what you actually cooked, one straight from a pack — and
+deleting the wrong one loses work that exists nowhere else.
+
+When the catalogue contains any, a line appears above the recipe list:
+*"2 recipes look like duplicates — review"*. It opens a panel listing each
+group with the ingredient count, when it was last changed and where it came
+from, so you can tell the copies apart. The most recent is marked. **Open**
+shows the full recipe; **Delete** removes that one copy and asks first.
+
+The line only appears when there is something to act on — a permanent
+"0 duplicates" is a thing you stop reading, and then miss the day it says 3.

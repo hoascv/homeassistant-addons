@@ -144,3 +144,40 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent-soft
 /* When a recipe arrived. Quiet: it is provenance, not something you act on. */
 .added { font-size: 0.76rem; margin: 0.15rem 0 0; opacity: 0.8; }
 
+
+
+/* --- possible duplicates ---------------------------------------------------
+   A nudge rather than a banner: it appears only when there is something to do,
+   and reads as a link because it opens a panel rather than changing anything. */
+.dupe-nudge {
+  display: block; width: 100%; text-align: left;
+  font: inherit; font-size: 0.82rem; font-weight: 600;
+  color: var(--warn); background: var(--warn-soft);
+  border: 1px solid transparent; border-radius: 10px;
+  padding: 0.5rem 0.7rem; margin-bottom: 0.7rem; cursor: pointer;
+}
+
+.dupe-group { padding: 0.6rem 0; border-top: 1px solid var(--border); }
+.dupe-group:first-child { border-top: none; }
+.dupe-group h3 { font-size: 0.92rem; margin: 0 0 0.4rem; }
+.dupe-cat { font-weight: 400; font-size: 0.78rem; color: var(--text-muted); }
+.dupe-row {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 0.6rem; padding: 0.35rem 0;
+}
+.dupe-main { display: flex; flex-direction: column; gap: 0.1rem; min-width: 0; }
+.dupe-sub { font-size: 0.74rem; color: var(--text-muted); }
+.dupe-actions { display: flex; gap: 0.3rem; flex-shrink: 0; }
+.dupe-actions .btn-small {
+  font: inherit; font-size: 0.76rem; padding: 0.25rem 0.55rem; cursor: pointer;
+  border-radius: 999px; border: 1px solid var(--border);
+  background: var(--surface-2); color: inherit;
+}
+.dupe-actions .btn-danger { color: var(--danger); border-color: var(--danger); }
+/* Which copy "keep the newer one" would mean, so the panel does not make the
+   reader work out the ordering rule for themselves. */
+.pill-newest {
+  font-size: 0.68rem; font-weight: 600; color: var(--text-muted);
+  border: 1px solid var(--border); border-radius: 999px;
+  padding: 0.05rem 0.4rem; margin-left: 0.3rem;
+}
