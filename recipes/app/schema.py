@@ -65,6 +65,18 @@ TABLES = (
         -- still open, and merging them is the keeper's decision rather than
         -- something an upgrade does quietly to rows it never showed them.
         dedupe_key TEXT,
+        -- NULL, 'todo' or 'cooked'. Mutually exclusive on purpose: a recipe is
+        -- either one you mean to try or one you have made, and a thing that is
+        -- both is really just the second.
+        status TEXT,
+        rating INTEGER,  -- 1-5, or NULL for not rated. Kept apart from status:
+                         -- a dish you have cooked but not judged is normal.
+        -- Cooking is an event, not a flag. Counting it is what makes this a
+        -- record of what the household actually eats rather than a checkbox —
+        -- "we make this every other week" is the useful fact, and a boolean
+        -- cannot say it.
+        times_cooked INTEGER NOT NULL DEFAULT 0,
+        last_cooked_at TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         UNIQUE(name, category)
@@ -118,6 +130,7 @@ INDEXES = (
     "CREATE INDEX IF NOT EXISTS idx_recipes_category ON recipes(category, name)",
     "CREATE INDEX IF NOT EXISTS idx_recipes_source ON recipes(source)",
     "CREATE INDEX IF NOT EXISTS idx_recipes_dedupe ON recipes(dedupe_key)",
+    "CREATE INDEX IF NOT EXISTS idx_recipes_status ON recipes(status, name)",
 )
 
 
@@ -149,6 +162,14 @@ def _migrate(conn):
     columns = {row[1] for row in conn.execute("PRAGMA table_info(recipes)")}
     if "dedupe_key" not in columns:
         conn.execute("ALTER TABLE recipes ADD COLUMN dedupe_key TEXT")
+    for column, definition in (
+        ("status", "TEXT"),
+        ("rating", "INTEGER"),
+        ("times_cooked", "INTEGER NOT NULL DEFAULT 0"),
+        ("last_cooked_at", "TEXT"),
+    ):
+        if column not in columns:
+            conn.execute(f"ALTER TABLE recipes ADD COLUMN {column} {definition}")
     # Backfilled every start rather than once: rows written by an older version
     # while this one was not running would otherwise have no key and be
     # invisible to both the duplicate check and the save path.

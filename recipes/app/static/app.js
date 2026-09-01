@@ -5,7 +5,7 @@
 // and wires clicks. It holds no rules of its own: the list it draws has already
 // been scaled, merged, grouped and flagged before it arrives.
 
-const state = { summary: null, recipes: [], category: null, query: "", plan: null };
+const state = { summary: null, recipes: [], category: null, query: "", status: "", plan: null };
 
 function el(id) { return document.getElementById(id); }
 
@@ -106,6 +106,13 @@ async function loadSummary() {
 
   // Shown only when there is something to act on. A permanent "0 duplicates"
   // line is one you stop reading, and then miss the day it says 3.
+  for (const [key, id] of [["todo", "count-todo"], ["cooked", "count-cooked"]]) {
+    const n = state.summary.counts[key] || 0;
+    const badge = el(id);
+    badge.hidden = n === 0;
+    badge.textContent = ` ${n}`;
+  }
+
   const groups = state.summary.duplicate_groups || 0;
   const nudge = el("dupe-nudge");
   nudge.hidden = groups === 0;
@@ -118,6 +125,7 @@ async function loadRecipes() {
   const params = new URLSearchParams();
   if (state.category) params.set("category", state.category);
   if (state.query) params.set("q", state.query);
+  if (state.status) params.set("status", state.status);
   state.recipes = await fetchJSON(`api/recipes?${params}`);
   renderRecipes();
 }
@@ -136,8 +144,11 @@ function renderRecipes() {
     return `
       <div class="recipe-row" data-id="${r.id}">
         <div class="recipe-main">
-          <span class="recipe-name">${escapeHtml(r.name)}</span>
-          <span class="recipe-meta">${escapeHtml(facts)}</span>
+          <span class="recipe-name">
+            ${statusMark(r)}${escapeHtml(r.name)}</span>
+          <span class="recipe-meta">${escapeHtml(facts)}${
+            r.rating ? ` · <span class="stars-inline">${stars(r.rating)}</span>` : ""}${
+            r.times_cooked > 1 ? ` · made ${r.times_cooked}×` : ""}</span>
         </div>
         <span class="pill">${escapeHtml(r.category)}</span>
       </div>`;
@@ -168,8 +179,31 @@ el("search").addEventListener("input", (event) => {
 
 // --- one recipe --------------------------------------------------------------
 
+// Filled and hollow stars rather than a number: a rating is a judgement and
+// reads faster as a shape than as "4/5".
+function stars(rating) {
+  return "★★★★★".slice(0, rating) + "☆☆☆☆☆".slice(0, 5 - rating);
+}
+
+// A mark on the name, not a second pill. The category pill is already on the
+// right of every row, and two pills competing turns the list into a legend.
+function statusMark(recipe) {
+  if (recipe.status === "todo") return '<span class="mark mark-todo" title="Want to try">◷</span> ';
+  if (recipe.status === "cooked") return '<span class="mark mark-cooked" title="Cooked">✓</span> ';
+  return "";
+}
+
+function cookedLine(recipe) {
+  if (!recipe.times_cooked) return "Not made yet.";
+  const times = recipe.times_cooked === 1 ? "Made once" : `Made ${recipe.times_cooked} times`;
+  const when = shortDate(recipe.last_cooked_at);
+  return when ? `${times}, last on ${when}.` : `${times}.`;
+}
+
 async function openRecipe(id) {
   const recipe = await fetchJSON(`api/recipes/${id}`);
+  state.openRecipeId = id;
+  state.openRating = recipe.rating || 0;
   const servings = recipe.servings || state.summary.default_servings;
   const facts = [
     recipe.servings ? `${recipe.servings} servings` : null,
@@ -181,6 +215,21 @@ async function openRecipe(id) {
   el("detail-title").textContent = recipe.name;
   el("detail-body").innerHTML = `
     <p class="muted">${escapeHtml(facts)}</p>
+    <div class="cook-bar">
+      <div class="rate" id="rate" role="group" aria-label="Rating">
+        ${[1, 2, 3, 4, 5].map((n) => `<button type="button" class="star${
+          recipe.rating >= n ? " star-on" : ""}" data-rate="${n}"
+          aria-label="${n} star${n === 1 ? "" : "s"}">${
+          recipe.rating >= n ? "★" : "☆"}</button>`).join("")}
+        ${recipe.rating ? '<button type="button" class="link-btn" data-rate="0">clear</button>' : ""}
+      </div>
+      <div class="cook-actions">
+        <button type="button" class="btn-small${recipe.status === "todo" ? " btn-on" : ""}"
+          data-status="todo">${recipe.status === "todo" ? "✓ To try" : "Want to try"}</button>
+        <button type="button" class="btn-small" data-cooked="1">Made it</button>
+      </div>
+    </div>
+    <p class="muted cooked-line">${escapeHtml(cookedLine(recipe))}</p>
     <p class="muted added">${escapeHtml(addedLine(recipe))}</p>
     ${recipe.notes ? `<p class="notes">${escapeHtml(recipe.notes)}</p>` : ""}
     <h3>Ingredients</h3>
@@ -395,6 +444,47 @@ el("import-btn").addEventListener("click", async () => {
   el("import-report").innerHTML = "";
   await refreshPrompt();
 });
+el("status-filter").addEventListener("click", (event) => {
+  const button = event.target.closest("[data-status]");
+  if (!button) return;
+  state.status = button.dataset.status;
+  for (const other of el("status-filter").querySelectorAll(".seg-btn")) {
+    other.classList.toggle("seg-on", other === button);
+  }
+  loadRecipes();
+});
+
+// The three controls in the detail sheet. All three reload the list behind the
+// sheet as well as the sheet itself: the row you just marked is visible under
+// it, and leaving it stale is how you end up pressing the button twice.
+el("detail-body").addEventListener("click", async (event) => {
+  const rate = event.target.closest("[data-rate]");
+  const status = event.target.closest("[data-status]");
+  const cooked = event.target.closest("[data-cooked]");
+  if (!rate && !status && !cooked) return;
+
+  const id = state.openRecipeId;
+  if (rate) {
+    const value = Number(rate.dataset.rate);
+    await fetchJSON(`api/recipes/${id}/rating`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      // Pressing the star a recipe already has clears it, the way the two
+      // list buttons do — one control, both directions.
+      body: JSON.stringify({ rating: value === 0 || value === state.openRating ? null : value }),
+    });
+  } else if (status) {
+    await fetchJSON(`api/recipes/${id}/status`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: status.dataset.status }),
+    });
+  } else {
+    await fetchJSON(`api/recipes/${id}/cooked`, { method: "POST" });
+  }
+  await openRecipe(id);
+  await loadRecipes();
+  await loadSummary();
+});
+
 el("prompt-kind").addEventListener("change", refreshPrompt);
 el("prompt-category").addEventListener("change", refreshPrompt);
 el("prompt-keywords").addEventListener("input", refreshPromptSoon);

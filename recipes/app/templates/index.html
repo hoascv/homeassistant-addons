@@ -26,6 +26,17 @@
       <input type="search" id="search" placeholder="Search…" aria-label="Search recipes">
     </div>
     <div class="seg" id="category-filter" role="tablist" aria-label="Category"></div>
+    <!-- A second, narrower filter. Kept apart from the category row because
+         they answer different questions — what kind of meal, versus where it
+         is in the cooking. Crossing them into one row of chips would make
+         "Family" and "Want to try" look mutually exclusive. -->
+    <div class="seg seg-quiet" id="status-filter" role="tablist" aria-label="List">
+      <button type="button" class="seg-btn seg-on" data-status="">All</button>
+      <button type="button" class="seg-btn" data-status="todo">Want to try<span
+        class="seg-count" id="count-todo" hidden></span></button>
+      <button type="button" class="seg-btn" data-status="cooked">Cooked<span
+        class="seg-count" id="count-cooked" hidden></span></button>
+    </div>
     <!-- Only ever appears when there is something to act on: a permanent
          "0 duplicates" line is a thing you stop reading. -->
     <button type="button" class="dupe-nudge" id="dupe-nudge" hidden></button>

@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.4.0
+
+- **Want to try / Cooked lists, and star ratings.** Open a recipe and the bar
+  under the title has five stars, a **Want to try** toggle and a **Made it**
+  button. A second row of chips above the recipe list filters by list, with the
+  count in each.
+- **Made it counts rather than flags.** "We make this every other week" is the
+  useful fact about a household's cooking and a boolean cannot say it, so the
+  sheet reads *Made 6 times, last on 26 August* and the row shows `made 6×`.
+  Toggling the lists never touches that count — that is why they are separate
+  actions rather than one status that also counted.
+- The two lists are mutually exclusive: a recipe is either one you mean to try
+  or one you have made, and a thing that is both is really just the second.
+- Rating stays independent of them. A dish you have cooked but not judged is
+  normal, and so is knowing you will dislike something before you make it.
+- Both buttons and the stars are toggles — pressing the star a recipe already
+  has clears it. A separate "remove" would be a third control for what the
+  first one obviously means.
+- In the list, ◷ and ✓ mark the name rather than adding a second pill; the
+  category pill is already on the right of every row.
+- Existing recipes upgrade to "on neither list, never made, unrated", which is
+  true of them — not zero stars, which would be a judgement nobody made.
+
 ## 1.3.0
 
 - **Main ingredients box on the Load recipes sheet.** Type

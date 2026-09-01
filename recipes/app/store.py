@@ -47,6 +47,14 @@ def _as_recipe(conn, row, with_ingredients=True):
         # created_at alone, so "added" keeps meaning the first time it arrived
         # rather than the last time a pack was pasted over it.
         "created_at": row["created_at"], "updated_at": row["updated_at"],
+        # Where it is in the cooking, how often, and how good. Read with
+        # `in row.keys()` so a row selected before the migration ran — or by a
+        # query that does not SELECT * — degrades to "not on a list, never
+        # made, unrated" instead of raising.
+        "status": row["status"] if "status" in row.keys() else None,
+        "rating": row["rating"] if "rating" in row.keys() else None,
+        "times_cooked": (row["times_cooked"] if "times_cooked" in row.keys() else 0) or 0,
+        "last_cooked_at": row["last_cooked_at"] if "last_cooked_at" in row.keys() else None,
     }
     if with_ingredients:
         recipe["ingredients"] = _ingredients(conn, row["id"])
@@ -58,7 +66,11 @@ def get_recipe(conn, recipe_id):
     return _as_recipe(conn, row) if row else None
 
 
-def list_recipes(conn, category=None, query=None, with_ingredients=False):
+TODO, COOKED = "todo", "cooked"
+STATUSES = (TODO, COOKED)
+
+
+def list_recipes(conn, category=None, query=None, status=None, with_ingredients=False):
     """Recipes, optionally filtered. Ingredients are left off by default —
     a browse listing does not need them, and fetching them per row turns one
     query into a hundred."""
@@ -67,6 +79,9 @@ def list_recipes(conn, category=None, query=None, with_ingredients=False):
     if category:
         where.append("category = ?")
         params.append(category)
+    if status in STATUSES:
+        where.append("status = ?")
+        params.append(status)
     if query:
         where.append("(LOWER(name) LIKE ? OR LOWER(COALESCE(notes, '')) LIKE ?)")
         params += [f"%{query.lower()}%"] * 2
@@ -86,6 +101,10 @@ def counts(conn):
         "recipes": conn.execute("SELECT COUNT(*) AS n FROM recipes").fetchone()["n"],
         "ingredients": conn.execute("SELECT COUNT(*) AS n FROM ingredients").fetchone()["n"],
         "planned": conn.execute("SELECT COUNT(*) AS n FROM plan").fetchone()["n"],
+        "todo": conn.execute(
+            "SELECT COUNT(*) AS n FROM recipes WHERE status = ?", (TODO,)).fetchone()["n"],
+        "cooked": conn.execute(
+            "SELECT COUNT(*) AS n FROM recipes WHERE status = ?", (COOKED,)).fetchone()["n"],
     }
 
 
@@ -157,6 +176,64 @@ def save_recipe(conn, recipe, source="import"):
              1 if ingredient.get("optional") else 0),
         )
     return recipe_id
+
+
+def set_status(conn, recipe_id, status):
+    """Put a recipe on the to-try list, mark it as one you have made, or
+    neither. Returns the recipe, or None if there is no such id.
+
+    Passing the status a recipe already has clears it, because the two buttons
+    that call this are toggles: pressing "Want to try" on something already on
+    the list is how you take it off, and a separate "remove" would be a third
+    button for a thing the first one obviously means.
+    """
+    row = conn.execute("SELECT status FROM recipes WHERE id = ?", (recipe_id,)).fetchone()
+    if row is None:
+        return None
+    if status not in STATUSES and status is not None:
+        raise ValueError(f"status must be one of {STATUSES} or None")
+
+    new = None if status == row["status"] else status
+    conn.execute("UPDATE recipes SET status = ?, updated_at = ? WHERE id = ?",
+                 (new, _now(), recipe_id))
+    return get_recipe(conn, recipe_id)
+
+
+def log_cooked(conn, recipe_id, when=None):
+    """Record that it was made today. Returns the recipe, or None.
+
+    Separate from set_status because cooking is an event and being on a list is
+    a state. Making the same dish for the fourth time should say four, and a
+    status that also counted would tick up every time somebody toggled a
+    filter chip.
+    """
+    row = conn.execute("SELECT id FROM recipes WHERE id = ?", (recipe_id,)).fetchone()
+    if row is None:
+        return None
+    conn.execute(
+        "UPDATE recipes SET status = ?, times_cooked = times_cooked + 1, "
+        "last_cooked_at = ?, updated_at = ? WHERE id = ?",
+        (COOKED, when or _now(), _now(), recipe_id),
+    )
+    return get_recipe(conn, recipe_id)
+
+
+def set_rating(conn, recipe_id, rating):
+    """Rate it 1-5, or pass None to unrate. Returns the recipe, or None.
+
+    Deliberately independent of status: a dish you have cooked but not judged
+    is normal, and so is knowing you will hate something before you make it.
+    """
+    row = conn.execute("SELECT id FROM recipes WHERE id = ?", (recipe_id,)).fetchone()
+    if row is None:
+        return None
+    if rating is not None:
+        rating = int(rating)
+        if not 1 <= rating <= 5:
+            raise ValueError("rating must be 1-5, or null to clear it")
+    conn.execute("UPDATE recipes SET rating = ?, updated_at = ? WHERE id = ?",
+                 (rating, _now(), recipe_id))
+    return get_recipe(conn, recipe_id)
 
 
 def duplicate_groups(conn):

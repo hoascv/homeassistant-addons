@@ -238,14 +238,20 @@ def test_the_migration_is_safe_to_run_twice(db):
 
 
 def test_the_endpoint_reports_the_groups(client):
+    """A recipe with no ingredients is rejected by the importer, so this has to
+    send a pack that actually lands — otherwise "no duplicates" would be true
+    because nothing was imported at all."""
+    import json
     for name in ("Chicken curry", "chicken curry"):
-        client.post("/api/import", json={"text":
-            f'```json\n{{"recipes": [{{"name": "{name}", "category": "Family", '
-            f'"servings": 4, "ingredients": []}}]}}\n```'})
-    body = client.get("/api/duplicates").get_json()
-    # The importer goes through save_recipe, so these merged rather than
-    # duplicating — which is the point.
-    assert body["groups"] == []
+        pack = json.dumps({"recipes": [{
+            "name": name, "category": "Family", "servings": 4,
+            "ingredients": [{"name": "chicken", "shop_name": "kylling",
+                             "amount": 600, "unit": "g"}]}]})
+        assert client.post("/api/import", json={"text": pack}).get_json()["added"] == 1
+
+    # Both went through save_recipe, so the second updated the first.
+    assert len(client.get("/api/recipes").get_json()) == 1
+    assert client.get("/api/duplicates").get_json()["groups"] == []
 
 
 def test_the_summary_carries_the_count_for_the_nudge(client):

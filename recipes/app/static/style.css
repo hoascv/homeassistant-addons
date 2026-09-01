@@ -168,12 +168,13 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent-soft
 .dupe-main { display: flex; flex-direction: column; gap: 0.1rem; min-width: 0; }
 .dupe-sub { font-size: 0.74rem; color: var(--text-muted); }
 .dupe-actions { display: flex; gap: 0.3rem; flex-shrink: 0; }
-.dupe-actions .btn-small {
+.btn-small {
   font: inherit; font-size: 0.76rem; padding: 0.25rem 0.55rem; cursor: pointer;
   border-radius: 999px; border: 1px solid var(--border);
   background: var(--surface-2); color: inherit;
 }
-.dupe-actions .btn-danger { color: var(--danger); border-color: var(--danger); }
+.btn-danger { color: var(--danger); border-color: var(--danger); }
+.btn-on { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
 /* Which copy "keep the newer one" would mean, so the panel does not make the
    reader work out the ordering rule for themselves. */
 .pill-newest {
@@ -194,3 +195,34 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent-soft
   font-size: 0.74rem; padding: 0.15rem 0.5rem; border-radius: 999px;
   background: var(--accent-soft); color: var(--accent);
 }
+
+
+/* --- lists and ratings -----------------------------------------------------
+   Two questions, two rows of chips. What kind of meal is one thing; where it
+   is in the cooking is another, and crossing them into a single row would make
+   "Family" and "Want to try" look mutually exclusive. */
+.seg-quiet { margin-top: -0.3rem; }
+.seg-quiet .seg-btn { font-size: 0.78rem; }
+.seg-count { opacity: 0.6; font-variant-numeric: tabular-nums; }
+
+/* A mark on the name rather than a second pill: the category pill already sits
+   on the right of every row, and two competing pills turn a list into a key. */
+.mark { font-size: 0.8rem; }
+.mark-todo { color: var(--accent); }
+.mark-cooked { color: var(--success); }
+.stars-inline { color: var(--accent); letter-spacing: 0.05em; }
+
+.cook-bar {
+  display: flex; align-items: center; justify-content: space-between;
+  flex-wrap: wrap; gap: 0.5rem;
+  padding: 0.6rem 0; margin-bottom: 0.2rem;
+  border-top: 1px solid var(--border); border-bottom: 1px solid var(--border);
+}
+.rate { display: flex; align-items: center; gap: 0.1rem; }
+.star {
+  border: none; background: none; cursor: pointer; padding: 0.1rem 0.05rem;
+  font-size: 1.25rem; line-height: 1; color: var(--text-muted);
+}
+.star-on { color: var(--accent); }
+.cook-actions { display: flex; gap: 0.3rem; }
+.cooked-line { margin-top: 0.4rem; }

@@ -20,7 +20,7 @@ import schema
 import seeding
 import store
 
-APP_VERSION = "1.3.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.4.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("RECIPES_DB_PATH", "/data/recipes.db")
 INGRESS_USER_ID_HEADER = "X-Remote-User-ID"
@@ -108,6 +108,7 @@ def api_recipes():
         get_db(),
         category=request.args.get("category") or None,
         query=request.args.get("q") or None,
+        status=request.args.get("status") or None,
     ))
 
 
@@ -138,6 +139,53 @@ def api_duplicates():
     somebody who has looked at both.
     """
     return jsonify({"groups": store.duplicate_groups(get_db())})
+
+
+@app.route("/api/recipes/<int:recipe_id>/status", methods=["POST"])
+def api_set_status(recipe_id):
+    """Put it on the to-try list, mark it made, or take it off either.
+
+    Sending the status it already has clears it — the buttons are toggles, and
+    a separate "remove" would be a third control for what the first one
+    obviously means.
+    """
+    data = request.get_json(force=True, silent=True) or {}
+    db = get_db()
+    try:
+        recipe = store.set_status(db, recipe_id, data.get("status") or None)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    if recipe is None:
+        return jsonify({"error": "no such recipe"}), 404
+    db.commit()
+    return jsonify(recipe)
+
+
+@app.route("/api/recipes/<int:recipe_id>/cooked", methods=["POST"])
+def api_log_cooked(recipe_id):
+    """Record that it was made. Counts, rather than setting a flag: "we make
+    this every other week" is the useful fact and a boolean cannot say it."""
+    db = get_db()
+    recipe = store.log_cooked(db, recipe_id)
+    if recipe is None:
+        return jsonify({"error": "no such recipe"}), 404
+    db.commit()
+    return jsonify(recipe)
+
+
+@app.route("/api/recipes/<int:recipe_id>/rating", methods=["POST"])
+def api_set_rating(recipe_id):
+    """Rate 1-5, or send null to clear it."""
+    data = request.get_json(force=True, silent=True) or {}
+    db = get_db()
+    try:
+        recipe = store.set_rating(db, recipe_id, data.get("rating"))
+    except (TypeError, ValueError) as exc:
+        return jsonify({"error": str(exc)}), 400
+    if recipe is None:
+        return jsonify({"error": "no such recipe"}), 404
+    db.commit()
+    return jsonify(recipe)
 
 
 # --- importing ----------------------------------------------------------------

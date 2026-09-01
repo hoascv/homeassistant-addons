@@ -160,6 +160,42 @@ It works for **Healthy snacks** too — a tub of skyr is as much a snack questio
 as a dinner one. The recipes you already have in that category are still listed
 as ones to avoid, so the two narrowings stack.
 
+## Lists and ratings
+
+Every recipe carries three things, kept separate because they answer different
+questions.
+
+| | |
+|---|---|
+| **Want to try** / **Cooked** | where it is — the two lists, mutually exclusive |
+| **Made *n* times**, last on a date | how often, which a checkbox cannot say |
+| **★★★★☆** | how good, which having cooked it does not tell you |
+
+Open a recipe and the bar under the title has all three: five stars, a **Want to
+try** toggle and a **Made it** button. Both buttons are toggles — pressing
+**Want to try** on something already listed takes it off, and pressing the star
+a recipe already has clears the rating. A separate "remove" would be a third
+control for what the first one obviously means.
+
+**Made it** counts rather than flags. "We make this every other week" is the
+useful fact about a household's cooking and a boolean cannot say it, so the
+detail sheet reads *Made 6 times, last on 26 August* and the list row shows
+`made 6×` once it is more than one. Toggling the lists never touches that
+count.
+
+A second row of chips above the recipe list filters by **All / Want to try /
+Cooked**, with the number in each. It is a separate row from the categories on
+purpose: what kind of meal and where it is in the cooking are different
+questions, and one row of chips would make "Family" and "Want to try" look
+mutually exclusive.
+
+In the list itself a recipe on the to-try list is marked ◷ and a cooked one ✓,
+against the name rather than as a second pill — the category pill is already on
+the right of every row, and two competing pills turn a list into a legend.
+
+Rating is independent of the lists. A dish you have made but not judged is
+normal, and so is knowing you will dislike something before you make it.
+
 ## Duplicates
 
 Recipes are matched on their **name and category, case-folded with whitespace
