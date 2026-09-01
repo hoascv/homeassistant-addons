@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.15.2
+
+- **Fixed: the browser has been serving cached JavaScript since 1.12.2.**
+  `APP_VERSION` is the cache-buster on `static/app.js?v=` and
+  `static/style.css?v=`, and it was never bumped past 1.12.2 while
+  `config.yaml` went on to 1.15.1. Four releases of front-end work — the
+  labelled y axis (1.13.0), the monthly charging table (1.14.0) and the price
+  colouring (1.15.0, 1.15.1) — were all published at the same URL, so any
+  browser that had visited before kept the file it already had. The add-on was
+  running the new code; the page was not.
+- A test now pins `APP_VERSION` to `config.yaml`, and another checks the
+  version is actually on the asset URLs — a synced version that is not on the
+  URL busts nothing.
+
 ## 1.15.1
 
 - **The price line colouring in 1.15.0 never appeared.** The gradient was
