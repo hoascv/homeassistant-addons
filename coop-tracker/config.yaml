@@ -1,5 +1,5 @@
 name: "Coop Tracker"
-version: "1.44.2"
+version: "1.45.0"
 slug: "coop-tracker"
 description: "Log egg collection, coop cleaning, and feeding for your chickens"
 url: "https://github.com/hoascv/homeassistant-addons/tree/main/coop-tracker"
@@ -31,6 +31,19 @@ options:
   reminder_threshold_days: 2
   notify_service: ""
   ha_sensors_enabled: false
+  # Fermented feed. Off by default: it adds a card and a second reminder, and
+  # neither is any use to somebody not fermenting.
+  ferment_enabled: false
+  # How long a batch sits before it is ready. Three days is the usual answer at
+  # room temperature; a cold utility room in February wants longer.
+  ferment_days: 3
+  # How long a batch may go unstirred before the reminder counts it as due.
+  # Twelve hours produces the usual twice-a-day rhythm.
+  ferment_stir_hours: 12
+  # When to send stir reminders, comma-separated. Times of day rather than an
+  # interval, because "every 12 hours" lands at 3am half the time and a
+  # notification nobody can act on is one you learn to ignore.
+  ferment_stir_times: "08:00, 20:00"
   flock_isabrown_count: 3
   flock_sussex_count: 2
   supermarket_egg_price: 2.5
@@ -47,6 +60,10 @@ schema:
   reminder_threshold_days: "int(1,30)"
   notify_service: "str?"
   ha_sensors_enabled: "bool"
+  ferment_enabled: "bool"
+  ferment_days: "int(1,14)"
+  ferment_stir_hours: "int(2,48)"
+  ferment_stir_times: "str?"
   flock_isabrown_count: "int(0,100)"
   flock_sussex_count: "int(0,100)"
   supermarket_egg_price: "float(0,100)"

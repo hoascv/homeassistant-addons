@@ -20,6 +20,8 @@ from datetime import date, datetime, time as dtime, timedelta
 
 from flask import Flask, Response, g, jsonify, render_template, request, send_file
 
+import ferment
+
 try:
     import numpy as np
     from statsmodels.tsa.holtwinters import ExponentialSmoothing
@@ -65,7 +67,7 @@ except ImportError as e:
     SKLEARN_AVAILABLE = False
     SKLEARN_ERROR = str(e)
 
-APP_VERSION = "1.44.2"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.45.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("COOP_DB_PATH", "/data/coop.db")
 OPTIONS_PATH = os.environ.get("COOP_OPTIONS_PATH", "/data/options.json")
@@ -457,6 +459,32 @@ def get_reminder_config():
     }
 
 
+def get_ferment_config():
+    """Settings for fermented feed.
+
+    `stir_times` is a list rather than an interval because a reminder is only
+    useful when somebody is awake to act on it: "every 12 hours" fires at 3am
+    half the time, and a notification nobody can act on is one you learn to
+    swipe away.
+    """
+    opts = _read_options()
+    times = [t.strip() for t in str(opts.get("ferment_stir_times") or "").split(",") if t.strip()]
+    try:
+        hours = max(2, min(48, int(opts.get("ferment_stir_hours", ferment.DEFAULT_STIR_HOURS))))
+    except (TypeError, ValueError):
+        hours = ferment.DEFAULT_STIR_HOURS
+    try:
+        days = max(1, min(14, int(opts.get("ferment_days", ferment.DEFAULT_FERMENT_DAYS))))
+    except (TypeError, ValueError):
+        days = ferment.DEFAULT_FERMENT_DAYS
+    return {
+        "enabled": bool(opts.get("ferment_enabled", False)),
+        "stir_times": times or ["08:00", "20:00"],
+        "stir_hours": hours,
+        "ferment_days": days,
+    }
+
+
 def get_ha_sensors_enabled():
     return bool(_read_options().get("ha_sensors_enabled", False))
 
@@ -727,6 +755,10 @@ def init_db():
         # Left null on existing rows: those changes genuinely predate the
         # record, and guessing an actor for them would be inventing history.
         conn.execute("ALTER TABLE change_log ADD COLUMN actor TEXT")
+    # Fermented feed. Its own module rather than more of this file: the state
+    # machine and the arithmetic have nothing to do with eggs.
+    ferment.create_schema(conn)
+
     _install_change_triggers(conn)
 
     conn.commit()
@@ -747,6 +779,8 @@ TRACKED_TABLES = {
     "food_types": "id",
     "health_events": "id",
     "nesting_boxes": "id",
+    "ferment_batches": "id",
+    "ferment_stirs": "id",
 }
 # Never serialised into the feed. A chicken's photo is fetched from its own
 # endpoint; nothing downstream wants it inline.
@@ -900,6 +934,57 @@ def _reminder_tick(now, conn):
         )
 
 
+_stir_last_notified = None
+
+
+def _ferment_stir_tick(now, conn):
+    """Notify when a batch has gone too long unstirred.
+
+    Deliberately not folded into _reminder_tick, which fires once a day: an
+    unstirred batch grows mould, stirring is a twice-daily job, and a reminder
+    that can only arrive at 18:00 is no use for the morning one.
+
+    Firing is gated on a *window* rather than an interval. "Every 12 hours"
+    lands at 3am half the time, and a notification nobody can act on is one
+    people learn to swipe away — which costs you the reminders that mattered
+    too. So it fires at the configured times of day, and only if something is
+    actually due.
+    """
+    global _stir_last_notified
+    cfg = get_ferment_config()
+    reminders = get_reminder_config()
+    if not (cfg["enabled"] and reminders["notify_service"]):
+        return
+
+    window = None
+    for value in cfg["stir_times"]:
+        at = _parse_hhmm(value)
+        if at is not None and now.time() >= at:
+            window = value  # the latest window already passed today
+    if window is None:
+        return
+
+    # One notification per window per day. Recovered from the database on the
+    # first tick after a restart, so restarting the add-on an hour after a
+    # reminder does not send it again.
+    key = f"{now.date().isoformat()} {window}"
+    if _stir_last_notified is None:
+        _stir_last_notified = _get_app_state(conn, "ferment_stir_last_window")
+    if _stir_last_notified == key:
+        return
+
+    due = ferment.due_for_stir(conn, now=now, stir_hours=cfg["stir_hours"])
+    if not due:
+        # Nothing to say. The window is *not* recorded as used, so a batch that
+        # becomes due later in the same window still gets its reminder.
+        return
+
+    _stir_last_notified = key
+    _set_app_state(conn, "ferment_stir_last_window", key)
+    conn.commit()
+    send_notification(ferment.stir_message(due), title="Coop Tracker — fermenting feed")
+
+
 def _push_ha_state(entity_id, state, attributes=None):
     _, err = _ha_api_request(
         "POST", f"/states/{entity_id}", {"state": state, "attributes": attributes or {}}
@@ -1000,6 +1085,7 @@ def _background_loop():
             conn = _db_connect_standalone()
             try:
                 _reminder_tick(datetime.now(), conn)
+                _ferment_stir_tick(datetime.now(), conn)
                 _push_ha_sensors(conn)
                 _prune_change_log(conn)
                 conn.commit()
@@ -1134,6 +1220,92 @@ def _compute_summary(conn, now, year=None, month=None):
         "savings_month": eggs_used_month_for_savings * egg_price_each,
         "savings_total": eggs_used_total_for_savings * egg_price_each,
     }
+
+
+# --- Fermented feed ----------------------------------------------------------
+
+
+def _grams(data):
+    """The batch weight, or None. Blank is a legitimate answer — plenty of
+    people fill the tub by eye — and a zero would claim a weight of nothing."""
+    value = data.get("grams")
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _ferment_payload(conn):
+    cfg = get_ferment_config()
+    birds = sum(get_flock_counts().values())
+    body = ferment.summary(conn, birds, stir_hours=cfg["stir_hours"])
+    body["enabled"] = cfg["enabled"]
+    body["ferment_days"] = cfg["ferment_days"]
+    body["stir_hours"] = cfg["stir_hours"]
+    body["stir_times"] = cfg["stir_times"]
+    return body
+
+
+@app.route("/api/ferment")
+def api_ferment():
+    return jsonify(_ferment_payload(get_db()))
+
+
+@app.route("/api/ferment/history")
+def api_ferment_history():
+    cfg = get_ferment_config()
+    return jsonify(ferment.batches(get_db(), include_closed=True,
+                                   stir_hours=cfg["stir_hours"]))
+
+
+@app.route("/api/ferment/batches", methods=["POST"])
+def api_start_batch():
+    data = request.get_json(force=True, silent=True) or {}
+    conn = get_db()
+    cfg = get_ferment_config()
+    try:
+        ferment.start_batch(
+            conn,
+            container=data.get("container"),
+            grams=_grams(data),
+            ferment_days=data.get("ferment_days") or cfg["ferment_days"],
+            notes=data.get("notes"),
+        )
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    conn.commit()
+    return jsonify(_ferment_payload(conn)), 201
+
+
+@app.route("/api/ferment/batches/<int:batch_id>/stir", methods=["POST"])
+def api_stir_batch(batch_id):
+    conn = get_db()
+    try:
+        ferment.log_stir(conn, batch_id)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    conn.commit()
+    return jsonify(_ferment_payload(conn))
+
+
+@app.route("/api/ferment/batches/<int:batch_id>/close", methods=["POST"])
+def api_close_batch(batch_id):
+    """Take a batch out of the rotation, fed or discarded.
+
+    Two outcomes rather than a delete: a batch thrown away for mould is a
+    different event from one the birds ate, and how often that happens is worth
+    being able to find out.
+    """
+    data = request.get_json(force=True, silent=True) or {}
+    conn = get_db()
+    try:
+        ferment.close_batch(conn, batch_id, (data.get("outcome") or "").strip())
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    conn.commit()
+    return jsonify(_ferment_payload(conn))
 
 
 @app.route("/api/summary")

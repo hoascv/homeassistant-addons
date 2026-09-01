@@ -58,6 +58,7 @@ function fmtMoney(value) {
 }
 
 async function loadSummary() {
+  loadFerment();
   const monthParam = `${financeYear}-${String(financeMonth).padStart(2, "0")}`;
   const res = await fetch(`api/summary?month=${monthParam}`);
   const data = await res.json();
@@ -2702,3 +2703,97 @@ haStatusDot.addEventListener("click", () => {
 loadHaStatus();
 loadSummary();
 loadHistory();
+
+// --- Fermented feed ----------------------------------------------------------
+//
+// The card exists to answer one question at a glance: is anything about to go
+// mouldy. Everything else on it is secondary to the stir state.
+
+async function loadFerment() {
+  const card = document.getElementById("ferment-card");
+  let data;
+  try {
+    data = await fetch("api/ferment").then((r) => r.json());
+  } catch (err) {
+    card.hidden = true;
+    return;
+  }
+  if (!data.enabled) { card.hidden = true; return; }
+  card.hidden = false;
+  renderFerment(data);
+}
+
+function renderFerment(data) {
+  const hint = document.getElementById("ferment-hint");
+  hint.textContent = data.open
+    ? `${data.open} going${data.ready ? `, ${data.ready} ready to feed` : ""}`
+      + `${data.stir_due ? ` · ${data.stir_due} needs stirring` : ""}`
+    // Nothing on the go: say what a batch for this flock would take, since
+    // that is the number you need before you can start one.
+    : `Nothing fermenting. A ${data.ferment_days}-day batch for ${data.birds} `
+      + `hens is about ${data.suggested_grams} g of dry feed.`;
+
+  document.getElementById("ferment-batches").innerHTML = data.batches.map((b) => {
+    const since = b.hours_since_stir == null ? "—"
+      : b.hours_since_stir < 1 ? "just now"
+      : `${Math.round(b.hours_since_stir)}h ago`;
+    return `
+      <div class="ferment-row${b.stir_due ? " stir-due" : ""}" data-id="${b.id}">
+        <div class="ferment-main">
+          <span class="ferment-name">${escapeHtml(b.container)}</span>
+          <span class="ferment-meta">
+            ${b.state === "ready" ? "Ready to feed" : `Ready ${fmtDay(b.ready_at)}`}
+            · stirred ${since}${b.grams ? ` · ${Math.round(b.grams)} g` : ""}</span>
+        </div>
+        <div class="ferment-actions">
+          <button type="button" class="btn-small" data-stir="${b.id}">Stirred</button>
+          ${b.state === "ready"
+            ? `<button type="button" class="btn-small" data-close="${b.id}" data-outcome="fed">Fed</button>`
+            : ""}
+          <button type="button" class="btn-small btn-quiet" data-close="${b.id}"
+            data-outcome="discarded" title="Threw it away">Binned</button>
+        </div>
+      </div>`;
+  }).join("");
+}
+
+function fmtDay(iso) {
+  if (!iso) return "—";
+  const when = new Date(iso);
+  return isNaN(when) ? "—"
+    : when.toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" });
+}
+
+document.getElementById("ferment-batches").addEventListener("click", async (event) => {
+  const stir = event.target.closest("[data-stir]");
+  if (stir) {
+    renderFerment(await fetch(`api/ferment/batches/${stir.dataset.stir}/stir`,
+                              { method: "POST" }).then((r) => r.json()));
+    return;
+  }
+  const close = event.target.closest("[data-close][data-outcome]");
+  if (!close) return;
+  if (close.dataset.outcome === "discarded"
+      && !confirm("Throw this batch away? It will be recorded as binned.")) return;
+  renderFerment(await fetch(`api/ferment/batches/${close.dataset.close}/close`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ outcome: close.dataset.outcome }),
+  }).then((r) => r.json()));
+});
+
+document.getElementById("ferment-new").addEventListener("click", async () => {
+  const current = await fetch("api/ferment").then((r) => r.json());
+  const container = prompt("Which container?", `Tub ${current.open + 1}`);
+  if (!container) return;
+  const grams = prompt(
+    `How much dry feed, in grams?\n\nAbout ${current.suggested_grams} g covers `
+    + `${current.birds} hens for ${current.ferment_days} days.`,
+    current.suggested_grams);
+  const response = await fetch("api/ferment/batches", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ container, grams }),
+  });
+  const body = await response.json();
+  if (!response.ok) { alert(body.error || "Could not start that batch."); return; }
+  renderFerment(body);
+});

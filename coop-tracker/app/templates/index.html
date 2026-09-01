@@ -123,6 +123,17 @@
     </button>
   </section>
 
+  <!-- Fermented feed. Hidden entirely unless the option is on: a card about
+       tubs of soaking grain is noise to somebody not fermenting. -->
+  <section class="ferment" id="ferment-card" hidden>
+    <div class="ferment-header">
+      <h2>Fermented feed</h2>
+      <button type="button" class="link-btn" id="ferment-new">+ New batch</button>
+    </div>
+    <p class="ferment-hint" id="ferment-hint"></p>
+    <div id="ferment-batches"></div>
+  </section>
+
   <section class="history">
     <div class="history-header">
       <h2>Recent activity</h2>

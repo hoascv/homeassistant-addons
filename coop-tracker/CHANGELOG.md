@@ -1,5 +1,34 @@
 # Changelog
 
+## 1.45.0
+
+- **Fermented feed.** Track tubs of soaking grain: start a batch, log the stirs,
+  and mark it fed — or binned, which is recorded separately because a batch lost
+  to mould is a different event from one the birds ate.
+- **Push notifications to stir.** This is the point of the feature. An unstirred
+  batch grows mould on top and has to be thrown away, so a reminder is not a
+  nicety here — it is what stops three days of waiting going in the compost.
+- The stir reminder is **its own tick, not part of the daily egg one**. Stirring
+  is a twice-a-day job and a reminder that can only arrive at 18:00 is no use
+  for the morning one.
+- It fires at **times of day** rather than on an interval. "Every 12 hours"
+  lands at 3am half the time, and a notification nobody can act on is one people
+  learn to swipe away — which costs you the reminders that mattered. Default
+  08:00 and 20:00, configurable.
+- One notification per window, recovered from the database so a restart an hour
+  later does not resend it. A window that had nothing due does **not** count as
+  used, so a batch falling due at 20:30 is still reminded about at 20:30.
+- **Batch size is suggested from your flock.** Five hens over a three-day
+  ferment is about 675 g of dry feed; the number is offered rather than filled
+  in, because you know your birds and the add-on does not.
+- A batch counts as stirred the moment it is started — you have just mixed it —
+  so the first reminder comes an interval after you last touched it rather than
+  an interval after you started.
+- Off by default. `ferment_enabled`, plus `ferment_days`, `ferment_stir_hours`
+  and `ferment_stir_times`.
+- New `ferment.py` rather than more of `app.py`, which is already 3,600 lines.
+  `ferment_batches` and `ferment_stirs` join the change feed.
+
 ## 1.44.2
 
 - Dropped `build.yaml` and named the base image directly in the `Dockerfile`.

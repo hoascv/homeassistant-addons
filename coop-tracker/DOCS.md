@@ -143,6 +143,73 @@ it — independent of the 3/6/12-month range used for the egg chart above
 it, since a meaningful refill average usually needs longer than that to
 build up.
 
+## Fermented feed
+
+Off by default; turn on `ferment_enabled`.
+
+Fermenting feed means soaking grain in water for a few days and letting the wild
+lactobacillus work on it — the birds digest it better and waste less. It has one
+hard requirement that makes it a poor fit for memory alone:
+
+> **An unstirred batch grows mould on top and has to be thrown away.**
+
+Stirring pushes the grain back under the water and lets the gas out. Miss it for
+a day in a warm room and three days of waiting go in the compost. That is why
+the reminder is the load-bearing part of this feature.
+
+### The card
+
+One row per batch: which container, when it will be ready, and how long since it
+was stirred. A batch overdue for a stir is the **only** thing on the card that
+gets a colour — it is the one thing worth acting on today, and colouring
+anything else would bury it.
+
+Buttons per batch: **Stirred**, **Fed** (once it is ready), and **Binned**.
+Binned asks first, and is recorded separately from fed — a batch lost to mould
+is a different event, and how often it happens is worth being able to find out.
+
+### The stir reminder
+
+A push notification through your `notify_service`, naming the containers:
+
+> Stir the fermenting feed in Tub 1 — it has been 14h.
+
+It is deliberately **not** part of the daily egg reminder. Stirring is a
+twice-a-day job, and a reminder that can only arrive at 18:00 is no use for the
+morning one.
+
+It fires at **times of day**, not on an interval. "Every 12 hours" lands at 3am
+half the time, and a notification nobody can act on is one you learn to swipe
+away — which costs you the reminders that mattered too. Default is 08:00 and
+20:00; `ferment_stir_times` changes them.
+
+One notification per window, remembered across a restart. A window where nothing
+was due does not count as used, so a batch falling due at 20:30 still gets its
+reminder at 20:30.
+
+### How much to make
+
+The suggestion comes from your configured flock: **five hens over a three-day
+ferment is about 675 g of dry feed** (45 g per bird per day, which is roughly a
+quarter-cup of pellets — it swells with the water it takes up, so that is what
+goes in, not what comes out).
+
+It is offered, not filled in. You know your birds; the add-on does not.
+
+A batch counts as stirred the moment you start it — you have just mixed it — so
+the first reminder arrives an interval after you last touched it.
+
+### Settings
+
+| Option | |
+|---|---|
+| `ferment_enabled` | Shows the card and enables the reminder. |
+| `ferment_days` | How long a batch sits before it is ready. Default 3. |
+| `ferment_stir_hours` | How long it may go unstirred before it counts as due. Default 12. |
+| `ferment_stir_times` | When reminders may fire. Default `08:00, 20:00`. |
+
+The reminder also needs `notify_service` set, the same one the egg reminder uses.
+
 ## Egg photo counting & sizing (experimental)
 
 Off by default; turn on **egg_vision_enabled** in Configuration to add a
