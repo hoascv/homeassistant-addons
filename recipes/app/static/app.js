@@ -289,16 +289,63 @@ el("import-btn").addEventListener("click", async () => {
 el("prompt-kind").addEventListener("change", refreshPrompt);
 el("prompt-category").addEventListener("change", refreshPrompt);
 
-el("copy-prompt").addEventListener("click", async () => {
-  try {
-    await navigator.clipboard.writeText(el("prompt-text").textContent);
-    toast("Prompt copied.");
-  } catch (err) {
-    // Clipboard access needs a secure context, which ingress over plain http
-    // is not always. Opening the details is a workable fallback.
-    el("prompt-text").closest("details").open = true;
-    toast("Could not copy — the prompt is shown below.");
+// Copying, in a place where the modern way does not work.
+//
+// navigator.clipboard requires a *secure context*, and Home Assistant ingress
+// is served over plain http — so on most installs the modern API is simply
+// absent, and the prompt this button exists to copy is several hundred words
+// nobody wants to select by hand on a phone.
+//
+// document.execCommand("copy") is deprecated and is the only thing that works
+// here. It needs a real, selectable element: display:none cannot be selected,
+// so the textarea is placed off-screen instead. iOS additionally ignores
+// .select() on a readonly textarea and needs an explicit range.
+async function copyText(text) {
+  if (navigator.clipboard && window.isSecureContext) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch (err) { /* fall through to the old way */ }
   }
+
+  const area = document.createElement("textarea");
+  area.value = text;
+  area.setAttribute("readonly", "");
+  area.style.position = "fixed";
+  area.style.top = "-1000px";
+  area.style.opacity = "0";
+  document.body.appendChild(area);
+
+  let copied = false;
+  try {
+    area.select();
+    // iOS: .select() alone does nothing on a readonly field.
+    area.setSelectionRange(0, text.length);
+    copied = document.execCommand("copy");
+  } catch (err) {
+    copied = false;
+  } finally {
+    area.remove();
+  }
+  return copied;
+}
+
+el("copy-prompt").addEventListener("click", async () => {
+  const details = el("prompt-text").closest("details");
+  if (await copyText(el("prompt-text").textContent)) {
+    toast("Prompt copied.");
+    return;
+  }
+  // Both ways refused. Open the prompt and select it, so the only thing left
+  // to do is press copy — rather than asking someone to drag-select six
+  // paragraphs on a phone.
+  details.open = true;
+  const range = document.createRange();
+  range.selectNodeContents(el("prompt-text"));
+  const selection = window.getSelection();
+  selection.removeAllRanges();
+  selection.addRange(range);
+  toast("Could not copy automatically — the prompt is selected below.");
 });
 
 async function sendImport(path) {

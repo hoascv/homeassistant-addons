@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.0.1
+
+- **The Copy button did not copy.** `navigator.clipboard` requires a secure
+  context, and Home Assistant ingress is served over plain http — so on most
+  installs the modern API is simply absent and the button fell straight to its
+  "could not copy" message, leaving several hundred words to be selected by
+  hand on a phone.
+- It now falls back to `document.execCommand("copy")`, which is deprecated and
+  is the only thing that works outside a secure context. The modern API is still
+  preferred where it is available.
+- The fallback needs a genuinely selectable element, so the scratch textarea is
+  positioned off-screen rather than hidden — `display: none` cannot be selected
+  and would have copied nothing. iOS additionally ignores `.select()` on a
+  readonly field, so an explicit range is set.
+- If both refuse, the prompt is opened **and selected**, leaving one keypress
+  to go rather than a drag-select of six paragraphs.
+
 ## 1.0.0
 
 First release.

@@ -50,3 +50,28 @@ def test_the_page_never_interpolates_untrusted_text_unescaped():
     """Recipe names come from a pasted assistant reply and go into innerHTML."""
     for raw in ("${r.name}", "${item.name}", "${recipe.name}", "${e.recipe}"):
         assert raw not in JS, f"{raw} is interpolated without escaping"
+
+
+def test_copying_works_outside_a_secure_context():
+    """navigator.clipboard needs https, and ingress is plain http — so on most
+    installs the modern API is simply absent. Without the old execCommand path
+    the copy button does nothing on the machine it was built for."""
+    assert "execCommand" in JS
+    assert "isSecureContext" in JS, "the modern API should still be preferred where it works"
+
+
+def test_the_copy_fallback_uses_a_selectable_element():
+    """display:none cannot be selected, so a hidden textarea would silently
+    copy nothing."""
+    block = JS[JS.index("async function copyText("):JS.index("el(\"copy-prompt\")")]
+    assert "display: none" not in block and 'style.display' not in block
+    assert "position" in block and "-1000px" in block
+    assert "setSelectionRange" in block, "iOS ignores .select() on a readonly field"
+
+
+def test_a_failed_copy_leaves_the_prompt_selected():
+    """The last resort should leave one keypress to go, not a drag-select of
+    six paragraphs on a phone."""
+    handler = JS[JS.index('el("copy-prompt").addEventListener'):]
+    assert "selectNodeContents" in handler
+    assert "details.open = true" in handler
