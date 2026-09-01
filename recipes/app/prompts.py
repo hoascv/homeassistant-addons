@@ -55,18 +55,77 @@ _RULES = """Rules that matter for this app:
 - `method` is numbered steps, one per line."""
 
 
+# Enough to steer a batch, few enough that the model can honour them all. Past
+# a dozen the request stops being "build around these" and becomes a list the
+# model quietly picks from, which reads as it ignoring half of what was asked.
+MAX_KEYWORDS = 12
+MAX_KEYWORD_LENGTH = 40
+
+
+def parse_keywords(text):
+    """Free text into a clean list of keywords.
+
+    Split on commas and newlines only, never spaces: "minced beef" and "sweet
+    potato" are single ingredients, and splitting them would ask for two things
+    that are not ingredients at all.
+
+    Deduplicated case-insensitively, keeping the first spelling — someone
+    typing "Chicken, chicken breast, chicken" means two things, not three.
+    """
+    if not text:
+        return []
+    pieces = str(text).replace("\n", ",").split(",")
+    out, seen = [], set()
+    for piece in pieces:
+        word = " ".join(piece.split())[:MAX_KEYWORD_LENGTH]
+        if not word or word.casefold() in seen:
+            continue
+        seen.add(word.casefold())
+        out.append(word)
+        if len(out) == MAX_KEYWORDS:
+            break
+    return out
+
+
+def _keywords_line(keywords):
+    """How the keywords are asked for.
+
+    Two sentences rather than one, because they carry different instructions
+    and a model given only the first tends to put every ingredient in every
+    dish: each recipe leans on at least one, and the batch between them covers
+    the lot. That is what "give me chicken and broccoli recipes" means to a
+    person and it is worth saying explicitly.
+    """
+    if not keywords:
+        return None
+    listed = ", ".join(keywords)
+    if len(keywords) == 1:
+        return (f"Build them around **{listed}** — it should be the main "
+                "ingredient in each one, not a garnish.")
+    return (f"Build them around these: **{listed}**. Each recipe should lean on "
+            "at least one of them as a main ingredient rather than a garnish, "
+            "and between them the batch should cover all of them.")
+
+
 def _counts_line(count):
     return f"Give me {count} recipe{'s' if count != 1 else ''}."
 
 
-def new_recipes_prompt(category, count=5, theme=None, avoid=()):
-    """Ask for a fresh batch in one category."""
+def new_recipes_prompt(category, count=5, keywords=(), avoid=()):
+    """Ask for a fresh batch in one category.
+
+    `keywords` are the main ingredients to build around — the thing you
+    actually have in the fridge, or the protein you want a week of.
+    """
     parts = [
         f"You are helping me fill a home recipe catalog. {_counts_line(count)}",
         f"They go in the category **{category}**.",
     ]
-    if theme:
-        parts.append(f"Theme: {theme}.")
+    # Before the supermarket line, not after: it is the strongest constraint in
+    # the prompt and the one most worth reading first.
+    keyword_line = _keywords_line(keywords)
+    if keyword_line:
+        parts.append(keyword_line)
     parts.append(
         "They should be things a household in Denmark can cook on a weeknight "
         "from ingredients a normal Danish supermarket (Netto, Føtex, Rema 1000) "
@@ -83,19 +142,25 @@ def new_recipes_prompt(category, count=5, theme=None, avoid=()):
     return "\n\n".join(parts)
 
 
-def snacks_prompt(category, count=8):
+def snacks_prompt(category, count=8, keywords=()):
     """Snacks are asked for differently: small, no real cooking, and the
     quantities are per portion rather than per meal."""
-    return "\n\n".join([
+    parts = [
         f"You are helping me fill a home recipe catalog. {_counts_line(count)}",
         f"They go in the category **{category}**, and they should be **healthy "
         "snacks** rather than meals — no more than a few minutes of work, no "
         "oven, and things that survive being made in advance.",
+    ]
+    keyword_line = _keywords_line(keywords)
+    if keyword_line:
+        parts.append(keyword_line)
+    parts += [
         "Ingredients from a normal Danish supermarket, named as the shelf "
         "labels name them.",
         "Return exactly this shape:\n\n```json\n" + _SCHEMA % {"category": category} + "\n```",
         _RULES,
-    ])
+    ]
+    return "\n\n".join(parts)
 
 
 def more_like_prompt(recipe_name, category, count=3):

@@ -134,6 +134,32 @@ whether it can get in.
   add-on — that is the whole reason for the copy-a-prompt arrangement.
 - Quantities are shown Danish-style with a comma: **1,5 kg**.
 
+### Steering a batch
+
+The **Main ingredients** box on the Load recipes sheet narrows what you get:
+type `chicken, broccoli, sweet potato` and the prompt asks for recipes built
+around them.
+
+It says two things, because they are different instructions and a model given
+only the first puts every ingredient into every dish:
+
+> Build them around these: **chicken, broccoli, sweet potato**. Each recipe
+> should lean on at least one of them as a main ingredient rather than a
+> garnish, and between them the batch should cover all of them.
+
+**Separate with commas, not spaces** — `minced beef` and `sweet potato` are
+single ingredients. The chips underneath show what was actually understood, so
+a forgotten comma shows up as one chip where you meant two, before you take the
+prompt anywhere.
+
+Up to 12 keywords. Past that the request stops being "build around these" and
+becomes a list the model quietly picks from, which reads as it ignoring half of
+what you asked.
+
+It works for **Healthy snacks** too — a tub of skyr is as much a snack question
+as a dinner one. The recipes you already have in that category are still listed
+as ones to avoid, so the two narrowings stack.
+
 ## Duplicates
 
 Recipes are matched on their **name and category, case-folded with whitespace

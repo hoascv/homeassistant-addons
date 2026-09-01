@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.3.0
+
+- **Main ingredients box on the Load recipes sheet.** Type
+  `chicken, broccoli, sweet potato` and the prompt asks for recipes built
+  around them, rather than whatever the assistant felt like.
+- The instruction is two sentences on purpose: each recipe leans on at least
+  one as a main ingredient, and the batch between them covers all of them. A
+  model given only the first puts every ingredient into every dish.
+- Separated on **commas and newlines, never spaces** — `minced beef` and
+  `sweet potato` are single ingredients. Chips under the box show what was
+  actually parsed, so a forgotten comma is visible as one chip where two were
+  meant before the prompt goes anywhere.
+- Repeats are dropped keeping the first spelling, and the list is capped at 12:
+  past that the request stops being "build around these" and becomes a list the
+  model quietly picks from.
+- Works for Healthy snacks as well, and stacks with the existing "I already
+  have these" list.
+- Replaces the `theme` parameter, which no page ever set and which rendered as
+  "Theme: chicken." — a hint rather than an instruction.
+
 ## 1.2.0
 
 - **Recipes are matched on name and category case-folded, with whitespace

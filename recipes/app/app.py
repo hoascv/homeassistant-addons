@@ -20,7 +20,7 @@ import schema
 import seeding
 import store
 
-APP_VERSION = "1.2.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.3.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("RECIPES_DB_PATH", "/data/recipes.db")
 INGRESS_USER_ID_HEADER = "X-Remote-User-ID"
@@ -194,15 +194,21 @@ def api_prompt():
     except (TypeError, ValueError):
         count = 5
 
+    keywords = prompts.parse_keywords(request.args.get("keywords"))
+
     if kind == "snacks":
-        text = prompts.snacks_prompt(category, count=count)
+        text = prompts.snacks_prompt(category, count=count, keywords=keywords)
     elif kind == "more_like":
         text = prompts.more_like_prompt(request.args.get("name") or "", category, count=count)
     else:
         have = [r["name"] for r in store.list_recipes(db, category=category)]
         text = prompts.new_recipes_prompt(category, count=count,
-                                          theme=request.args.get("theme"), avoid=have)
-    return jsonify({"kind": kind, "category": category, "prompt": text})
+                                          keywords=keywords, avoid=have)
+    # Echoed back so the page can show what was actually understood — a comma
+    # somebody forgot turns two ingredients into one, and seeing "minced beef
+    # chicken" as a single chip is how you notice.
+    return jsonify({"kind": kind, "category": category,
+                    "keywords": keywords, "prompt": text})
 
 
 # --- the plan and the list ----------------------------------------------------

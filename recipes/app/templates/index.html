@@ -97,6 +97,17 @@
         <option value="snacks">Healthy snacks</option>
       </select>
     </label>
+    <label class="field">
+      <span>Main ingredients <em class="field-hint">optional</em></span>
+      <input type="text" id="prompt-keywords"
+        placeholder="chicken, broccoli, sweet potato"
+        autocapitalize="none" autocomplete="off">
+      <!-- Commas, not spaces: "minced beef" is one ingredient. The chips below
+           show what was actually understood, which is how a forgotten comma
+           gets noticed before the prompt is taken anywhere. -->
+      <span class="field-note">Separate with commas. The recipes will be built around these.</span>
+    </label>
+    <div class="keyword-chips" id="keyword-chips" hidden></div>
 
     <button type="button" class="btn-secondary full" id="copy-prompt">Copy the prompt</button>
     <details class="prompt-wrap">

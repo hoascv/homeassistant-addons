@@ -367,9 +367,27 @@ async function refreshPrompt() {
   const params = new URLSearchParams({
     kind: el("prompt-kind").value,
     category: el("prompt-category").value,
+    keywords: el("prompt-keywords").value,
   });
   const body = await fetchJSON(`api/prompt?${params}`);
   el("prompt-text").textContent = body.prompt;
+
+  // What the server actually understood, not what was typed. A forgotten comma
+  // turns two ingredients into one, and "minced beef chicken" sitting there as
+  // a single chip is how that gets caught before the prompt goes anywhere.
+  const chips = el("keyword-chips");
+  const words = body.keywords || [];
+  chips.hidden = words.length === 0;
+  chips.innerHTML = words
+    .map((word) => `<span class="chip">${escapeHtml(word)}</span>`).join("");
+}
+
+// Typing rebuilds the prompt, but not on every keystroke: each one is a request
+// and the prompt is long enough that a burst of them arrives out of order.
+let keywordTimer = null;
+function refreshPromptSoon() {
+  clearTimeout(keywordTimer);
+  keywordTimer = setTimeout(refreshPrompt, 300);
 }
 
 el("import-btn").addEventListener("click", async () => {
@@ -379,6 +397,7 @@ el("import-btn").addEventListener("click", async () => {
 });
 el("prompt-kind").addEventListener("change", refreshPrompt);
 el("prompt-category").addEventListener("change", refreshPrompt);
+el("prompt-keywords").addEventListener("input", refreshPromptSoon);
 
 // Copying, in a place where the modern way does not work.
 //

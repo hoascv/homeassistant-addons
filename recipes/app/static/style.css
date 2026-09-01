@@ -181,3 +181,16 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent-soft
   border: 1px solid var(--border); border-radius: 999px;
   padding: 0.05rem 0.4rem; margin-left: 0.3rem;
 }
+
+
+/* --- prompt keywords -------------------------------------------------------
+   The chips echo what the server parsed, so a forgotten comma is visible as
+   one chip where two were meant. */
+.field-hint { font-style: normal; font-weight: 400; font-size: 0.76rem;
+  color: var(--text-muted); }
+.field-note { font-size: 0.74rem; color: var(--text-muted); margin-top: 0.25rem; }
+.keyword-chips { display: flex; flex-wrap: wrap; gap: 0.3rem; margin: -0.4rem 0 0.8rem; }
+.chip {
+  font-size: 0.74rem; padding: 0.15rem 0.5rem; border-radius: 999px;
+  background: var(--accent-soft); color: var(--accent);
+}
