@@ -733,8 +733,29 @@ function fmtDuration(minutes) {
   return m ? `${h} h ${m} min` : `${h} h`;
 }
 
+// Dates render dd/mm/yy throughout. What was here before produced MM/DD, which
+// is not merely a different convention but an actively misleading one for a
+// Danish household: "09/01" reads as 9 January and meant 1 September.
+//
+// Sliced from the ISO string rather than parsed into a Date. These values are
+// already calendar days in local time — `2026-09-01`, not an instant — and
+// putting them through Date() would reinterpret them as UTC midnight and shift
+// half the year's dates back a day.
+// Matched rather than split: "not-a-date" splits into three truthy parts and
+// would render "date/a/t" into a tooltip. Anything that is not a calendar day
+// gives back nothing.
+const ISO_DAY = /^(\d{4})-(\d{2})-(\d{2})/;
+
+function fmtDate(iso) {
+  const parts = ISO_DAY.exec(iso || "");
+  return parts ? `${parts[3]}/${parts[2]}/${parts[1].slice(2)}` : "";
+}
+
+// Without the year, for chart axes: the labels repeat every few pixels and the
+// range they cover is already stated by the selector directly above them.
 function shortDay(iso) {
-  return iso.slice(5).replace("-", "/");
+  const parts = ISO_DAY.exec(iso || "");
+  return parts ? `${parts[3]}/${parts[2]}` : "";
 }
 
 function renderChargingMonths(monthly) {
@@ -826,8 +847,8 @@ function renderChargingHistory(data) {
     tooltipOf: (d) => {
       const cost = d.cost_known ? `${d.cost.toFixed(2)} kr` : "cost n/a";
       return d.sessions
-        ? `${d.day} — ${d.kwh.toFixed(2)} kWh, ${cost} (${d.sessions} session${d.sessions > 1 ? "s" : ""})`
-        : `${d.day} — no charging`;
+        ? `${fmtDate(d.day)} — ${d.kwh.toFixed(2)} kWh, ${cost} (${d.sessions} session${d.sessions > 1 ? "s" : ""})`
+        : `${fmtDate(d.day)} — no charging`;
     },
     axisLabelOf: (d, i, expanded) => {
       const step = Math.max(1, Math.ceil(data.daily.length / (expanded ? 16 : 8)));
@@ -853,7 +874,7 @@ function renderChargingHistory(data) {
     return `
       <div class="session-row">
         <span class="session-when">
-          <strong>${escapeHtml(shortDay(session.day))} ${escapeHtml(time)}</strong>
+          <strong>${escapeHtml(fmtDate(session.day))} ${escapeHtml(time)}</strong>
           ${session.ongoing ? '<span class="pill pill-accent">charging</span>' : ""}
           ${session.cost_is_estimated ? '<span class="pill pill-quiet" title="Recovered from Easee\'s own record; this add-on was not watching. The cost is spread evenly across the hours the cable was in.">estimated</span>' : ""}
           <span class="session-sub">${escapeHtml(fmtDuration(session.duration_minutes))}${
@@ -975,10 +996,10 @@ function renderDailyChart(rows) {
       const hours = (n) => (n > 0 && n < 24 ? ` (${n}/24 h)` : "");
       const pair = fmtSeriesPair(d.measured_kwh, d.saveeye_kwh,
         (isMeasured) => hours(isMeasured ? d.measuredHours : d.saveeyeHours));
-      return `${d.day} — ${pair}, ${costStr}`;
+      return `${fmtDate(d.day)} — ${pair}, ${costStr}`;
     },
     axisLabelOf: (d, i, expanded) => (i % (expanded ? Math.max(1, Math.ceil(step / 2)) : step) === 0
-      ? d.day.slice(5) : ""),
+      ? shortDay(d.day) : ""),
     emptyText: "No consumption data yet.",
     ariaLabel: "Daily consumption, measured and live estimate",
     yUnit: "kWh",

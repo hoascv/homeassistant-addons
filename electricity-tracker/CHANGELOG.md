@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.17.0
+
+- **Dates are dd/mm/yy.** The charging session list, both chart axes and every
+  tooltip. What was there before rendered MM/DD, which for a Danish household
+  is not a different convention but a misleading one: the 1 September session
+  displayed as `09/01`, which reads as 9 January. It now reads `01/09/26`.
+- Chart axes use `dd/mm` without the year — those labels repeat every few
+  pixels and the range is already stated by the selector above them.
+- Tooltips previously showed the raw ISO string (`2026-09-01`); they now match
+  the rest of the page.
+- Month names in the per-month table are unchanged. `Sep 26` is already
+  unambiguous, and a month is not a date.
+
 ## 1.16.1
 
 - **Fixed: the EV charging card and the history disagreed about the same
