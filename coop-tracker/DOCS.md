@@ -157,7 +157,13 @@ Stirring pushes the grain back under the water and lets the gas out. Miss it for
 a day in a warm room and three days of waiting go in the compost. That is why
 the reminder is the load-bearing part of this feature.
 
-### The card
+### The tab
+
+Fermented feed has its own tab, **🪣 Ferment**, between Home and Trends. The tab
+button only appears when `ferment_enabled` is on — an empty tab you can reach
+reads as something broken, where a tab that is not there reads as a feature you
+have not turned on, which is the truth. Turning the option off while you are
+standing on the page moves you back to Home.
 
 One row per batch: which container, when it will be ready, and how long since it
 was stirred. A batch overdue for a stir is the **only** thing on the card that

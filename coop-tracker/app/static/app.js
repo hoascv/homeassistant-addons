@@ -2259,6 +2259,9 @@ function switchTab(pageId) {
   tabButtons.forEach((btn) => btn.classList.toggle("active", btn.dataset.page === pageId));
   if (pageId !== "page-trends") setTrendsFullscreen(false);
   if (pageId === "page-trends") loadTrends();
+  // Batches age by the clock alone, so a tab opened an hour later is stale
+  // without anything having happened. Cheap enough to refetch on arrival.
+  if (pageId === "page-ferment") loadFerment();
 }
 
 tabButtons.forEach((btn) => {
@@ -2710,16 +2713,25 @@ loadHistory();
 // mouldy. Everything else on it is secondary to the stir state.
 
 async function loadFerment() {
-  const card = document.getElementById("ferment-card");
+  // The tab *button*, not the page. A tab you can reach that turns out to be
+  // empty reads as something broken; a tab that is not there reads as a
+  // feature you have not turned on, which is the truth.
+  const tab = document.getElementById("tab-ferment-btn");
   let data;
   try {
     data = await fetch("api/ferment").then((r) => r.json());
   } catch (err) {
-    card.hidden = true;
+    tab.hidden = true;
     return;
   }
-  if (!data.enabled) { card.hidden = true; return; }
-  card.hidden = false;
+  if (!data.enabled) {
+    tab.hidden = true;
+    // Turning it off while somebody is standing on the page would otherwise
+    // leave them on a tab with no way back to it in the bar.
+    if (!document.getElementById("page-ferment").hidden) switchTab("page-home");
+    return;
+  }
+  tab.hidden = false;
   renderFerment(data);
 }
 

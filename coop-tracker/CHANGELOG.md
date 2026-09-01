@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.48.0
+
+- **Fermented feed has its own tab.** 🪣 Ferment, between Home and Trends,
+  instead of a card wedged between the Log buttons and Recent activity.
+- The tab *button* is what hides when `ferment_enabled` is off, not the page. A
+  tab you can reach that turns out empty reads as something broken; a tab that
+  is not there reads as a feature you have not turned on. Turning the option
+  off while you are standing on the page moves you back to Home.
+- Opening the tab refetches. Batches age by the clock alone, so a tab opened an
+  hour after the page loaded is stale without anything having happened.
+- **The tab bar moved to the top**, under the title, and sticks there as you
+  scroll. It is `position: sticky` in the flow rather than fixed, so nothing
+  has to reserve a gap the exact height of the bar — a number that goes stale
+  the first time a label wraps.
+
 ## 1.47.2
 
 - **The fermented feed card was unreadable in dark mode.** It painted itself

@@ -16,6 +16,21 @@
   <button class="topbar-icon-btn" id="backup-open-btn" aria-label="Backup and restore">⚙️</button>
 </header>
 
+<nav class="tabbar">
+  <button type="button" class="tabbar-btn active" id="tab-home-btn" data-page="page-home">
+    <span class="tabbar-icon">🏠</span>
+    <span>Home</span>
+  </button>
+  <button type="button" class="tabbar-btn" id="tab-ferment-btn" data-page="page-ferment" hidden>
+    <span class="tabbar-icon">🪣</span>
+    <span>Ferment</span>
+  </button>
+  <button type="button" class="tabbar-btn" id="tab-trends-btn" data-page="page-trends">
+    <span class="tabbar-icon">📈</span>
+    <span>Trends</span>
+  </button>
+</nav>
+
 <main id="page-home" class="page">
   <section class="summary">
     <div class="stat">
@@ -123,18 +138,6 @@
     </button>
   </section>
 
-  <!-- Fermented feed. Hidden entirely unless the option is on: a card about
-       tubs of soaking grain is noise to somebody not fermenting. -->
-  <section class="ferment" id="ferment-card" hidden>
-    <div class="ferment-header">
-      <h2>Fermented feed</h2>
-      <button type="button" class="link-btn" id="ferment-new">+ New batch</button>
-    </div>
-    <p class="ferment-hint" id="ferment-hint"></p>
-    <div class="ferment-starter" id="ferment-starter" hidden></div>
-    <div id="ferment-batches"></div>
-  </section>
-
   <section class="history">
     <div class="history-header">
       <h2>Recent activity</h2>
@@ -149,6 +152,21 @@
       </select>
     </div>
     <ul id="history-list"></ul>
+  </section>
+</main>
+
+<!-- Fermented feed. The whole page is hidden unless the option is on, and so
+     is its tab button: an empty tab is worse than no tab, because it looks
+     like something broke rather than something you never turned on. -->
+<main id="page-ferment" class="page" hidden>
+  <section class="ferment" id="ferment-card">
+    <div class="ferment-header">
+      <h2>Fermented feed</h2>
+      <button type="button" class="link-btn" id="ferment-new">+ New batch</button>
+    </div>
+    <p class="ferment-hint" id="ferment-hint"></p>
+    <div class="ferment-starter" id="ferment-starter" hidden></div>
+    <div id="ferment-batches"></div>
   </section>
 </main>
 
@@ -241,16 +259,6 @@
   </section>
 </main>
 
-<nav class="tabbar">
-  <button type="button" class="tabbar-btn active" id="tab-home-btn" data-page="page-home">
-    <span class="tabbar-icon">🏠</span>
-    <span>Home</span>
-  </button>
-  <button type="button" class="tabbar-btn" id="tab-trends-btn" data-page="page-trends">
-    <span class="tabbar-icon">📈</span>
-    <span>Trends</span>
-  </button>
-</nav>
 
 <div class="sheet-backdrop" id="sheet-backdrop">
   <div class="sheet" id="sheet">

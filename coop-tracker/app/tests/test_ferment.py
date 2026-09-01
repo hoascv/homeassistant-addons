@@ -398,16 +398,56 @@ def _static(name):
 
 def test_the_card_is_wired():
     html, js = _static("index.html"), _static("app.js")
-    for element_id in ("ferment-card", "ferment-hint", "ferment-batches", "ferment-new"):
+    for element_id in ("ferment-hint", "ferment-batches", "ferment-new", "ferment-starter"):
         assert element_id in html, f"{element_id} missing from index.html"
         assert element_id in js, f"{element_id} never used by app.js"
 
 
-def test_the_card_is_hidden_when_the_feature_is_off():
-    """A card about tubs of soaking grain is noise to somebody not fermenting."""
+def test_the_ferment_page_has_its_own_tab():
+    html = _static("index.html")
+    assert '<main id="page-ferment"' in html
+    assert 'data-page="page-ferment"' in html
+    # The tabbar is the only nav, so a page absent from it is unreachable.
+    tabbar = html[html.index('<nav class="tabbar">'):html.index("</nav>")]
+    assert 'id="tab-ferment-btn"' in tabbar
+
+
+def test_the_ferment_card_no_longer_sits_on_the_home_page():
+    """It moved. Two copies of #ferment-batches would leave the JS writing to
+    whichever came first and the other silently empty."""
+    html = _static("index.html")
+    home = html[html.index('<main id="page-home"'):html.index('<main id="page-ferment"')]
+    assert "ferment-batches" not in home
+    assert html.count('id="ferment-batches"') == 1
+
+
+def test_the_whole_tab_is_hidden_when_the_feature_is_off():
+    """A card about tubs of soaking grain is noise to somebody not fermenting —
+    and a tab you can reach that turns out empty reads as something broken
+    rather than something you never turned on."""
     js = _static("app.js")
     fn = js[js.index("async function loadFerment("):js.index("function renderFerment(")]
-    assert "data.enabled" in fn and "card.hidden = true" in fn
+    assert "data.enabled" in fn and "tab.hidden = true" in fn
+    assert 'getElementById("tab-ferment-btn")' in fn
+
+
+def test_turning_it_off_moves_you_off_the_page():
+    """Otherwise you are left standing on a tab whose button has just gone."""
+    js = _static("app.js")
+    fn = js[js.index("async function loadFerment("):js.index("function renderFerment(")]
+    assert 'switchTab("page-home")' in fn
+
+
+def test_opening_the_tab_refetches():
+    """Batches age by the clock alone. A tab opened an hour after the page
+    loaded is stale without anything having happened."""
+    js = _static("app.js")
+    start = js.index("function switchTab(")
+    # To the function's own closing brace. Anchoring on the next statement is
+    # what bit here first: tabButtons.forEach appears *inside* switchTab, so
+    # the slice stopped short and read as a missing line rather than a bad cut.
+    fn = js[start:js.index("\n}\n", start)]
+    assert 'pageId === "page-ferment"' in fn and "loadFerment()" in fn
 
 
 def test_only_states_needing_action_today_are_coloured():
@@ -1005,3 +1045,23 @@ def test_the_day_counter_never_reads_ahead_of_itself(conn):
         assert math.floor(batch["age_days"]) == expected_day, f"at {hours}h"
         # And the counter never claims the window has closed before it has.
         assert batch["spent"] is (expected_day >= 11), f"at {hours}h"
+
+
+def test_the_tabbar_comes_before_the_pages():
+    """It is `position: sticky`, which only works within the parent's flow — a
+    sticky element placed after the pages would scroll away with them. This is
+    the invariant that keeps the tabs on screen."""
+    html = _static("index.html")
+    assert html.index('<nav class="tabbar">') < html.index('<main id="page-home"')
+    assert html.index("</header>") < html.index('<nav class="tabbar">')
+
+
+def test_the_tabbar_sticks_to_the_top():
+    css = _static("style.css")
+    block = css[css.index(".tabbar {"):css.index(".tabbar-btn {")]
+    assert "position: sticky" in block and "top: 0" in block
+    # Anchored: a plain substring check matches "margin-bottom: 0.5rem" too.
+    import re
+    assert not re.search(r"^\s*bottom\s*:", block, re.M), \
+        "left over from when the bar was at the bottom"
+    assert "border-bottom" in block, "the rule sits above the content it labels"

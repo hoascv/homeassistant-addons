@@ -57,7 +57,7 @@ body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   background: var(--bg);
   color: var(--text);
-  padding-bottom: calc(4.5rem + env(safe-area-inset-bottom));
+  padding-bottom: calc(2rem + env(safe-area-inset-bottom));
 }
 
 .topbar {
@@ -781,15 +781,18 @@ img.chicken-avatar {
 .debug-ok { color: var(--positive); }
 .debug-fail { color: var(--negative); }
 
+/* Sticky rather than fixed: it sits in the flow directly under the topbar, so
+   the title scrolls away and the tabs stay. Fixed would need the page to
+   reserve a gap the exact height of the bar, which is a number that goes stale
+   the first time a label wraps. */
 .tabbar {
-  position: fixed;
-  left: 0;
-  right: 0;
-  bottom: 0;
+  position: sticky;
+  top: 0;
   display: flex;
   background: var(--surface);
-  border-top: 1px solid var(--border);
-  padding: 0.4rem 0 max(0.4rem, env(safe-area-inset-bottom));
+  border-bottom: 1px solid var(--border);
+  padding: 0.4rem 0;
+  margin-bottom: 0.5rem;
   z-index: 5;
 }
 
