@@ -915,6 +915,18 @@ img.chicken-avatar {
   opacity: 0.7;
 }
 
+/* The y axis. Gridlines sit behind the data and must stay behind it visually
+   too — a line as strong as the series competes with it for the eye. */
+.chart-grid-line {
+  stroke: var(--border);
+  stroke-width: 0.5;
+}
+
+.chart-axis-value {
+  font-size: 6px;
+  fill: var(--text-muted);
+}
+
 .trends-forecast-caption {
   font-size: 0.75rem;
   color: var(--text-muted);

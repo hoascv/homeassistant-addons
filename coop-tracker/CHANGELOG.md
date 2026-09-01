@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.49.0
+
+- **Every chart on Trends now has a labelled y axis.** Monthly egg totals, eggs
+  per day by month, eggs per day by day, and the advanced forecast all plotted
+  unlabelled numbers: a line that rises is not information until you know
+  whether it rose by two eggs or two hundred.
+- Gridlines at readable intervals — 1, 2 or 5 times a power of ten — with the
+  unit on the top tick (`4 eggs/day`, `600 eggs`) rather than a rotated axis
+  title, which would cost more width than the labels it explains.
+- The tick algorithm is ported from Electricity Tracker rather than invented
+  again, so the two add-ons pick gridlines the same way and moving between them
+  does not mean learning a second convention. Never finer than 0.1: eggs are
+  counted, and a 0.05 step would label gridlines with numbers they do not sit
+  on.
+- The gutter is added beside the plot, never taken out of it, so adding the
+  axis does not squeeze the data or reflow it when a label gains a digit.
+
 ## 1.48.0
 
 - **Fermented feed has its own tab.** 🪣 Ferment, between Home and Trends,

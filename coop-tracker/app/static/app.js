@@ -1728,6 +1728,69 @@ document.addEventListener("keydown", (e) => {
   }
 });
 
+// --- y axis ------------------------------------------------------------------
+//
+// Every chart on this page plots a countable thing against a category axis, and
+// until now none of them said what the numbers were. A line that rises is not
+// information until you know whether it rose by two eggs or two hundred.
+//
+// Ported from Electricity Tracker's yAxisTicks rather than invented again, so
+// the two add-ons pick gridlines the same way and a reader moving between them
+// is not learning a second convention.
+
+function axisTicks(max, unit, wanted = 3) {
+  // 1, 2 or 5 times a power of ten: the intervals people read without doing
+  // arithmetic. Anything else and a gridline needs working out. The thresholds
+  // are the midpoints between those choices, so the step picked is the one
+  // whose tick count comes closest to what was asked for.
+  const rough = max / wanted;
+  const magnitude = Math.pow(10, Math.floor(Math.log10(rough)));
+  const normalised = rough / magnitude;
+  // Never finer than 0.1. Eggs are counted, and the finest thing quoted here is
+  // an average like 3.4/day; a 0.05 step would label gridlines with numbers
+  // they do not sit on.
+  const step = Math.max(0.1,
+    (normalised < 1.5 ? 1 : normalised < 3 ? 2 : normalised < 7 ? 5 : 10) * magnitude);
+  const decimals = Math.max(0, Math.ceil(-Math.log10(step)));
+
+  const ticks = [];
+  const seen = new Set();
+  const slack = step / 1000;
+  for (let v = 0; v <= max + slack; v += step) {
+    const label = v.toFixed(decimals);
+    if (seen.has(label)) continue;
+    seen.add(label);
+    ticks.push({ value: v, label });
+  }
+  if (!ticks.length) ticks.push({ value: 0, label: "0" });
+  // The unit rides on the topmost tick, so it is stated once without needing a
+  // rotated axis title that costs more width than the labels themselves.
+  ticks[ticks.length - 1].label += ` ${unit}`;
+  return ticks;
+}
+
+// The gutter has to be measured before anything is placed horizontally, which
+// is why this returns it rather than drawing straight away: 8px type runs about
+// 4.6 user units to the character, and a gutter narrower than the widest label
+// puts the axis on top of the data.
+function chartYAxis(maxVal, unit, { topPad, chartH }) {
+  const ticks = axisTicks(maxVal, unit);
+  const widest = Math.max(...ticks.map((t) => t.label.length));
+  const gutter = Math.round(widest * 4.6) + 8;
+  const yAt = (value) => topPad + chartH - (value / maxVal) * chartH;
+
+  return {
+    gutter,
+    // Gridlines belong behind the data, so callers prepend this.
+    render: (width) => ticks.map(({ value, label }) => {
+      const y = yAt(value).toFixed(2);
+      return `<line class="chart-grid-line" x1="${gutter}" y1="${y}" x2="${width}" y2="${y}"></line>`
+        + `<text class="chart-axis-value" x="${gutter - 5}" y="${y}" text-anchor="end"`
+        + ` dominant-baseline="middle">${escapeHtml(label)}</text>`;
+    }).join(""),
+  };
+}
+
 function monthLabel(ym) {
   const [year, month] = ym.split("-").map(Number);
   return `${MONTH_NAMES[month - 1].slice(0, 3)} ${year}`;
@@ -1753,7 +1816,7 @@ function buildTrendsSvg(data) {
   const margin = data.forecast_margin;
   const historyCount = data.months.length;
   const totalCount = historyCount + forecastMonths.length;
-  const width = totalCount * pointSpacing;
+  const plotW = totalCount * pointSpacing;
   const height = topPad + chartH + labelH;
   const maxVal = Math.max(
     1,
@@ -1765,7 +1828,11 @@ function buildTrendsSvg(data) {
     ...(margin != null ? forecastCollected.map((v) => v + margin) : [])
   );
 
-  const xAt = (i) => i * pointSpacing + pointSpacing / 2;
+  const axis = chartYAxis(maxVal, "eggs", { topPad, chartH });
+  // The gutter is added beside the plot, never taken out of it: an axis that
+  // narrowed the chart would redraw the data every time a label got wider.
+  const width = axis.gutter + plotW;
+  const xAt = (i) => axis.gutter + i * pointSpacing + pointSpacing / 2;
   const yAt = (value) => topPad + chartH - (value / maxVal) * chartH;
 
   const line = (values, colorVar, { dashed = false, opacity = 1 } = {}) => {
@@ -1778,7 +1845,7 @@ function buildTrendsSvg(data) {
     return svg;
   };
 
-  let content = "";
+  let content = axis.render(width);
   if (margin != null && forecastCollected.length > 0) {
     const xs = forecastCollected.map((_, i) => xAt(historyCount + i));
     const ysUpper = forecastCollected.map((v) => yAt(v + margin));
@@ -1858,11 +1925,15 @@ function buildEggsPerDaySvg(data) {
   const forecastMonths = data.forecast_months || [];
   const historyCount = data.months.length;
   const totalCount = historyCount + forecastMonths.length;
-  const width = totalCount * pointSpacing;
+  const plotW = totalCount * pointSpacing;
   const height = topPad + chartH + labelH;
   const maxVal = Math.max(1, ...history.filter((v) => v != null), ...forecast);
 
-  const xAt = (i) => i * pointSpacing + pointSpacing / 2;
+  const axis = chartYAxis(maxVal, "eggs/day", { topPad, chartH });
+  // The gutter is added beside the plot, never taken out of it: an axis that
+  // narrowed the chart would redraw the data every time a label got wider.
+  const width = axis.gutter + plotW;
+  const xAt = (i) => axis.gutter + i * pointSpacing + pointSpacing / 2;
   const yAt = (value) => topPad + chartH - (value / maxVal) * chartH;
 
   const line = (values, offset, colorVar, { dashed = false, opacity = 1, thin = () => false } = {}) => {
@@ -1888,7 +1959,8 @@ function buildEggsPerDaySvg(data) {
     return svg;
   };
 
-  let content = line(history, 0, "--accent-egg", { thin: (i) => isThinlyCovered(data, i) });
+  let content = axis.render(width);
+  content += line(history, 0, "--accent-egg", { thin: (i) => isThinlyCovered(data, i) });
   content += line(forecast, historyCount, "--accent-egg", { dashed: true, opacity: 0.55 });
 
   data.months.forEach((ym, i) => {
@@ -1930,15 +2002,20 @@ function buildDailyEggsSvg(data) {
   const sidePad = 14;
   const values = data.eggs_per_day || [];
   const count = values.length;
-  const width = Math.max(count, 1) * pointSpacing + sidePad * 2;
+  const plotW = Math.max(count, 1) * pointSpacing + sidePad * 2;
   const height = topPad + chartH + labelH;
   const maxVal = Math.max(1, ...values.filter((v) => v != null));
 
-  const xAt = (i) => sidePad + i * pointSpacing + pointSpacing / 2;
+  const axis = chartYAxis(maxVal, "eggs/day", { topPad, chartH });
+  // The gutter is added beside the plot, never taken out of it: an axis that
+  // narrowed the chart would redraw the data every time a label got wider.
+  const width = axis.gutter + plotW;
+  const xAt = (i) => axis.gutter + sidePad + i * pointSpacing + pointSpacing / 2;
   const yAt = (value) => topPad + chartH - (value / maxVal) * chartH;
 
   const runs = splitRuns(values, xAt, yAt);
-  let content = runs
+  let content = axis.render(width);
+  content += runs
     .filter((run) => run.length > 1)
     .map(
       (run) =>
@@ -1987,11 +2064,15 @@ function buildAdvancedForecastSvg(data) {
   const historyCount = data.months.length;
   const forecastCount = data.advanced_months.length;
   const totalCount = historyCount + forecastCount;
-  const width = totalCount * pointSpacing;
+  const plotW = totalCount * pointSpacing;
   const height = topPad + chartH + labelH;
   const maxVal = Math.max(1, ...data.collected, ...data.advanced_ci_upper);
 
-  const xAt = (i) => i * pointSpacing + pointSpacing / 2;
+  const axis = chartYAxis(maxVal, "eggs", { topPad, chartH });
+  // The gutter is added beside the plot, never taken out of it: an axis that
+  // narrowed the chart would redraw the data every time a label got wider.
+  const width = axis.gutter + plotW;
+  const xAt = (i) => axis.gutter + i * pointSpacing + pointSpacing / 2;
   const yAt = (value) => topPad + chartH - (value / maxVal) * chartH;
 
   const line = (values, offset, colorVar, { dashed = false } = {}) => {
@@ -2004,7 +2085,7 @@ function buildAdvancedForecastSvg(data) {
     return svg;
   };
 
-  let content = "";
+  let content = axis.render(width);
   if (forecastCount > 0) {
     const xs = data.advanced_forecast.map((_, i) => xAt(historyCount + i));
     const ysUpper = data.advanced_ci_upper.map(yAt);
