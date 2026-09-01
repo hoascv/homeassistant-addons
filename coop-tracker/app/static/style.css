@@ -12,10 +12,18 @@
   --accent-expense: #a4483d;
   --accent-used: #8a6bb0;
   --danger: #c0453a;
-  --positive: #3f9142;
+  /* 3% darker than the #3f9142 it was, same hue and saturation: the original
+     landed at 3.93:1 on white, under the 4.5:1 body-text line. */
+  --positive: #3a863d;
   --negative: #a4483d;
   --radius: 14px;
   --shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  /* Two "act on this today" states. Tokens rather than literals because the
+     light-mode ink is unreadable on a dark surface and vice versa. */
+  --warn-ink: #b45309;
+  --warn-wash: rgba(240, 168, 58, 0.14);
+  --spent-ink: #b91c1c;
+  --spent-wash: rgba(220, 80, 70, 0.14);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -26,6 +34,17 @@
     --text-muted: #a39a8e;
     --border: #38322c;
     --shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+    --warn-ink: #f0b357;
+    --warn-wash: rgba(240, 168, 58, 0.16);
+    --spent-ink: #f0938a;
+    --spent-wash: rgba(220, 80, 70, 0.18);
+    /* These three were defined only in :root, so a figure in the red kept its
+       light-theme ink on a near-black card. Used as text (.stat-negative,
+       .debug-fail, the danger links) and as status dots, both of which want
+       lifting rather than darkening once the background goes dark. */
+    --danger: #e8837a;
+    --positive: #63b866;
+    --negative: #e0897d;
   }
 }
 
@@ -1063,10 +1082,13 @@ img.chicken-avatar {
 .training-photo {
   position: relative;
   margin: 0;
-  border: 1px solid var(--border, #333);
+  border: 1px solid var(--border);
   border-radius: 10px;
   overflow: hidden;
-  background: var(--surface-2, rgba(255, 255, 255, 0.04));
+  /* --surface-2 was never defined either, so this was always the 4% white
+     fallback: invisible on the light theme, where it was meant to read as a
+     recessed tile. --bg sits behind the card in both themes and does. */
+  background: var(--bg);
   display: flex;
   flex-direction: column;
 }
@@ -1117,45 +1139,52 @@ img.chicken-avatar {
 }
 
 /* --- Fermented feed ------------------------------------------------------
-   A batch that needs stirring is the only thing on this card worth reacting
-   to, so it is the only thing that gets a colour. */
-.ferment { background: var(--card, #fff); border-radius: 14px; padding: 1rem;
-  margin-bottom: 1rem; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08); }
+   Only the states that need acting on today get a colour; everything else is
+   the same surface as any other card. This block shipped in 1.45.0 painting
+   itself with a --card token this stylesheet has never defined — so the
+   card fell back to white and drew the dark theme's near-white text on it.
+   Every colour below comes from a token that both themes define. */
+.ferment { background: var(--surface); color: var(--text);
+  border-radius: var(--radius); padding: 1rem; margin-bottom: 1rem;
+  box-shadow: var(--shadow); }
 .ferment-header { display: flex; align-items: center; justify-content: space-between;
   margin-bottom: 0.4rem; }
 .ferment-header h2 { font-size: 1rem; margin: 0; }
-.ferment-hint { font-size: 0.82rem; opacity: 0.75; margin: 0 0 0.6rem; line-height: 1.5; }
+.ferment-hint { font-size: 0.82rem; color: var(--text-muted); margin: 0 0 0.6rem;
+  line-height: 1.5; }
 .ferment-row { display: flex; align-items: center; justify-content: space-between;
-  gap: 0.6rem; padding: 0.5rem 0; border-top: 1px solid rgba(128, 128, 128, 0.2); }
+  gap: 0.6rem; padding: 0.5rem 0; border-top: 1px solid var(--border); }
 .ferment-row:first-child { border-top: none; }
 .ferment-main { display: flex; flex-direction: column; gap: 0.1rem; min-width: 0; }
 .ferment-name { font-weight: 600; font-size: 0.92rem; }
-.ferment-meta { font-size: 0.76rem; opacity: 0.7; }
+.ferment-meta { font-size: 0.76rem; color: var(--text-muted); }
 .ferment-actions { display: flex; gap: 0.3rem; flex-shrink: 0; }
 /* The jar of saved brine. Quieter than a batch row: it is a standing fact
    rather than a thing to do, until it goes stale and earns the warning. */
 .ferment-starter { display: flex; align-items: center; flex-wrap: wrap; gap: 0.4rem;
   font-size: 0.78rem; padding: 0.45rem 0.6rem; margin-bottom: 0.6rem;
-  border-radius: 8px; background: rgba(128, 128, 128, 0.08); }
-.ferment-starter-text { opacity: 0.8; }
+  border-radius: 8px; background: var(--bg); }
+.ferment-starter-text { color: var(--text-muted); }
 .ferment-starter .btn-small { margin-left: auto; }
-.ferment-warn { color: #b45309; font-weight: 600; flex-basis: 100%; }
-.starter-stale { background: rgba(240, 168, 58, 0.12); }
+.ferment-warn { color: var(--warn-ink); font-weight: 600; flex-basis: 100%; }
+.starter-stale { background: var(--warn-wash); }
 
-/* Overdue for a stir — the one state that needs acting on today. */
-.stir-due { background: rgba(240, 168, 58, 0.12); border-radius: 8px;
+/* Overdue for a stir — one of the two states that needs acting on today. */
+.stir-due { background: var(--warn-wash); border-radius: 8px;
   margin: 0 -0.4rem; padding-left: 0.4rem; padding-right: 0.4rem; }
-.stir-due .ferment-name::after { content: " · stir it"; color: #b45309; font-weight: 700; }
+.stir-due .ferment-name::after { content: " · stir it"; color: var(--warn-ink);
+  font-weight: 700; }
 /* Past the feeding window. Coloured for the same reason as an overdue stir —
    it needs acting on today — but red rather than amber, because the action is
    throw it away rather than go and fix it. Wins over stir-due when both apply:
    there is no point stirring something you are about to bin. */
-.batch-spent { background: rgba(220, 80, 70, 0.14); border-radius: 8px;
+.batch-spent { background: var(--spent-wash); border-radius: 8px;
   margin: 0 -0.4rem; padding-left: 0.4rem; padding-right: 0.4rem; }
-.batch-spent .ferment-name::after { content: " · bin it"; color: #b91c1c; font-weight: 700; }
+.batch-spent .ferment-name::after { content: " · bin it"; color: var(--spent-ink);
+  font-weight: 700; }
 .batch-spent.stir-due .ferment-name::after { content: " · bin it"; }
 .btn-small { font: inherit; font-size: 0.76rem; padding: 0.25rem 0.55rem; cursor: pointer;
-  border-radius: 999px; border: 1px solid rgba(128, 128, 128, 0.3);
-  background: rgba(128, 128, 128, 0.08); color: inherit; }
+  border-radius: 999px; border: 1px solid var(--border);
+  background: var(--bg); color: inherit; }
 .btn-quiet { opacity: 0.6; }
 

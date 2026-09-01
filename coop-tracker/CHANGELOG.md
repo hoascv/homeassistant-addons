@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.47.2
+
+- **The fermented feed card was unreadable in dark mode.** It painted itself
+  with a `--card` token this stylesheet has never defined, so it fell back to
+  white and drew the dark theme's near-white text on it — 1.18:1 contrast,
+  effectively invisible. It now takes `--surface` and `--text` like every other
+  card.
+- `.training-photo` had the same bug with a `--surface-2` that does not exist,
+  silently rendering a 4%-white fallback instead of a recessed tile.
+- **`--danger`, `--positive` and `--negative` had no dark value**, so a figure
+  in the red kept its light-theme ink on a near-black card. All three now have
+  one, and the amber and red used by the stir and bin states are tokens rather
+  than literals so both themes can answer them.
+- `--positive` was 3.93:1 on white, under the 4.5:1 body-text line. Darkened 3%
+  at the same hue and saturation.
+- New stylesheet tests: every `var()` resolves to a token that exists (a
+  fallback makes a typo look like a working default, which is how this reached
+  a user), every colour token has a dark value, and every ink clears 4.5:1 on
+  the surface it sits on.
+
 ## 1.47.1
 
 - **The day counter read a day ahead for the last hour of every day.** A batch

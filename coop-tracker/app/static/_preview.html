@@ -1,0 +1,39 @@
+<!doctype html><meta charset="utf-8">
+<style>
+body{margin:0;font:16px system-ui;display:flex}
+.pane{flex:1;padding:1.5rem;min-height:100vh}
+iframe{border:0;width:100%;height:520px}
+</style>
+<div class="pane" style="background:#f4f1ea"><h3 style="font:600 13px system-ui;color:#7a7168">LIGHT</h3><div id="l"></div></div>
+<div class="pane" style="background:#1b1815"><h3 style="font:600 13px system-ui;color:#a39a8e">DARK</h3><div id="d"></div></div>
+<script>
+const card = `
+<section class="ferment">
+  <div class="ferment-header"><h2>Fermented feed</h2>
+    <button class="link-btn">+ New batch</button></div>
+  <p class="ferment-hint">3 going, 1 ready to feed · 1 needs stirring · 1 past 11 days, bin it</p>
+  <div class="ferment-starter"><span class="ferment-starter-text">🫙 Saved liquid 2 days ago · generation 3. Seeds a 2-day batch.</span>
+    <button class="btn-small btn-quiet">Discard jar</button></div>
+  <div class="ferment-row"><div class="ferment-main"><span class="ferment-name">Tub 1</span>
+    <span class="ferment-meta">Ready Fri, Sep 4 · stirred just now · 675 g · seeded (gen 3)</span></div>
+    <div class="ferment-actions"><button class="btn-small">Stirred</button>
+    <button class="btn-small btn-quiet">Binned</button></div></div>
+  <div class="ferment-row stir-due"><div class="ferment-main"><span class="ferment-name">Tub 2</span>
+    <span class="ferment-meta">Ready · day 5 of 11 · stirred 14h ago · 450 g</span></div>
+    <div class="ferment-actions"><button class="btn-small">Stirred</button>
+    <button class="btn-small">Fed</button><button class="btn-small btn-quiet">Binned</button></div></div>
+  <div class="ferment-row batch-spent"><div class="ferment-main"><span class="ferment-name">Tub 3</span>
+    <span class="ferment-meta">Past it — day 12 of 11 · stirred 3h ago · 675 g</span></div>
+    <div class="ferment-actions"><button class="btn-small">Binned</button></div></div>
+</section>`;
+for (const [id, scheme] of [["l","light"],["d","dark"]]) {
+  const f = document.createElement("iframe");
+  f.style.colorScheme = scheme;
+  document.getElementById(id).appendChild(f);
+  f.contentDocument.open();
+  f.contentDocument.write(`<meta name="color-scheme" content="${scheme}">
+    <link rel="stylesheet" href="style.css">
+    <body style="background:var(--bg);padding:1rem">${card}`);
+  f.contentDocument.close();
+}
+</script>
