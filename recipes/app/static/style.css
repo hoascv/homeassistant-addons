@@ -1,0 +1,142 @@
+:root {
+  --bg: #f3f4f6; --surface: #ffffff; --surface-2: #f8fafc;
+  --text: #1f2430; --text-muted: #6b7280; --border: #e4e7ec;
+  --accent: #b45309; --accent-soft: rgba(180, 83, 9, 0.12);
+  --success: #16a34a; --success-soft: rgba(22, 163, 74, 0.14);
+  --warn: #b45309; --warn-soft: rgba(180, 83, 9, 0.14);
+  --danger: #dc2626;
+  --radius: 14px; --shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #14171c; --surface: #1e232b; --surface-2: #262c35;
+    --text: #eef1f5; --text-muted: #9aa3af; --border: #333a44;
+    --accent: #f0a83a; --accent-soft: rgba(240, 168, 58, 0.18);
+    --success: #34d17a; --success-soft: rgba(52, 209, 122, 0.18);
+    --warn: #f0a83a; --warn-soft: rgba(240, 168, 58, 0.18);
+    --danger: #f26d6d; --shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+  }
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  background: var(--bg); color: var(--text); }
+
+.topbar { display: flex; align-items: center; gap: 0.5rem; padding: 1rem 1.25rem 0.5rem; }
+.topbar-icon { font-size: 1.5rem; }
+.topbar h1 { font-size: 1.25rem; margin: 0; flex: 1; }
+.topbar-icon-btn { border: none; background: none; font-size: 1.3rem; padding: 0.4rem;
+  cursor: pointer; line-height: 1; color: inherit; }
+
+.tabs { display: flex; gap: 0.35rem; padding: 0 1rem 0.5rem; }
+.tab { flex: 1; font: inherit; font-size: 0.88rem; font-weight: 600; padding: 0.5rem;
+  border: 1px solid var(--border); background: var(--surface); color: var(--text-muted);
+  border-radius: 10px; cursor: pointer; }
+.tab-on { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
+.tab-count { display: inline-block; margin-left: 0.35rem; padding: 0 0.35rem;
+  background: var(--accent); color: var(--surface); border-radius: 999px; font-size: 0.75rem; }
+
+.page { padding: 0 1rem 2rem; max-width: 640px; margin: 0 auto; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: var(--shadow); padding: 1rem; margin-bottom: 1rem; }
+.card-head { display: flex; align-items: center; justify-content: space-between;
+  gap: 0.5rem; margin-bottom: 0.75rem; }
+.card-head h2 { font-size: 1rem; margin: 0; }
+.muted { color: var(--text-muted); font-size: 0.82rem; line-height: 1.5; }
+.empty-state { color: var(--text-muted); font-size: 0.85rem; text-align: center; padding: 1rem 0; }
+
+.seg { display: flex; gap: 0.3rem; flex-wrap: wrap; margin-bottom: 0.6rem; }
+.seg-btn { font: inherit; font-size: 0.8rem; padding: 0.3rem 0.7rem; cursor: pointer;
+  background: var(--surface-2); color: var(--text-muted);
+  border: 1px solid var(--border); border-radius: 999px; }
+.seg-on { background: var(--accent-soft); color: var(--accent); border-color: transparent;
+  font-weight: 600; }
+.pill { font-size: 0.72rem; padding: 0.15rem 0.5rem; border-radius: 999px;
+  background: var(--surface-2); color: var(--text-muted); border: 1px solid var(--border);
+  white-space: nowrap; }
+
+.recipe-row { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem;
+  padding: 0.6rem 0; border-top: 1px solid var(--border); cursor: pointer; }
+.recipe-row:first-child { border-top: none; }
+.recipe-main { display: flex; flex-direction: column; gap: 0.15rem; min-width: 0; }
+.recipe-name { font-weight: 600; font-size: 0.95rem; }
+.recipe-meta { font-size: 0.78rem; color: var(--text-muted); }
+
+/* Sheets */
+.sheet-backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.45);
+  display: flex; align-items: flex-end; justify-content: center; z-index: 20; }
+.sheet { background: var(--surface); width: 100%; max-width: 640px; max-height: 92vh;
+  overflow-y: auto; border-radius: var(--radius) var(--radius) 0 0; padding: 1rem 1.1rem 2rem; }
+.sheet-head { display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 0.5rem; }
+.sheet-head h2 { font-size: 1.05rem; margin: 0; }
+.sheet h3 { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--text-muted); margin: 1rem 0 0.4rem; }
+
+.notes { font-size: 0.88rem; line-height: 1.5; color: var(--text); margin: 0.3rem 0 0; }
+.ingredients { list-style: none; padding: 0; margin: 0; }
+.ingredients li { display: grid; grid-template-columns: 5.5rem 1fr; gap: 0.4rem;
+  padding: 0.3rem 0; border-top: 1px solid var(--border); font-size: 0.9rem; align-items: baseline; }
+.ing-amount { color: var(--text-muted); font-variant-numeric: tabular-nums; text-align: right; }
+.ing-shop { grid-column: 2; font-size: 0.78rem; color: var(--accent); }
+.ingredients em { font-style: normal; color: var(--text-muted); font-size: 0.85em; }
+.method { white-space: pre-wrap; font-family: inherit; font-size: 0.9rem; line-height: 1.6;
+  margin: 0; background: var(--surface-2); border-radius: 10px; padding: 0.7rem 0.8rem; }
+
+/* Shopping list */
+.planned-row { display: flex; align-items: center; justify-content: space-between;
+  font-size: 0.85rem; padding: 0.3rem 0; border-top: 1px solid var(--border); }
+.planned-row:first-child { border-top: none; }
+.planned-row em { font-style: normal; color: var(--text-muted); }
+.section-head { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--accent); margin: 1rem 0 0.3rem; font-weight: 700; }
+.shopping-items { list-style: none; padding: 0; margin: 0; }
+.shop-item { display: grid; grid-template-columns: 1.4rem 4.5rem 1fr; gap: 0.5rem;
+  align-items: baseline; padding: 0.4rem 0; border-top: 1px solid var(--border); }
+.shop-amount { color: var(--text-muted); font-variant-numeric: tabular-nums; text-align: right;
+  font-size: 0.85rem; }
+.shop-name { font-size: 0.92rem; }
+/* What the recipe called it, so an unfamiliar Danish label can be traced back. */
+.shop-en { display: block; font-size: 0.75rem; color: var(--text-muted); }
+.shop-item em { font-style: normal; color: var(--text-muted); font-size: 0.85em; }
+.ticked .shop-name, .ticked .shop-amount { text-decoration: line-through; opacity: 0.5; }
+/* A staple is dimmed, not hidden: one you have run out of is still something
+   you need, and hiding it means noticing in the shop rather than at home. */
+.staple .shop-name { opacity: 0.6; }
+
+/* Forms */
+.field { display: block; margin-bottom: 0.7rem; }
+.field > span { display: block; font-size: 0.8rem; font-weight: 600; margin-bottom: 0.25rem; }
+.field-inline { flex: 0 0 8rem; margin-bottom: 0; }
+input[type="search"], input[type="number"], select, textarea {
+  width: 100%; font: inherit; font-size: 0.9rem; color: var(--text);
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: 9px; padding: 0.45rem 0.6rem; }
+input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent-soft);
+  border-color: var(--accent); }
+.row { display: flex; gap: 0.5rem; align-items: flex-end; margin-top: 0.6rem; }
+.row > button { flex: 1; }
+.btn-primary, .btn-secondary { font: inherit; font-size: 0.9rem; font-weight: 600;
+  padding: 0.55rem 0.8rem; border-radius: 10px; cursor: pointer; border: 1px solid transparent; }
+.btn-primary { background: var(--accent); color: #fff; }
+.btn-secondary { background: var(--surface-2); color: var(--text); border-color: var(--border); }
+.full { width: 100%; margin-bottom: 0.6rem; }
+.link-btn { background: none; border: none; font: inherit; font-size: 0.82rem;
+  color: var(--accent); cursor: pointer; padding: 0.2rem 0; }
+.link-btn.danger { color: var(--danger); display: block; margin-top: 1rem; }
+
+.prompt-wrap { margin-bottom: 0.8rem; }
+.prompt-wrap > summary { cursor: pointer; font-size: 0.82rem; color: var(--accent); }
+.prompt { white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.75rem; line-height: 1.5; background: var(--surface-2);
+  border: 1px solid var(--border); border-radius: 9px; padding: 0.6rem; max-height: 15rem;
+  overflow-y: auto; margin: 0.4rem 0 0; }
+
+.notice { border-radius: 9px; padding: 0.55rem 0.7rem; font-size: 0.85rem; line-height: 1.5;
+  margin-top: 0.6rem; }
+.notice-ok { background: var(--success-soft); color: var(--success); }
+.notice-warn { background: var(--warn-soft); color: var(--warn); }
+
+.toast { position: fixed; left: 50%; bottom: 1.2rem; transform: translateX(-50%);
+  background: var(--text); color: var(--bg); padding: 0.55rem 0.9rem; border-radius: 999px;
+  font-size: 0.85rem; z-index: 30; box-shadow: var(--shadow); }

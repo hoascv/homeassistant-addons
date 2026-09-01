@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Recipes</title>
+<link rel="stylesheet" href="static/style.css?v={{ app_version }}">
+</head>
+<body>
+
+<header class="topbar">
+  <span class="topbar-icon">🍳</span>
+  <h1>Recipes</h1>
+  <button type="button" class="topbar-icon-btn" id="import-btn" title="Load recipes">＋</button>
+</header>
+
+<nav class="tabs" id="tabs">
+  <button type="button" class="tab tab-on" data-tab="browse">Recipes</button>
+  <button type="button" class="tab" data-tab="list">Shopping list<span class="tab-count" id="list-count" hidden></span></button>
+</nav>
+
+<main class="page" id="tab-browse">
+  <section class="card">
+    <div class="card-head">
+      <h2>Recipes</h2>
+      <input type="search" id="search" placeholder="Search…" aria-label="Search recipes">
+    </div>
+    <div class="seg" id="category-filter" role="tablist" aria-label="Category"></div>
+    <div id="recipe-list"></div>
+    <p class="empty-state" id="recipe-empty" hidden>Nothing here yet. Use ＋ to load some.</p>
+  </section>
+</main>
+
+<main class="page" id="tab-list" hidden>
+  <section class="card">
+    <div class="card-head">
+      <h2>Shopping list</h2>
+      <button type="button" class="link-btn" id="clear-plan">Clear</button>
+    </div>
+    <p class="muted" id="list-summary">Nothing planned yet.</p>
+    <div id="planned"></div>
+    <div id="shopping"></div>
+  </section>
+</main>
+
+<!-- Recipe detail -->
+<div class="sheet-backdrop" id="recipe-backdrop" hidden data-close="recipe-backdrop">
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="detail-title">
+    <div class="sheet-head">
+      <h2 id="detail-title">Recipe</h2>
+      <button type="button" class="topbar-icon-btn" data-close="recipe-backdrop" aria-label="Close">✕</button>
+    </div>
+    <div id="detail-body"></div>
+  </div>
+</div>
+
+<!-- Load recipes -->
+<div class="sheet-backdrop" id="import-backdrop" hidden data-close="import-backdrop">
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="import-title">
+    <div class="sheet-head">
+      <h2 id="import-title">Load recipes</h2>
+      <button type="button" class="topbar-icon-btn" data-close="import-backdrop" aria-label="Close">✕</button>
+    </div>
+
+    <p class="muted">
+      This add-on never goes online. Copy the prompt below, run it on any
+      assistant you like, and paste the reply back here.
+    </p>
+
+    <label class="field">
+      <span>Category</span>
+      <select id="prompt-category"></select>
+    </label>
+    <label class="field">
+      <span>What to ask for</span>
+      <select id="prompt-kind">
+        <option value="new">More recipes</option>
+        <option value="snacks">Healthy snacks</option>
+      </select>
+    </label>
+
+    <button type="button" class="btn-secondary full" id="copy-prompt">Copy the prompt</button>
+    <details class="prompt-wrap">
+      <summary>Show the prompt</summary>
+      <pre class="prompt" id="prompt-text"></pre>
+    </details>
+
+    <label class="field">
+      <span>Paste the reply</span>
+      <textarea id="import-text" rows="7"
+        placeholder="Paste the assistant's whole reply — fences, preamble and all."></textarea>
+    </label>
+    <div class="row">
+      <button type="button" class="btn-secondary" id="check-import">Check it</button>
+      <button type="button" class="btn-primary" id="do-import">Load it</button>
+    </div>
+    <div id="import-report"></div>
+  </div>
+</div>
+
+<div class="toast" id="toast" hidden></div>
+<script src="static/app.js?v={{ app_version }}"></script>
+</body>
+</html>

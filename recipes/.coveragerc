@@ -1,0 +1,16 @@
+# Coverage measures the add-on, not its own test suite: counting the tests
+# inflates every number, and a suite is by construction almost fully executed
+# by running it. `fail_under` lives in CI so a local run still reports freely.
+[run]
+source = app
+branch = true
+omit =
+    app/tests/*
+
+[report]
+show_missing = true
+skip_covered = true
+exclude_also =
+    if __name__ == .__main__.:
+    if TYPE_CHECKING:
+    raise NotImplementedError

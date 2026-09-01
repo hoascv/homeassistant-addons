@@ -1,0 +1,122 @@
+# Recipes
+
+A recipe and healthy-snack catalog that builds a **Danish supermarket list**.
+
+The recipes are in **English**, because that is what you read while cooking.
+Every ingredient also carries the **Danish shelf label**, and the shopping list
+is built from that one — because you are standing in Netto looking for
+*hakket oksekød*, not for "minced beef".
+
+The add-on **never goes online**. It ships with base recipes, and more are
+loaded the way the Knowledge add-on loads its material: it writes you a prompt,
+you run it on any assistant you like, and you paste the reply back.
+
+## What it does
+
+- **A catalog**, in categories you choose. It ships seeded for **Family** and
+  **Bulk**, the second including healthy snacks.
+- **A shopping list** built from the recipes you pick: scaled to the servings
+  you want, merged where two recipes need the same thing, and grouped in the
+  order a Danish supermarket is laid out.
+- **Tick items off as you shop.** The ticks survive adding another recipe.
+
+## The two names
+
+Every ingredient has both:
+
+| | |
+|---|---|
+| `name` | English — *minced beef, 4-7%* — shown in the recipe |
+| `shop_name` | Danish — *hakket oksekød 4-7%* — shown on the shopping list |
+
+The list is built entirely from the Danish one, which has a useful consequence:
+two recipes calling for "minced beef" and "beef mince" become **one line**,
+because both point at the same shelf label. The list still shows what the
+recipes called it underneath, so an unfamiliar Danish word can be traced back.
+
+If a loaded recipe gives only one name, that name is used for both and the
+import says so. A list with one untranslated line is still a list; losing the
+recipe over a missing translation would not be.
+
+## The shopping list
+
+Three things happen to every ingredient, in order.
+
+**Scaled.** A recipe written for 4 that you want for 6 has its quantities
+multiplied. A recipe with no stated servings is taken at face value rather than
+scaled by a guess.
+
+**Merged.** Lines that are the same purchase become one. 500 g and 1 kg of
+*hakket oksekød* is 1,5 kg. But **3 fed** and **100 g** of *hvidløg* stay two
+lines, because nobody buys 112 g of garlic — quantities only merge within the
+same dimension, and an unrecognised unit merges with nothing at all.
+
+Things you buy whole **round up**: 1,5 løg becomes 2, because half an onion
+spare beats half an onion short.
+
+**Grouped**, into the sections a shop is actually laid out in — Frugt & grønt,
+Kød & fisk, Mejeri, Brød, Frost, Kolonial — so the list can be walked once.
+
+### Staples
+
+The `staples` option lists what is always in the cupboard, written as Danish
+shelf labels. Those items are **dimmed but still shown**: one you have run out
+of is still something you need, and hiding it means noticing in the shop rather
+than at home. The header says how many of the items are staples, so the count
+is not quietly inflated by things you own.
+
+## Loading more recipes
+
+**＋** → pick a category and what to ask for → **Copy the prompt**. Run it on
+whatever assistant you have, paste the reply into the box, and press **Load it**.
+**Check it** parses without saving, so a paste can be inspected first.
+
+Anything unusable is dropped and listed rather than failing the whole paste — a
+pack that lands four of five recipes and says so is worth more than a parse
+error, because the only other remedy is asking again.
+
+Loading a pack twice replaces rather than duplicates: a recipe is identified by
+its name and category.
+
+## Nutrition
+
+`protein_g` and `kcal` are **per serving and optional**. They are shown when a
+recipe has them and left blank when it does not — the prompt tells assistants to
+leave them out rather than estimate, because a guessed number is worse than a
+blank when it looks like it was measured.
+
+Protein is given for every shipped Bulk recipe, since that is the figure the
+category exists for.
+
+## The base recipes
+
+Fifteen ship with the add-on: six under Family, four Bulk meals and five snacks.
+They are written **once**, on first start, and never rewritten — so an edit
+survives a restart, and a recipe you delete stays deleted rather than coming
+back every reboot.
+
+## Configuration
+
+| Option | What it does |
+|---|---|
+| `categories` | Comma-separated. The first is where family seeds go, the second the bulk ones. Free text. |
+| `default_servings` | Household size. Recipes are scaled to this when added to the list. |
+| `staples` | Always-in-the-cupboard items, as **Danish** shelf labels. |
+| `restrict_to_user_ids` | Limits the add-on to named Home Assistant users. |
+
+## Access
+
+Ingress only. There is no published port and no API token: a request without
+Home Assistant's ingress header is refused. `restrict_to_user_ids` narrows it
+further, per user.
+
+The 401 that refusal produces is also what Add-on Watchdog's probe sees, and it
+counts as healthy — the question a probe asks is whether the service is up, not
+whether it can get in.
+
+## Notes
+
+- The database is `/data/recipes.db`, in every Home Assistant backup.
+- Nothing leaves your instance. There is no outbound call anywhere in the
+  add-on — that is the whole reason for the copy-a-prompt arrangement.
+- Quantities are shown Danish-style with a comma: **1,5 kg**.

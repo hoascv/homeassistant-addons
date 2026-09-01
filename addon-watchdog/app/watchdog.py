@@ -70,6 +70,9 @@ PROBES = {
     # asked is whether Flask is up and speaking HTTP, not whether the watchdog
     # can get in. It deliberately cannot, and it holds no journal credential.
     "journal": Probe("http", 8099, "/", "web UI answers"),
+    # Ingress-only like Journal, so the 401 it answers with is the healthy
+    # reply. /api/health is cheaper than rendering the page and says the same.
+    "recipes": Probe("http", 8099, "/api/health", "web UI answers"),
     "pipeline-postgres": Probe("tcp", 5432, None, "accepting connections"),
     # The replica publishes 5433 on the host but still listens on 5432 inside
     # its container, and probes go to container ports.

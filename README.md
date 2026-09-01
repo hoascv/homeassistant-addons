@@ -45,6 +45,15 @@ Personal Home Assistant add-on repository.
   dependency. The first add-on here to run with `host_network` and elevated
   capabilities; read its Security section before installing.
 
+- **[Recipes](recipes/DOCS.md)** — a recipe and healthy-snack catalog that
+  builds a **Danish supermarket list**. Recipes are written in English, every
+  ingredient also carries the Danish shelf label, and the shopping list is built
+  from the second: it merges what several recipes need, scales to the servings
+  you want, and groups it in the order the shop is laid out. Ships with base
+  recipes in two categories; more are loaded the way Knowledge loads its
+  material — it writes you a prompt, you run it on any LLM, you paste the reply
+  back, and the add-on never goes online.
+
 ### Data pipeline (amd64 only)
 
 A pre-wired data-engineering stack, one service per add-on. Meant for an

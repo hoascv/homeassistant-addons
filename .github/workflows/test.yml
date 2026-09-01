@@ -33,6 +33,8 @@ jobs:
             floor: 88
           - addon: journal
             floor: 88
+          - addon: recipes
+            floor: 90
     defaults:
       run:
         working-directory: ${{ matrix.addon }}
