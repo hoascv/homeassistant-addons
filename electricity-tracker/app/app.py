@@ -22,7 +22,7 @@ import eloverblik
 import saveeye
 import easee
 
-APP_VERSION = "1.16.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.16.1"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("ELECTRICITY_DB_PATH", "/data/electricity.db")
 OPTIONS_PATH = os.environ.get("ELECTRICITY_OPTIONS_PATH", "/data/options.json")
@@ -1576,6 +1576,63 @@ def easee_current_session(conn, opts, price_area, charger_id):
     }
 
 
+def correct_current_session(conn, opts, price_area, charger_id, session, now_local=None):
+    """Give the live card the same energy the history shows for that session.
+
+    Without this the two disagree on one screen — the card reporting 20.06 kWh
+    from the polls while the list underneath it reports Easee's 20.58 for the
+    same charge. Reconciling behind only the history endpoint was not enough,
+    because the card is a different endpoint reading the same event.
+
+    **Only once the charge has finished.** While one is running, Easee's record
+    is fetched hourly and is therefore behind the live counter; correcting from
+    it would make the number on screen jump backwards between refreshes, which
+    is worse than being a few hundred watt-hours low for an hour.
+
+    Routed through the same `_reconcile_one` the history uses, rather than
+    repeating the arithmetic here — two copies of this rule would eventually
+    disagree, which is the bug being fixed.
+    """
+    if not session or session.get("session_ended_at") is None:
+        return session
+
+    cloud = cloud_sessions(conn, charger_id, days=7, now_local=now_local)
+    if not cloud:
+        return session
+
+    as_sampled = {
+        "started_at": session["session_started_at"],
+        "ended_at": session["session_ended_at"],
+        "energy_kwh": session["session_energy_kwh"],
+        "cost_dkk": session["session_cost_dkk"],
+        "cost_covers_kwh": session["cost_covers_kwh"],
+        "cost_is_partial": session["cost_is_partial"],
+    }
+    now_utc = (now_local or datetime.now(LOCAL_TZ)).astimezone(timezone.utc)
+    matches = [
+        entry for entry in cloud
+        if _overlaps(as_sampled, entry["_start"], entry["_end"] or now_utc)
+    ]
+    if len(matches) != 1:
+        # No record yet, or one plug-in covering several charges. Same rule as
+        # the history: say nothing rather than guess.
+        return session
+
+    start_local = datetime.fromisoformat(as_sampled["started_at"]).astimezone(LOCAL_TZ)
+    end_local = datetime.fromisoformat(as_sampled["ended_at"]).astimezone(LOCAL_TZ)
+    price_at = _hour_pricer(conn, opts, price_area,
+                            start_local - timedelta(hours=1), end_local + timedelta(hours=2))
+    merged = _reconcile_one(as_sampled, matches[0], price_at)
+    return {
+        **session,
+        "session_energy_kwh": merged["energy_kwh"],
+        "session_cost_dkk": merged["cost_dkk"],
+        "cost_covers_kwh": merged["cost_covers_kwh"],
+        "cost_is_partial": merged["cost_is_partial"],
+        "energy_source": merged["energy_source"],
+    }
+
+
 def easee_sessions(conn, opts, price_area, charger_id, days=30, now_local=None):
     """Every charging session that ended (or is running) within `days`, newest
     first, each costed the same way the live card costs the current one.
@@ -2172,7 +2229,8 @@ def build_insights(conn, options, days=30, now_local=None):
     if easee_cfg["enabled"]:
         charger_id = easee_cfg["charger_id"] or _easee_token_cache["charger_id"]
         if charger_id:
-            sessions = easee_sessions(conn, opts, opts["price_area"], charger_id, days=days, now_local=now_local)
+            sessions = easee_sessions_reconciled(conn, opts, opts["price_area"], charger_id,
+                                                 days=days, now_local=now_local)
             totals = easee_charging_totals(sessions)
             house_kwh = sum(d["kwh"] for d in daily)
             share = round(totals["energy_kwh"] / house_kwh * 100, 1) if house_kwh > 0 else None
@@ -2531,7 +2589,9 @@ def api_easee_now():
     charger_id = cfg["charger_id"] or _easee_token_cache["charger_id"]
     if not charger_id:
         return jsonify({"enabled": True, "charger_id": None, "session": None})
-    session = easee_current_session(db, opts, opts["price_area"], charger_id)
+    session = correct_current_session(
+        db, opts, opts["price_area"], charger_id,
+        easee_current_session(db, opts, opts["price_area"], charger_id))
     return jsonify(
         {
             "enabled": True,

@@ -441,6 +441,11 @@ want a copy in your own hands, or to move to another install.
   covers, not the full session — a partially observed charge would otherwise
   report a rate it never paid. Sessions in that state are counted under the
   card, so a total missing some of its cost says so.
+- The **EV charging** card and the charging history read the same corrected
+  figures, so the number on the card always matches the row for that session in
+  the list below it. A charge that is still running is the exception: it stays
+  on the live counter, because Easee's record is fetched hourly and correcting
+  from it mid-charge would make the figure jump backwards between refreshes.
 - **Energy comes from Easee, timing comes from the samples.** The charger is
   polled every five minutes and a session is rebuilt from those samples, so
   whatever was delivered between the last poll and the cable coming out was

@@ -467,3 +467,90 @@ def test_without_any_cloud_history_the_polled_list_still_answers(client, set_opt
     body = client.get("/api/easee/history?days=30").get_json()
     assert body["enabled"] is True
     assert body["sessions"] == []
+
+
+# --- the live card must not contradict the list underneath it -----------------
+
+
+def _sampled_session_rows(conn, charger_id="EH1"):
+    """Samples describing one finished charge: 07:15 plug in, energy rising to
+    20.06 by 09:05, unplugged before the next poll."""
+    energies = [(0, 0.0), (5, 1.0), (60, 11.0), (110, 20.06)]
+    for minutes, kwh in energies:
+        ts = (datetime(2026, 9, 1, 7, 15, tzinfo=UTC) + timedelta(minutes=minutes)).isoformat()
+        conn.execute(
+            "INSERT INTO easee_samples (ts_utc, charger_id, status, session_energy_kwh, "
+            "total_power_w, fetched_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (ts, charger_id, "CHARGING", kwh, 11000, ts))
+    end = datetime(2026, 9, 1, 9, 20, tzinfo=UTC).isoformat()
+    conn.execute(
+        "INSERT INTO easee_samples (ts_utc, charger_id, status, session_energy_kwh, "
+        "total_power_w, fetched_at) VALUES (?, ?, ?, ?, ?, ?)",
+        (end, charger_id, "DISCONNECTED", 0.0, 0, end))
+
+
+def _cloud_row(conn, energy=20.58, disconnected="2026-09-01T09:10:00Z"):
+    conn.execute(
+        "INSERT INTO easee_cloud_sessions (charger_id, connected_at, disconnected_at, "
+        "energy_kwh, fetched_at) VALUES (?, ?, ?, ?, ?)",
+        ("EH1", "2026-09-01T07:15:00Z", disconnected, energy, "2026-09-01T18:00:00Z"))
+
+
+def test_the_live_card_shows_the_same_energy_as_the_history(client, conn, set_options):
+    """They were showing 20.06 and 20.58 for one charge on one screen. Putting
+    the reconciliation behind the history endpoint alone was not enough — the
+    card is a different endpoint reading the same event."""
+    set_options(easee_enabled=True, easee_username="u", easee_password="p",
+                easee_charger_id="EH1")
+    _sampled_session_rows(conn)
+    _cloud_row(conn)
+    conn.commit()
+
+    card = client.get("/api/easee/now").get_json()["session"]
+    history = client.get("/api/easee/history?days=30").get_json()["sessions"][0]
+
+    assert card["session_energy_kwh"] == history["energy_kwh"] == 20.58
+    assert card["session_cost_dkk"] == history["cost_dkk"]
+    assert card["energy_source"] == "easee"
+
+
+def test_a_running_charge_is_left_on_the_live_counter(client, conn, set_options):
+    """Easee's record is fetched hourly, so during a charge it is behind the
+    counter. Correcting from it would make the number on screen jump backwards
+    between refreshes — worse than being a little low for an hour."""
+    set_options(easee_enabled=True, easee_username="u", easee_password="p",
+                easee_charger_id="EH1")
+    for minutes, kwh in ((0, 0.0), (5, 1.0), (60, 11.0)):
+        ts = (datetime(2026, 9, 1, 7, 15, tzinfo=UTC) + timedelta(minutes=minutes)).isoformat()
+        conn.execute(
+            "INSERT INTO easee_samples (ts_utc, charger_id, status, session_energy_kwh, "
+            "total_power_w, fetched_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (ts, "EH1", "CHARGING", kwh, 11000, ts))
+    # Easee's hourly record is stale mid-charge: it still says 5 kWh.
+    _cloud_row(conn, energy=5.0, disconnected=None)
+    conn.commit()
+
+    card = client.get("/api/easee/now").get_json()["session"]
+    assert card["session_energy_kwh"] == 11.0
+    assert "energy_source" not in card
+
+
+def test_the_live_card_survives_having_no_cloud_record(client, conn, set_options):
+    set_options(easee_enabled=True, easee_username="u", easee_password="p",
+                easee_charger_id="EH1")
+    _sampled_session_rows(conn)
+    conn.commit()
+    card = client.get("/api/easee/now").get_json()["session"]
+    assert card["session_energy_kwh"] == 20.06
+
+
+def test_insights_counts_the_corrected_energy(client, conn, set_options):
+    """The EV's share of the house is computed from this. Undercounting the car
+    while the house meter is complete understates the share."""
+    set_options(easee_enabled=True, easee_username="u", easee_password="p",
+                easee_charger_id="EH1")
+    _sampled_session_rows(conn)
+    _cloud_row(conn)
+    conn.commit()
+    body = client.get("/api/insights?days=30").get_json()
+    assert body["ev"]["energy_kwh"] == 20.58

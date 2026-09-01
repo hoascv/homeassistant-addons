@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.16.1
+
+- **Fixed: the EV charging card and the history disagreed about the same
+  charge.** The card read 20.06 kWh / 31.72 kr while the list directly beneath
+  it read 20.58 / 32.37 — one screen, one session, two numbers. 1.16.0 put the
+  reconciliation behind the history endpoint, but the card is a different
+  endpoint reading the same event, and the Insights EV share was computed from
+  the uncorrected figure too.
+- Both now go through the same reconciliation the history uses, rather than
+  repeating the rule — two copies of it would eventually disagree, which is the
+  bug being fixed.
+- A charge still running is deliberately left on the live counter. Easee's
+  record is fetched hourly, so mid-charge it is behind, and correcting from it
+  would make the number jump backwards between refreshes.
+
 ## 1.16.0
 
 - **Charging energy now comes from Easee's own record.** The charger is polled
