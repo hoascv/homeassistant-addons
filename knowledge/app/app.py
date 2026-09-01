@@ -33,7 +33,7 @@ import markdown
 import prompts
 import srs
 
-APP_VERSION = "1.1.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.1.1"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("KNOWLEDGE_DB_PATH", "/data/knowledge.db")
 OPTIONS_PATH = os.environ.get("KNOWLEDGE_OPTIONS_PATH", "/data/options.json")

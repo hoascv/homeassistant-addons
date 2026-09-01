@@ -79,3 +79,30 @@ def test_the_page_never_renders_a_raw_briefing_with_innerhtml():
     markdown.py's escape-first ordering exists to prevent."""
     assert "${s.briefing}" not in JS
     assert "${s.practical_task}" not in JS
+
+
+# --- copying the prompt -------------------------------------------------------
+
+
+def test_copying_works_outside_a_secure_context():
+    """navigator.clipboard needs https and ingress is plain http, so on most
+    installs the modern API is absent — not refused, absent. Without the old
+    execCommand path this button has never copied anything."""
+    assert "execCommand" in JS
+    assert "isSecureContext" in JS, "the modern API should still be preferred where it works"
+
+
+def test_the_copy_fallback_uses_a_selectable_element():
+    """A display:none textarea cannot be selected and would copy an empty
+    string while looking entirely correct."""
+    block = JS[JS.index("async function copyText("):JS.index("function wirePromptSheet(")]
+    assert "style.display" not in block
+    assert "-1000px" in block
+    assert "setSelectionRange" in block, "iOS ignores .select() on a readonly field"
+
+
+def test_a_failed_copy_leaves_the_prompt_selected():
+    """The last resort should be one keypress, not a drag through several
+    screens of text."""
+    handler = JS[JS.index('el("prompt-copy-btn").addEventListener'):]
+    assert "selectNodeContents" in handler[:1200]

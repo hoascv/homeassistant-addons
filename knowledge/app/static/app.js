@@ -399,17 +399,61 @@ async function showPrompt(topicId, kind) {
   }
 }
 
+// Copying, in a place where the modern way does not work.
+//
+// navigator.clipboard requires a *secure context*, and Home Assistant ingress
+// is served over plain http — so on most installs the modern API is not merely
+// refused, it is absent, and this button has never copied anything. The prompt
+// it exists to copy runs to several hundred words.
+//
+// document.execCommand("copy") is deprecated and is the only thing that works
+// here. It needs a genuinely selectable element: display:none cannot be
+// selected, so the scratch textarea goes off-screen instead. iOS additionally
+// ignores .select() on a readonly field and needs an explicit range.
+async function copyText(text) {
+  if (navigator.clipboard && window.isSecureContext) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch (_) { /* fall through to the old way */ }
+  }
+
+  const area = document.createElement("textarea");
+  area.value = text;
+  area.setAttribute("readonly", "");
+  area.style.position = "fixed";
+  area.style.top = "-1000px";
+  area.style.opacity = "0";
+  document.body.appendChild(area);
+
+  let copied = false;
+  try {
+    area.select();
+    area.setSelectionRange(0, text.length);
+    copied = document.execCommand("copy");
+  } catch (_) {
+    copied = false;
+  } finally {
+    area.remove();
+  }
+  return copied;
+}
+
+
 function wirePromptSheet() {
   el("prompt-copy-btn").addEventListener("click", async () => {
     const btn = el("prompt-copy-btn");
-    try {
-      await navigator.clipboard.writeText(state.promptBody || "");
+    if (await copyText(state.promptBody || "")) {
       btn.textContent = "Copied ✓";
-    } catch (_) {
-      // Ingress is served over the parent page's origin and clipboard access
-      // can be refused there; selecting the text is the fallback that always
-      // works, so say so rather than failing silently.
-      btn.textContent = "Select the text below and copy";
+    } else {
+      // Both ways refused. Select the prompt so the only thing left is to
+      // press copy, rather than asking for a drag through several screens.
+      const range = document.createRange();
+      range.selectNodeContents(el("prompt-text"));
+      const selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+      btn.textContent = "Selected — press copy";
     }
     setTimeout(() => (btn.textContent = "Copy prompt"), 2500);
   });
