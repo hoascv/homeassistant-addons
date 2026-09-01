@@ -22,7 +22,7 @@ import eloverblik
 import saveeye
 import easee
 
-APP_VERSION = "1.15.2"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.16.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("ELECTRICITY_DB_PATH", "/data/electricity.db")
 OPTIONS_PATH = os.environ.get("ELECTRICITY_OPTIONS_PATH", "/data/options.json")
@@ -38,6 +38,14 @@ LOCAL_TZ = ZoneInfo("Europe/Copenhagen")
 # CONSUMPTION_SYNC_INTERVAL_SECONDS.
 BACKGROUND_TICK_SECONDS = 300
 CONSUMPTION_SYNC_INTERVAL_SECONDS = 3600
+# Easee's session endpoint is throttled in their own client, so it gets its own
+# slow schedule rather than riding the sampling tick. Sessions are history: a
+# charge that finished an hour ago is no less true for being fetched late.
+EASEE_SESSIONS_SYNC_INTERVAL_SECONDS = 3600
+# How far back to re-fetch each time. Comfortably past the 30-day view so a
+# session that was still running at the last sync gets its final energy and
+# unplug time filled in, and any gap from a restart heals on its own.
+EASEE_SESSIONS_SYNC_DAYS = 35
 
 app = Flask(__name__)
 
@@ -327,6 +335,24 @@ def init_db():
             reason_for_no_current INTEGER, -- Easee's reasonForNoCurrent code, when it gave one
             fetched_at TEXT NOT NULL,
             PRIMARY KEY (ts_utc, charger_id)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS easee_cloud_sessions (
+            charger_id TEXT NOT NULL,
+            -- When the cable went in and came out, which is NOT when charging
+            -- started and stopped: a car left on a schedule reports a
+            -- twelve-hour session that charged for two of them.
+            connected_at TEXT NOT NULL,
+            disconnected_at TEXT,          -- absent while the cable is still in
+            energy_kwh REAL NOT NULL,      -- Easee's own total, the authority
+            fetched_at TEXT NOT NULL,
+            -- Keyed on the start so a re-fetch updates a session in place
+            -- rather than accumulating a copy per sync — an ongoing session
+            -- gets its end filled in by a later fetch.
+            PRIMARY KEY (charger_id, connected_at)
         )
         """
     )
@@ -1140,6 +1166,111 @@ def sync_easee(conn, options):
     )
 
 
+def sync_easee_cloud_sessions(conn, options, now=None, force=False):
+    """Easee's own record of every session, fetched on a slow schedule.
+
+    The polled samples cannot see the whole of a charge. A session is
+    reconstructed from five-minute polls, so whatever was delivered between the
+    last poll and the cable coming out is never observed — always missing,
+    never over-counting, bounded by the poll interval times the charge rate.
+    Easee knows the real total; this asks for it.
+
+    Rows are replaced rather than appended, so a session still running at one
+    sync gets its end and final energy from the next.
+    """
+    cfg = get_easee_config(options)
+    if not cfg["enabled"] or not cfg["username"] or not cfg["password"]:
+        return
+
+    now = now or datetime.now(timezone.utc)
+    if not force:
+        last = _get_app_state(conn, "last_easee_sessions_sync")
+        if last:
+            try:
+                elapsed = (now - datetime.fromisoformat(last)).total_seconds()
+            except ValueError:
+                elapsed = None
+            if elapsed is not None and 0 <= elapsed < EASEE_SESSIONS_SYNC_INTERVAL_SECONDS:
+                return
+
+    try:
+        access_token = _get_easee_access_token(cfg["username"], cfg["password"])
+        charger_id = _resolve_easee_charger_id(access_token, cfg["charger_id"])
+        if not charger_id:
+            return
+        sessions = easee.get_sessions(
+            access_token, charger_id, now - timedelta(days=EASEE_SESSIONS_SYNC_DAYS), now
+        )
+    except easee.EaseeError as exc:
+        _log(f"Easee session history sync failed: {exc}")
+        return
+
+    # From the same clock the throttle above reads, not _now_iso(). Mixing the
+    # two makes the interval meaningless the moment `now` is anything but the
+    # wall clock — which is every test, and any backfill.
+    stamp = now.isoformat(timespec="seconds")
+    for session in sessions:
+        conn.execute(
+            "INSERT OR REPLACE INTO easee_cloud_sessions "
+            "(charger_id, connected_at, disconnected_at, energy_kwh, fetched_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (charger_id, session["connected_at"], session["disconnected_at"],
+             session["energy_kwh"], stamp),
+        )
+    _set_app_state(conn, "last_easee_sessions_sync", stamp)
+    conn.commit()
+    _log(f"Easee session history: {len(sessions)} sessions in the last "
+         f"{EASEE_SESSIONS_SYNC_DAYS} days")
+
+
+def cloud_sessions(conn, charger_id, days=30, now_local=None):
+    """Stored Easee sessions overlapping the window, oldest first."""
+    now_local = now_local or datetime.now(LOCAL_TZ)
+    window_start = (now_local - timedelta(days=days)).replace(
+        hour=0, minute=0, second=0, microsecond=0)
+    # A day of lead-in, matching easee_sessions: a session that began just
+    # before the window can still have finished inside it.
+    query_start = (window_start - timedelta(days=1)).astimezone(timezone.utc)
+    rows = conn.execute(
+        "SELECT connected_at, disconnected_at, energy_kwh FROM easee_cloud_sessions "
+        "WHERE charger_id = ? ORDER BY connected_at",
+        (charger_id,),
+    ).fetchall()
+
+    out = []
+    for row in rows:
+        started = _parse_easee_stamp(row["connected_at"])
+        if started is None or started < query_start:
+            continue
+        out.append({
+            "connected_at": row["connected_at"],
+            "disconnected_at": row["disconnected_at"],
+            "energy_kwh": row["energy_kwh"],
+            "_start": started,
+            "_end": _parse_easee_stamp(row["disconnected_at"]),
+        })
+    return out
+
+
+def _parse_easee_stamp(value):
+    """Easee's timestamps, as an aware UTC datetime, or None.
+
+    Their API has been seen returning both a 'Z' suffix and a bare naive
+    stamp; fromisoformat rejects the first on older Pythons and reads the
+    second as local time. Normalising here keeps that in one place.
+    """
+    if not value:
+        return None
+    text = str(value).strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
 # A DISCONNECTED sample means no car is attached, so whatever session was
 # running is over. OFFLINE is deliberately not in here: it means the charger is
 # unreachable, which says nothing about whether the cable is still in.
@@ -1516,6 +1647,235 @@ def _split_sessions_with_index(rows):
     start was observed rather than merely being where the samples begin."""
     positions = {id(row): i for i, row in enumerate(rows)}
     return [(positions[id(session[0])], session) for session in _split_sessions(rows)]
+
+
+def _hour_pricer(conn, opts, price_area, start_local, end_local):
+    """A callable giving the all-in price for the hour an instant falls in.
+
+    Built once per request over the whole window rather than queried per hour:
+    the reconciliation asks about scattered hours across thirty days, and one
+    query beats several hundred.
+    """
+    hourly_totals = _hourly_totals(
+        quarter_prices_with_total(conn, start_local, end_local, price_area, opts))
+
+    def price_at(when):
+        if when is None:
+            return None
+        key = (when.astimezone(LOCAL_TZ)
+               .replace(minute=0, second=0, microsecond=0, tzinfo=None).isoformat())
+        return hourly_totals.get(key)
+
+    return price_at
+
+
+def easee_sessions_reconciled(conn, opts, price_area, charger_id, days=30, now_local=None):
+    """Charging history with Easee's own totals folded into the polled ones.
+
+    The seam between the two lives here so that everything downstream — the
+    daily chart, the monthly roll-up, the totals — sees one list of sessions
+    and cannot disagree with the list printed underneath it.
+    """
+    now_local = now_local or datetime.now(LOCAL_TZ)
+    sampled = easee_sessions(conn, opts, price_area, charger_id, days=days,
+                             now_local=now_local)
+    cloud = cloud_sessions(conn, charger_id, days=days, now_local=now_local)
+    if not cloud:
+        # Nothing fetched yet (or the option was only just turned on). The
+        # polled history is what there is, and it is better than an empty page.
+        return [{**session, "energy_source": "polled"} for session in sampled]
+
+    window_start = (now_local - timedelta(days=days + 1)).replace(
+        hour=0, minute=0, second=0, microsecond=0)
+    price_at = _hour_pricer(conn, opts, price_area, window_start,
+                            now_local + timedelta(hours=1))
+    return reconcile_sessions(sampled, cloud, price_at, LOCAL_TZ,
+                              now_utc=now_local.astimezone(timezone.utc))
+
+
+def reconcile_sessions(sampled, cloud, price_at_hour, local_tz, now_utc=None):
+    """The polled sessions corrected against Easee's own record.
+
+    Two sources, each right about something different:
+
+    - **Energy** is Easee's. The polled figure is the counter as of the last
+      poll that saw it rising, so anything delivered between that poll and the
+      cable coming out is missing — always low, never high, bounded by the poll
+      interval times the charge rate.
+    - **Timing** is the polls'. Easee reports `carConnected`/`carDisconnected`,
+      which is plug-in to unplug: a car left on an overnight schedule reports
+      twelve hours, of which it charged for two. The polled window is the one
+      that actually describes charging, so it is kept wherever it exists.
+
+    A session Easee knows about and the polls never saw at all — the add-on was
+    down, or restarted mid-charge — is emitted from Easee's record alone, with
+    its energy spread evenly across the plug-in span for costing and flagged so
+    the screen can say the cost is an estimate rather than a measurement.
+
+    Deliberately conservative where the two disagree in shape: if several
+    polled sessions fall inside one plug-in, the polled ones are left exactly
+    as they are. Attributing one cloud total across them would either
+    double-count the energy or invent a split of it, and neither is better than
+    saying nothing.
+    """
+    now_utc = now_utc or datetime.now(timezone.utc)
+    remaining = list(sampled)
+    out = []
+
+    for entry in cloud:
+        start = entry["_start"]
+        end = entry["_end"] or now_utc
+        matches = [
+            session for session in remaining
+            if _overlaps(session, start, end)
+        ]
+        if len(matches) == 1:
+            out.append(_reconcile_one(matches[0], entry, price_at_hour))
+            remaining.remove(matches[0])
+        elif matches:
+            # More than one polled session inside a single plug-in. Leave them
+            # untouched rather than guess how the cloud total divides.
+            for session in matches:
+                out.append({**session, "energy_source": "polled"})
+                remaining.remove(session)
+        else:
+            out.append(_session_from_cloud(entry, price_at_hour, local_tz, now_utc))
+
+    # Polled sessions with no cloud counterpart. Not an error: the hourly
+    # session sync may simply not have run since the charge finished, and
+    # dropping them would make a charge vanish for up to an hour.
+    for session in remaining:
+        out.append({**session, "energy_source": "polled"})
+
+    out.sort(key=lambda session: session["started_at"], reverse=True)
+    return out
+
+
+def _overlaps(session, start, end):
+    """Does a polled session's charging window fall within a plug-in span?
+
+    A minute of slack at each end: the polls that bracket a charge sit up to
+    one interval outside the plug-in moment, and an exact comparison would miss
+    the match that matters most — the one at the boundary.
+    """
+    try:
+        session_start = datetime.fromisoformat(session["started_at"])
+        session_end = datetime.fromisoformat(session["ended_at"])
+    except (ValueError, KeyError):
+        return False
+    slack = timedelta(minutes=10)
+    return session_start >= start - slack and session_end <= end + slack
+
+
+def _reconcile_one(session, entry, price_at_hour):
+    """One polled session, given Easee's energy total for it."""
+    cloud_energy = entry["energy_kwh"]
+    polled_energy = session["energy_kwh"] or 0.0
+    missing = round(cloud_energy - polled_energy, 3)
+
+    merged = {**session, "energy_kwh": round(cloud_energy, 3),
+              "energy_source": "easee", "polled_energy_kwh": session["energy_kwh"]}
+    if missing <= 0.01:
+        # Easee agrees with the polls, or reports slightly less (a rounding
+        # difference). Nothing to add, and nothing to explain on screen.
+        merged["energy_kwh"] = round(max(cloud_energy, polled_energy), 3)
+        return _recost(merged, session["cost_dkk"], session["cost_covers_kwh"])
+
+    # The missing energy was delivered between the last poll and the unplug, so
+    # it was priced at the hour the polled session ended in — the only hour it
+    # can have happened in.
+    price = price_at_hour(datetime.fromisoformat(session["ended_at"]))
+    if price is None or session["cost_dkk"] is None:
+        return _recost(merged, session["cost_dkk"], session["cost_covers_kwh"])
+    return _recost(
+        merged,
+        round(session["cost_dkk"] + missing * price, 2),
+        round((session["cost_covers_kwh"] or 0.0) + missing, 3),
+    )
+
+
+def _recost(session, cost, covered):
+    """Re-derive the figures that depend on energy, cost and coverage together.
+
+    Kept in one place because they have to agree: an average rate computed
+    against energy the cost does not cover reports a price that was never paid,
+    which is the trap the cost figure itself already fell into once.
+    """
+    energy = session["energy_kwh"]
+    session["cost_dkk"] = cost
+    session["cost_covers_kwh"] = covered
+    session["cost_is_partial"] = bool(energy and (covered or 0.0) + 0.01 < energy)
+    session["avg_dkk_kwh"] = (
+        round(cost / covered, 4) if cost is not None and covered else None
+    )
+    return session
+
+
+def _session_from_cloud(entry, price_at_hour, local_tz, now_utc):
+    """A session Easee recorded that the polls never saw.
+
+    Its span is plug-in to unplug rather than a charging window, so the
+    duration is not comparable with a polled session's and the cost can only be
+    an estimate: the energy is spread evenly across the hours, which is what
+    you would assume knowing nothing, and flagged as an assumption.
+    """
+    start = entry["_start"]
+    end = entry["_end"] or now_utc
+    started_local = start.astimezone(local_tz)
+    energy = entry["energy_kwh"]
+    cost, covered = _spread_cost(start, end, energy, price_at_hour)
+
+    session = {
+        "started_at": start.isoformat(),
+        "ended_at": end.isoformat(),
+        "day": started_local.date().isoformat(),
+        "energy_kwh": round(energy, 3),
+        "cost_dkk": cost,
+        "avg_dkk_kwh": None,
+        "duration_minutes": round((end - start).total_seconds() / 60),
+        "cost_covers_kwh": covered,
+        "cost_is_partial": False,
+        "ongoing": entry["_end"] is None,
+        "energy_source": "easee",
+        "polled_energy_kwh": None,
+        # Two separate warnings, and they are not the same thing: the cost was
+        # assumed rather than measured, and the span is how long the cable was
+        # in rather than how long it charged.
+        "cost_is_estimated": True,
+        "span_is_plugged_in": True,
+    }
+    return _recost(session, cost, covered)
+
+
+def _spread_cost(start, end, energy, price_at_hour):
+    """Cost of `energy` spread evenly over [start, end) at each hour's price.
+
+    Returns (cost, covered_kwh), and refuses to guess: an hour with no price
+    contributes no cost and no coverage, so a span that is only half priced
+    reports as partial rather than as cheap.
+    """
+    total_seconds = (end - start).total_seconds()
+    if total_seconds <= 0 or not energy:
+        return None, 0.0
+
+    cost = 0.0
+    covered = 0.0
+    cursor = start
+    while cursor < end:
+        hour_end = min((cursor + timedelta(hours=1)).replace(
+            minute=0, second=0, microsecond=0), end)
+        if hour_end <= cursor:
+            break
+        share = energy * ((hour_end - cursor).total_seconds() / total_seconds)
+        price = price_at_hour(cursor)
+        if price is not None:
+            cost += share * price
+            covered += share
+        cursor = hour_end
+
+    if covered <= 0:
+        return None, 0.0
+    return round(cost, 2), round(covered, 3)
 
 
 def easee_charging_totals(sessions):
@@ -2020,6 +2380,7 @@ def _background_loop():
                     last_consumption_sync = now
                 _persist_saveeye_sample(conn)
                 sync_easee(conn, options)
+                sync_easee_cloud_sessions(conn, options)
                 if SUPERVISOR_TOKEN:
                     publish_sensors(conn, options)
             finally:
@@ -2207,7 +2568,7 @@ def api_easee_history():
                         "monthly": {"months": [], "average": None}, "totals": None})
 
     days = min(365, max(1, request.args.get("days", default=30, type=int) or 30))
-    sessions = easee_sessions(db, opts, opts["price_area"], charger_id, days=days)
+    sessions = easee_sessions_reconciled(db, opts, opts["price_area"], charger_id, days=days)
     return jsonify(
         {
             "enabled": True,
@@ -2271,7 +2632,8 @@ def api_health():
     return jsonify({"ok": True, "version": APP_VERSION})
 
 
-TRACKED_TABLES = ("prices", "consumption", "saveeye_samples", "easee_samples")
+TRACKED_TABLES = ("prices", "consumption", "saveeye_samples", "easee_samples",
+                  "easee_cloud_sessions")
 
 
 @app.route("/api/stats")

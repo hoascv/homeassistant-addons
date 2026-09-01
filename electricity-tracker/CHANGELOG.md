@@ -1,5 +1,38 @@
 # Changelog
 
+## 1.16.0
+
+- **Charging energy now comes from Easee's own record.** The charger is polled
+  every five minutes and a session was rebuilt entirely from those samples, so
+  whatever was delivered between the last poll and the cable coming out was
+  never seen — a systematic undercount, always low, bounded by the poll
+  interval times the charge rate. A real session: Easee 20.58 kWh, the add-on
+  20.06. Easee's session history is fetched hourly and its total wins.
+- **Timing still comes from the samples, on purpose.** Easee reports
+  `carConnected`/`carDisconnected` — plug-in to unplug. A car left on an
+  overnight schedule reports twelve hours of which it charged for two, so the
+  sampled charging window is kept wherever it exists.
+- **Charges the add-on was not running for are recovered.** Previously they did
+  not exist. They now appear from Easee's record, tagged **estimated**: the
+  energy is Easee's, and with no samples to attribute it to hours the cost
+  spreads it evenly across the hours the cable was in. Their duration is
+  labelled *plugged in*, because it is not a charging window and should not be
+  compared with rows that are.
+- Recovered energy is priced at the hour the sampled session ended in, the only
+  hour it can have happened in. No price for that hour means the energy is
+  still reported and the cost is marked partial — never guessed.
+- Where the two sources disagree about a session's *shape* rather than its
+  size, the sampled sessions are left alone. Dividing one cloud total across
+  several sampled charges would either double-count the energy or invent a
+  split of it.
+- The session endpoint is rate-limited by Easee (their own client throttles
+  it), so it runs hourly rather than on the five-minute sampling tick. A failed
+  fetch leaves the polled history untouched — a cloud outage must not empty the
+  page.
+- New `easee_cloud_sessions` table, keyed on the session start so a re-fetch
+  updates a session in place: one still running at a sync gets its end and
+  final energy from the next. It joins the export and the change feed.
+
 ## 1.15.2
 
 - **Fixed: the browser has been serving cached JavaScript since 1.12.2.**

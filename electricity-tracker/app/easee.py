@@ -8,6 +8,7 @@ is the closest thing to one.
 """
 import json
 import time
+from datetime import timezone as datetime_timezone
 import urllib.error
 import urllib.request
 
@@ -197,3 +198,59 @@ def get_charger_state(access_token, charger_id, timeout=15):
         "lifetime_energy_kwh": body.get("lifetimeEnergy"),
         "reason_for_no_current": reason if isinstance(reason, int) else None,
     }
+
+
+def get_sessions(access_token, charger_id, from_dt, to_dt, timeout=30):
+    """Completed charging sessions Easee itself recorded, between two instants.
+
+    This is the authoritative record, and it exists because the polled one is
+    not. `get_charger_state` is sampled every few minutes and a session is
+    reconstructed from those samples, so whatever the charger delivered between
+    the last poll and the cable coming out is never seen — a systematic
+    undercount bounded by the poll interval times the charge rate.
+
+    Path and field names from pyeasee's `get_sessions_between_dates`, like the
+    rest of this module. Two things about the shape are worth stating because
+    they are easy to assume wrongly:
+
+    - `carConnected`/`carDisconnected` are **plug-in and unplug** times, not
+      when charging started and stopped. A car plugged in overnight on a
+      schedule reports a twelve-hour session that charged for two of them.
+    - `carDisconnected` is absent while the cable is still in.
+
+    pyeasee throttles this endpoint, so Easee evidently rate-limits it. Call it
+    on its own slow schedule rather than on the sampling tick.
+    """
+    # isoformat() of a naive datetime, which is what pyeasee passes: no offset
+    # suffix. Converted to UTC first so the naive value still means one instant.
+    def _stamp(value):
+        if value.tzinfo is not None:
+            value = value.astimezone(datetime_timezone.utc).replace(tzinfo=None)
+        return value.strftime("%Y-%m-%dT%H:%M:%S")
+
+    body = _request(
+        f"/api/sessions/charger/{charger_id}/sessions/{_stamp(from_dt)}/{_stamp(to_dt)}",
+        access_token=access_token,
+        timeout=timeout,
+    )
+    if not isinstance(body, list):
+        return []
+
+    out = []
+    for entry in body:
+        connected = entry.get("carConnected")
+        energy = entry.get("kiloWattHours")
+        if not connected or energy is None:
+            # A session with no start or no energy is nothing this can use, and
+            # inventing a value for either would put a fiction in the history.
+            continue
+        try:
+            energy = float(energy)
+        except (TypeError, ValueError):
+            continue
+        out.append({
+            "connected_at": connected,
+            "disconnected_at": entry.get("carDisconnected") or None,
+            "energy_kwh": energy,
+        })
+    return out

@@ -441,9 +441,37 @@ want a copy in your own hands, or to move to another install.
   covers, not the full session — a partially observed charge would otherwise
   report a rate it never paid. Sessions in that state are counted under the
   card, so a total missing some of its cost says so.
-- Charging history is derived from the stored samples rather than kept as its
-  own table, so it goes back exactly as far as the samples do — from when the
-  add-on was first enabled with Easee configured.
+- **Energy comes from Easee, timing comes from the samples.** The charger is
+  polled every five minutes and a session is rebuilt from those samples, so
+  whatever was delivered between the last poll and the cable coming out was
+  never seen — always missing, never over-counted, bounded by the poll interval
+  times the charge rate. On one real session Easee recorded 20.58 kWh where the
+  samples saw 20.06: 0.52 kWh, about three minutes of an 11 kW charge. Easee's
+  own session record is now fetched hourly and its total is used instead.
+
+  Timing is deliberately *not* taken from Easee. Their record gives
+  `carConnected` and `carDisconnected`, which is plug-in to unplug — a car left
+  on an overnight schedule reports twelve hours of which it charged for two.
+  The sampled window is the one that describes charging, so it is kept wherever
+  it exists.
+
+  The recovered energy is priced at the hour the sampled session ended in, the
+  only hour it can have been delivered in. If that hour has no spot price the
+  energy is still reported and the cost is marked partial, rather than guessed.
+- **A charge the add-on missed entirely is recovered.** If it was not running —
+  restarted, updated, or down — the session comes from Easee's record alone,
+  marked **estimated**: the energy is Easee's, but with no samples to attribute
+  it to hours, the cost spreads the energy evenly across the hours the cable was
+  in. Its duration is labelled *plugged in* because it is a plug-in span rather
+  than a charging window, and is not comparable with the other rows.
+- Where the two sources disagree about a session's *shape* — several sampled
+  charges inside one plug-in — the sampled ones are left exactly as they are.
+  Dividing one cloud total across them would either double-count the energy or
+  invent a split of it.
+- Charging history is derived from the stored samples, corrected against
+  Easee's record where it exists. Easee is asked for the last 35 days on an
+  hourly schedule; their API rate-limits this endpoint, so it does not ride the
+  five-minute sampling tick.
 - A session's duration is the stretch where energy actually moved: from the
   sample the first kWh arrived from, to the sample the last one arrived at.
   Time spent plugged in without drawing — before a charge starts, or after it

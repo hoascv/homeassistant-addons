@@ -201,3 +201,39 @@ def test_the_static_assets_are_cache_busted():
         html = handle.read()
     assert "static/app.js?v={{ app_version }}" in html
     assert "static/style.css?v={{ app_version }}" in html
+
+
+def _read_static(name):
+    import os
+    sub = "templates" if name.endswith(".html") else "static"
+    path = os.path.join(os.path.dirname(__file__), "..", sub, name)
+    with open(path, encoding="utf-8") as handle:
+        return handle.read()
+
+
+def test_a_recovered_session_is_marked_on_the_row():
+    """Its energy is Easee's and its cost is an assumption. A row that looks
+    identical to a measured one invites the comparison it cannot support."""
+    js = _read_static("app.js")
+    assert "session.cost_is_estimated" in js
+    assert "pill-quiet" in js
+    assert "pill-quiet" in _read_static("style.css")
+
+
+def test_a_plug_in_span_says_so_next_to_the_duration():
+    """Cable-in to cable-out is not a charging window, and 12 h sitting beside
+    a 1 h 50 m row reads as a twelve-hour charge unless it is labelled."""
+    js = _read_static("app.js")
+    assert "span_is_plugged_in" in js
+    assert "plugged in" in js
+
+
+def test_every_var_in_the_stylesheet_resolves():
+    """A var() falling through to its fallback is indistinguishable from a
+    working default until somebody looks at the page. Coop Tracker shipped a
+    card that was white-on-white for exactly this reason."""
+    import re
+    css = re.sub(r"/\*.*?\*/", "", _read_static("style.css"), flags=re.S)
+    defined = set(re.findall(r"(--[\w-]+)\s*:", css))
+    used = set(re.findall(r"var\(\s*(--[\w-]+)", css))
+    assert sorted(used - defined) == []

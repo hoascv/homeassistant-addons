@@ -855,7 +855,12 @@ function renderChargingHistory(data) {
         <span class="session-when">
           <strong>${escapeHtml(shortDay(session.day))} ${escapeHtml(time)}</strong>
           ${session.ongoing ? '<span class="pill pill-accent">charging</span>' : ""}
-          <span class="session-sub">${escapeHtml(fmtDuration(session.duration_minutes))} · ${escapeHtml(rate)}${
+          ${session.cost_is_estimated ? '<span class="pill pill-quiet" title="Recovered from Easee\'s own record; this add-on was not watching. The cost is spread evenly across the hours the cable was in.">estimated</span>' : ""}
+          <span class="session-sub">${escapeHtml(fmtDuration(session.duration_minutes))}${
+            // Not a charging window but a plug-in one, so it is not comparable
+            // with the duration on any other row and must not look like it is.
+            session.span_is_plugged_in ? " plugged in" : ""
+          } · ${escapeHtml(rate)}${
             session.cost_is_partial
               ? ` · <span class="session-partial">cost covers ${session.cost_covers_kwh.toFixed(1)} kWh</span>`
               : ""
@@ -869,6 +874,13 @@ function renderChargingHistory(data) {
   const notes = [];
   if (data.sessions.length > shown.length) {
     notes.push(`Showing the ${shown.length} most recent of ${data.sessions.length} sessions.`);
+  }
+  const estimated = data.sessions.filter((s) => s.cost_is_estimated).length;
+  if (estimated) {
+    notes.push(
+      `${estimated} session${estimated > 1 ? "s" : ""} came from Easee's own record because this ` +
+      "add-on was not running at the time. The energy is Easee's; the cost is spread evenly " +
+      "across the hours the cable was in, so it is an estimate.");
   }
   if (totals.partial_sessions) {
     notes.push(

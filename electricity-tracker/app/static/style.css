@@ -115,6 +115,14 @@ code {
   border: 1px solid var(--border); white-space: nowrap;
 }
 
+/* A figure that was reconstructed rather than measured. Dashed on purpose: the
+   border says "provisional" without needing a second colour, and the row it
+   sits on is otherwise identical to one the add-on watched itself. */
+.pill-quiet {
+  border-style: dashed;
+  font-weight: 500;
+}
+
 /* Price now */
 .price-now { display: flex; align-items: baseline; gap: 0.4rem; }
 .price-now-value { font-size: 2.4rem; font-weight: 800; line-height: 1; }
