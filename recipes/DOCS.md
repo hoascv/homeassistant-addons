@@ -95,6 +95,19 @@ They are written **once**, on first start, and never rewritten — so an edit
 survives a restart, and a recipe you delete stays deleted rather than coming
 back every reboot.
 
+## When a recipe was added
+
+Each recipe shows the date it arrived, under the title.
+
+The fifteen that ship say **"Shipped with the add-on"** instead of a date. They
+all carry the timestamp of the add-on's first start, which is true and
+misleading — you did not add them, and a date there only invites you to wonder
+what you were cooking that day.
+
+Re-importing a pack updates a recipe but does not change when it was added, so
+that date keeps meaning the first time it arrived. A recipe that has been
+re-imported shows both dates.
+
 ## Configuration
 
 | Option | What it does |

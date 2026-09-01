@@ -36,6 +36,31 @@ function toast(message) {
 // into the local convention is the page's job.
 function amount(text) { return String(text || "").replace(".", ","); }
 
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+function shortDate(iso) {
+  if (!iso) return "";
+  const when = new Date(iso);
+  if (isNaN(when)) return "";
+  return `${when.getDate()} ${MONTHS[when.getMonth()]} ${when.getFullYear()}`;
+}
+
+// When a recipe arrived, and where from.
+//
+// A seeded recipe's created_at is when the add-on first started, which is true
+// and misleading — you did not add it, it came in the box. Saying so is more
+// use than a date that invites you to wonder what you were cooking that day.
+function addedLine(recipe) {
+  if (recipe.source === "seed") return "Shipped with the add-on";
+  const added = shortDate(recipe.created_at);
+  if (!added) return "";
+  const updated = shortDate(recipe.updated_at);
+  // Only worth mentioning when it actually differs — a recipe loaded once and
+  // never touched should not carry two identical dates.
+  return updated && updated !== added ? `Added ${added} · updated ${updated}` : `Added ${added}`;
+}
+
 
 // --- tabs and sheets ---------------------------------------------------------
 
@@ -147,6 +172,7 @@ async function openRecipe(id) {
   el("detail-title").textContent = recipe.name;
   el("detail-body").innerHTML = `
     <p class="muted">${escapeHtml(facts)}</p>
+    <p class="muted added">${escapeHtml(addedLine(recipe))}</p>
     ${recipe.notes ? `<p class="notes">${escapeHtml(recipe.notes)}</p>` : ""}
     <h3>Ingredients</h3>
     <ul class="ingredients">

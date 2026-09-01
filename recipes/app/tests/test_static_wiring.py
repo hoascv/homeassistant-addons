@@ -75,3 +75,15 @@ def test_a_failed_copy_leaves_the_prompt_selected():
     handler = JS[JS.index('el("copy-prompt").addEventListener'):]
     assert "selectNodeContents" in handler
     assert "details.open = true" in handler
+
+
+def test_a_seeded_recipe_does_not_claim_you_added_it():
+    """Its created_at is when the add-on first started — true, and misleading."""
+    fn = JS[JS.index("function addedLine("):JS.index("\n// --- tabs")]
+    assert '"seed"' in fn
+    assert "Shipped with the add-on" in fn
+
+
+def test_an_untouched_recipe_shows_one_date_not_two():
+    fn = JS[JS.index("function addedLine("):JS.index("\n// --- tabs")]
+    assert "updated !== added" in fn

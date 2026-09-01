@@ -140,3 +140,7 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent-soft
 .toast { position: fixed; left: 50%; bottom: 1.2rem; transform: translateX(-50%);
   background: var(--text); color: var(--bg); padding: 0.55rem 0.9rem; border-radius: 999px;
   font-size: 0.85rem; z-index: 30; box-shadow: var(--shadow); }
+
+/* When a recipe arrived. Quiet: it is provenance, not something you act on. */
+.added { font-size: 0.76rem; margin: 0.15rem 0 0; opacity: 0.8; }
+

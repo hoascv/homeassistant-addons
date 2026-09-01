@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.1.0
+
+- **Recipes say when they were added.** The date was already being recorded —
+  it simply never left the database. It now shows under the title on a recipe.
+- **A seeded recipe says "Shipped with the add-on"** rather than quoting a date.
+  Its `created_at` is when the add-on first started, so all fifteen carry the
+  same timestamp: true, and misleading. You did not add them, they came in the
+  box, and a date there only invites you to wonder what you were cooking that
+  day.
+- Re-importing a pack moves `updated_at` and leaves `created_at` alone, so
+  "added" keeps meaning the first time a recipe arrived rather than the last
+  time something was pasted over it. A recipe that has been re-imported shows
+  both dates; one that has not shows a single date rather than the same one
+  twice.
+
 ## 1.0.1
 
 - **The Copy button did not copy.** `navigator.clipboard` requires a secure

@@ -43,6 +43,10 @@ def _as_recipe(conn, row, with_ingredients=True):
         "servings": row["servings"], "method": row["method"], "notes": row["notes"],
         "protein_g": row["protein_g"], "kcal": row["kcal"], "minutes": row["minutes"],
         "source": row["source"],
+        # Survives a re-import: save_recipe updates updated_at and leaves
+        # created_at alone, so "added" keeps meaning the first time it arrived
+        # rather than the last time a pack was pasted over it.
+        "created_at": row["created_at"], "updated_at": row["updated_at"],
     }
     if with_ingredients:
         recipe["ingredients"] = _ingredients(conn, row["id"])

@@ -136,3 +136,39 @@ def test_a_tick_survives_the_list_being_rebuilt(conn):
     ticked = [i for s in rebuilt["sections"] for i in s["items"] if i["ticked"]]
     assert [i["name"] for i in ticked] == ["ris"]
     assert rebuilt["remaining_items"] == 1
+
+
+def test_a_recipe_records_when_it_was_added(conn):
+    import datetime
+    recipe_id = store.save_recipe(conn, a_recipe())
+    conn.commit()
+    recipe = store.get_recipe(conn, recipe_id)
+    assert recipe["created_at"].startswith(datetime.date.today().isoformat())
+    assert recipe["updated_at"] == recipe["created_at"]
+
+
+def test_re_importing_moves_updated_at_but_not_created_at(conn):
+    """"Added" has to keep meaning the first time it arrived, not the last time
+    a pack was pasted over it — otherwise re-importing a pack silently rewrites
+    the history of everything in it."""
+    recipe_id = store.save_recipe(conn, a_recipe(servings=4))
+    conn.commit()
+    first = store.get_recipe(conn, recipe_id)
+
+    conn.execute("UPDATE recipes SET created_at = '2020-01-01T00:00:00' WHERE id = ?",
+                 (recipe_id,))
+    conn.commit()
+    store.save_recipe(conn, a_recipe(servings=6))
+    conn.commit()
+
+    again = store.get_recipe(conn, recipe_id)
+    assert again["created_at"] == "2020-01-01T00:00:00"
+    assert again["updated_at"] >= first["updated_at"]
+
+
+def test_a_seeded_recipe_is_marked_as_shipped(conn):
+    """So the page can say it came in the box rather than quoting the date the
+    add-on first booted."""
+    store.save_recipe(conn, a_recipe(), source="seed")
+    conn.commit()
+    assert store.list_recipes(conn)[0]["source"] == "seed"
