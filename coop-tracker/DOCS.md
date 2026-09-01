@@ -187,6 +187,48 @@ One notification per window, remembered across a restart. A window where nothing
 was due does not count as used, so a batch falling due at 20:30 still gets its
 reminder at 20:30.
 
+### Carrying the culture forward
+
+A batch seeded with liquid from the last one is ready in **two days instead of
+three**. The new grain arrives with a working culture rather than waiting for
+wild lactobacillus to find it.
+
+The important part is which half you keep:
+
+1. Feed the birds from the tub as usual.
+2. **Drain the liquid off into a jar** and put it in the fridge.
+3. **Bin or compost the wet grain.** Rinse the tub — a quick rinse, it does not
+   need to be spotless.
+4. Next batch: new grain, water, and 1–2 cups of the saved liquid stirred in.
+
+Keeping the *grain* back instead is the shortcut that goes wrong. Three-day-old
+wet grain is the substrate spoilage organisms have had three days to establish
+on; the drained brine is the culture without it. The add-on only ever offers to
+keep the liquid.
+
+When you press **Fed** it asks whether to keep the liquid. Answer yes and a jar
+appears on the card; the next **+ New batch** then offers to seed from it. It
+asks rather than assumes — the jar is in the fridge and only you can see it.
+
+**The jar is refused from a binned batch.** A batch thrown out for mould is
+exactly the culture you must not carry into the next tub, and that is the one
+moment somebody is most tempted to, with three days of waiting otherwise wasted.
+The button is not offered there and the API rejects it.
+
+Two things the card will warn about, and neither of them blocks anything:
+
+- **Past 7 days in the fridge**, the culture may have gone quiet. Seeding with
+  something exhausted gives you the wait you were avoiding, plus a false sense
+  that you were not waiting.
+- **Generation 8 or so.** Each pass is one more remove from what you started
+  with, and whatever is most vigorous gradually takes over. Worth a clean batch
+  now and then. The card counts the generations so you can notice; **Discard
+  jar** is the way back to a fresh start.
+
+A cold room still wins. If you set `ferment_days` to 4 because the utility room
+is 12°C in February, seeding shortens the wait relative to that — it does not
+override it.
+
 ### How much to make
 
 The suggestion comes from your configured flock: **five hens over a three-day
@@ -204,7 +246,7 @@ the first reminder arrives an interval after you last touched it.
 | Option | |
 |---|---|
 | `ferment_enabled` | Shows the card and enables the reminder. |
-| `ferment_days` | How long a batch sits before it is ready. Default 3. |
+| `ferment_days` | How long a batch sits before it is ready. Default 3. A seeded batch takes 2 unless this is lower. |
 | `ferment_stir_hours` | How long it may go unstirred before it counts as due. Default 12. |
 | `ferment_stir_times` | When reminders may fire. Default `08:00, 20:00`. |
 

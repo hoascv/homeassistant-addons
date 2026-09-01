@@ -67,7 +67,7 @@ except ImportError as e:
     SKLEARN_AVAILABLE = False
     SKLEARN_ERROR = str(e)
 
-APP_VERSION = "1.45.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.46.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("COOP_DB_PATH", "/data/coop.db")
 OPTIONS_PATH = os.environ.get("COOP_OPTIONS_PATH", "/data/options.json")
@@ -781,6 +781,7 @@ TRACKED_TABLES = {
     "nesting_boxes": "id",
     "ferment_batches": "id",
     "ferment_stirs": "id",
+    "ferment_starter": "id",
 }
 # Never serialised into the feed. A chicken's photo is fetched from its own
 # endpoint; nothing downstream wants it inline.
@@ -1245,6 +1246,8 @@ def _ferment_payload(conn):
     body["ferment_days"] = cfg["ferment_days"]
     body["stir_hours"] = cfg["stir_hours"]
     body["stir_times"] = cfg["stir_times"]
+    body["seeded_days"] = ferment.SEEDED_FERMENT_DAYS
+    body["starter_good_for_days"] = ferment.STARTER_GOOD_FOR_DAYS
     return body
 
 
@@ -1272,6 +1275,7 @@ def api_start_batch():
             grams=_grams(data),
             ferment_days=data.get("ferment_days") or cfg["ferment_days"],
             notes=data.get("notes"),
+            use_starter=bool(data.get("use_starter")),
         )
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
@@ -1297,13 +1301,27 @@ def api_close_batch(batch_id):
     Two outcomes rather than a delete: a batch thrown away for mould is a
     different event from one the birds ate, and how often that happens is worth
     being able to find out.
+
+    `save_liquid` drains the brine into the jar on the way out, so the next
+    batch can be seeded from it. ferment.close_batch refuses that on a
+    discarded batch, which is the point of asking here rather than separately.
     """
     data = request.get_json(force=True, silent=True) or {}
     conn = get_db()
     try:
-        ferment.close_batch(conn, batch_id, (data.get("outcome") or "").strip())
+        ferment.close_batch(conn, batch_id, (data.get("outcome") or "").strip(),
+                            save_liquid=bool(data.get("save_liquid")))
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
+    conn.commit()
+    return jsonify(_ferment_payload(conn))
+
+
+@app.route("/api/ferment/starter", methods=["DELETE"])
+def api_discard_starter():
+    """Throw the jar out — the way back to a clean, unseeded start."""
+    conn = get_db()
+    ferment.discard_starter(conn)
     conn.commit()
     return jsonify(_ferment_payload(conn))
 

@@ -2733,6 +2733,8 @@ function renderFerment(data) {
     : `Nothing fermenting. A ${data.ferment_days}-day batch for ${data.birds} `
       + `hens is about ${data.suggested_grams} g of dry feed.`;
 
+  renderStarter(data);
+
   document.getElementById("ferment-batches").innerHTML = data.batches.map((b) => {
     const since = b.hours_since_stir == null ? "—"
       : b.hours_since_stir < 1 ? "just now"
@@ -2743,7 +2745,8 @@ function renderFerment(data) {
           <span class="ferment-name">${escapeHtml(b.container)}</span>
           <span class="ferment-meta">
             ${b.state === "ready" ? "Ready to feed" : `Ready ${fmtDay(b.ready_at)}`}
-            · stirred ${since}${b.grams ? ` · ${Math.round(b.grams)} g` : ""}</span>
+            · stirred ${since}${b.grams ? ` · ${Math.round(b.grams)} g` : ""}`
+    + `${b.generation ? ` · seeded (gen ${b.generation})` : ""}</span>
         </div>
         <div class="ferment-actions">
           <button type="button" class="btn-small" data-stir="${b.id}">Stirred</button>
@@ -2756,6 +2759,50 @@ function renderFerment(data) {
       </div>`;
   }).join("");
 }
+
+// The jar of saved brine. Its whole reason for being on the card is that it is
+// the thing you forget: it lives in the fridge rather than next to the tubs, and
+// an unused culture quietly goes flat.
+function renderStarter(data) {
+  const box = document.getElementById("ferment-starter");
+  const jar = data.starter;
+  if (!jar) {
+    box.hidden = false;
+    box.className = "ferment-starter";
+    box.innerHTML = `<span class="ferment-starter-text">No saved liquid. `
+      + `Keep the brine next time you feed and the batch after that is ready `
+      + `in ${data.seeded_days} days.</span>`;
+    return;
+  }
+  const age = jar.age_days < 1 ? "today"
+    : jar.age_days < 2 ? "yesterday"
+    : `${Math.round(jar.age_days)} days ago`;
+  // Two different cautions, and they are not the same kind of thing: stale is
+  // about this jar, generations is about the line it came from. Show the one
+  // that would change what you do first.
+  const warning = jar.stale
+    ? `<span class="ferment-warn">Saved ${age} — past ${data.starter_good_for_days} `
+      + `days it may have gone quiet. Starting fresh is safer.</span>`
+    : jar.many_generations
+    ? `<span class="ferment-warn">Generation ${jar.generation} — worth starting `
+      + `a clean batch soon.</span>`
+    : "";
+  box.hidden = false;
+  box.className = `ferment-starter${jar.stale ? " starter-stale" : ""}`;
+  box.innerHTML = `
+    <span class="ferment-starter-text">🫙 Saved liquid ${age}`
+    + `${jar.generation ? ` · generation ${jar.generation}` : ""}. `
+    + `Seeds a ${data.seeded_days}-day batch.</span>
+    ${warning}
+    <button type="button" class="btn-small btn-quiet" id="starter-discard">Discard jar</button>`;
+}
+
+document.getElementById("ferment-starter").addEventListener("click", async (event) => {
+  if (!event.target.closest("#starter-discard")) return;
+  if (!confirm("Throw out the saved liquid? The next batch starts from scratch.")) return;
+  renderFerment(await fetch("api/ferment/starter", { method: "DELETE" })
+    .then((r) => r.json()));
+});
 
 function fmtDay(iso) {
   if (!iso) return "—";
@@ -2775,9 +2822,15 @@ document.getElementById("ferment-batches").addEventListener("click", async (even
   if (!close) return;
   if (close.dataset.outcome === "discarded"
       && !confirm("Throw this batch away? It will be recorded as binned.")) return;
+  // Only ever asked on a fed batch. Liquid from a binned one is the culture you
+  // are binning it to be rid of, so the question is not offered there at all.
+  const saveLiquid = close.dataset.outcome === "fed" && confirm(
+    "Keep the liquid to start the next batch?\n\n"
+    + "Drain the brine into a jar, bin the wet grain, rinse the tub. "
+    + "The next batch is then ready in two days instead of three.");
   renderFerment(await fetch(`api/ferment/batches/${close.dataset.close}/close`, {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ outcome: close.dataset.outcome }),
+    body: JSON.stringify({ outcome: close.dataset.outcome, save_liquid: saveLiquid }),
   }).then((r) => r.json()));
 });
 
@@ -2789,9 +2842,15 @@ document.getElementById("ferment-new").addEventListener("click", async () => {
     `How much dry feed, in grams?\n\nAbout ${current.suggested_grams} g covers `
     + `${current.birds} hens for ${current.ferment_days} days.`,
     current.suggested_grams);
+  // Offered rather than assumed: the jar might be in the fridge and the keeper
+  // might still want a clean start, and only they can see it.
+  const useStarter = !!current.starter && confirm(
+    `Seed it with the saved liquid?\n\nStir 1-2 cups of the brine into the new `
+    + `grain and water. Ready in ${current.seeded_days} days instead of `
+    + `${current.ferment_days}.`);
   const response = await fetch("api/ferment/batches", {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ container, grams }),
+    body: JSON.stringify({ container, grams, use_starter: useStarter }),
   });
   const body = await response.json();
   if (!response.ok) { alert(body.error || "Could not start that batch."); return; }

@@ -1,5 +1,31 @@
 # Changelog
 
+## 1.46.0
+
+- **Carry the culture forward.** When you press **Fed**, the add-on offers to
+  keep the liquid; the next batch can then be seeded from it and is ready in
+  **two days instead of three** — the new grain starts with a working culture
+  rather than waiting for wild lactobacillus to find it.
+- **The liquid, not the grain.** That distinction is the whole safety argument.
+  Three-day-old wet grain is the substrate spoilage organisms have had three
+  days to establish on; the drained brine is the culture without it. Keeping
+  the grain back is never offered.
+- **Never from a binned batch.** A batch thrown out for mould is exactly the
+  culture that must not reach the next tub — and that is the moment somebody is
+  most tempted to save it, with three days of waiting otherwise wasted. Not
+  offered in the UI, and rejected by the API.
+- **One jar, and it says its age.** Saving again replaces what was there rather
+  than stacking, because there is one jar in the fridge. Past 7 days the card
+  says the culture may have gone quiet; past about 8 generations it suggests a
+  clean batch, since whatever is most vigorous gradually takes over. Neither
+  refuses anything — **Discard jar** is the way back to a fresh start.
+- **A cold room still wins.** Seeding shortens the wait relative to your
+  `ferment_days`; it does not override a keeper who set 4 because the utility
+  room is 12°C in February.
+- Batches record which generation they are, and the row says `seeded (gen 2)`.
+- Upgrading from 1.45.0 adds the column in place; existing batches read as
+  unseeded, which they were. `ferment_starter` joins the change feed.
+
 ## 1.45.0
 
 - **Fermented feed.** Track tubs of soaking grain: start a batch, log the stirs,

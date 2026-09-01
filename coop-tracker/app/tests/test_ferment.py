@@ -415,3 +415,311 @@ def test_the_new_batch_prompt_offers_the_flock_sized_suggestion():
     js = _static("app.js")
     fn = js[js.index('document.getElementById("ferment-new")'):]
     assert "suggested_grams" in fn and "current.birds" in fn
+
+
+# --- backslopping: carrying the culture forward -------------------------------
+#
+# The liquid, not the grain. That distinction is the whole safety argument for
+# doing this: old wet grain is the substrate spoilage organisms have had three
+# days to establish on, and the drained brine is the culture without it. Several
+# of the tests below exist only to pin that the code cannot be talked into
+# carrying grain-adjacent risk forward — in particular, out of a binned batch.
+
+
+def test_feeding_a_batch_can_keep_the_liquid(conn):
+    ferment.start_batch(conn, "Tub 1", now=NOW)
+    batch_id = ferment.batches(conn, now=NOW)[0]["id"]
+    ferment.close_batch(conn, batch_id, ferment.FED, now=NOW, save_liquid=True)
+    conn.commit()
+
+    jar = ferment.current_starter(conn, now=NOW)
+    assert jar is not None
+    assert jar["from_batch_id"] == batch_id
+    assert jar["generation"] == 0
+
+
+def test_feeding_without_keeping_the_liquid_leaves_no_jar(conn):
+    """The default. Saving it is a thing you chose to do, not the consequence
+    of feeding your chickens."""
+    ferment.start_batch(conn, "Tub 1", now=NOW)
+    batch_id = ferment.batches(conn, now=NOW)[0]["id"]
+    ferment.close_batch(conn, batch_id, ferment.FED, now=NOW)
+    conn.commit()
+    assert ferment.current_starter(conn, now=NOW) is None
+
+
+def test_the_liquid_from_a_binned_batch_is_refused(conn):
+    """A batch is binned because something went wrong in it. That is exactly
+    the culture you must not carry into the next bucket, and the moment someone
+    would be most tempted to — three days of waiting are otherwise wasted."""
+    ferment.start_batch(conn, "Tub 1", now=NOW)
+    batch_id = ferment.batches(conn, now=NOW)[0]["id"]
+    with pytest.raises(ValueError, match="birds ate"):
+        ferment.close_batch(conn, batch_id, ferment.DISCARDED, now=NOW, save_liquid=True)
+    conn.commit()
+    assert ferment.current_starter(conn, now=NOW) is None
+    # And the batch is still open: a refused close changes nothing at all.
+    assert ferment.batches(conn, now=NOW) != []
+
+
+def test_a_seeded_batch_is_ready_sooner(conn):
+    ferment.start_batch(conn, "Tub 1", now=NOW)
+    first = ferment.batches(conn, now=NOW)[0]["id"]
+    ferment.close_batch(conn, first, ferment.FED, now=NOW, save_liquid=True)
+
+    ferment.start_batch(conn, "Tub 1", ferment_days=3, now=NOW, use_starter=True)
+    conn.commit()
+    batch = ferment.batches(conn, now=NOW)[0]
+    assert batch["ferment_days"] == ferment.SEEDED_FERMENT_DAYS
+    assert batch["state"] == ferment.ACTIVE
+    assert ferment.batches(conn, now=_hours(48))[0]["state"] == ferment.READY
+
+
+def test_a_cold_room_still_wins_over_the_shortcut(conn):
+    """Seeding shortens the wait; it does not overrule a keeper who set four
+    days because the utility room is 12°C in February. min(), not assignment."""
+    ferment.start_batch(conn, "Tub 1", now=NOW)
+    first = ferment.batches(conn, now=NOW)[0]["id"]
+    ferment.close_batch(conn, first, ferment.FED, now=NOW, save_liquid=True)
+
+    ferment.start_batch(conn, "Tub 1", ferment_days=1, now=NOW, use_starter=True)
+    conn.commit()
+    assert ferment.batches(conn, now=NOW)[0]["ferment_days"] == 1
+
+
+def test_using_the_jar_empties_it(conn):
+    """One jar, used once. Seeding two buckets from the same 1-2 cups is not a
+    thing the fridge can do, so it is not a thing the model should allow."""
+    ferment.start_batch(conn, "Tub 1", now=NOW)
+    first = ferment.batches(conn, now=NOW)[0]["id"]
+    ferment.close_batch(conn, first, ferment.FED, now=NOW, save_liquid=True)
+
+    ferment.start_batch(conn, "Tub 2", now=NOW, use_starter=True)
+    conn.commit()
+    assert ferment.current_starter(conn, now=NOW) is None
+    with pytest.raises(ValueError, match="no saved liquid"):
+        ferment.start_batch(conn, "Tub 3", now=NOW, use_starter=True)
+
+
+def test_generations_count_up_through_the_line(conn):
+    """Each pass is one more remove from the wild culture you started with.
+    Nothing refuses on it, but it is the only way to notice drift."""
+    ferment.start_batch(conn, "Tub 1", now=NOW)
+    previous = ferment.batches(conn, now=NOW)[0]["id"]
+    ferment.close_batch(conn, previous, ferment.FED, now=NOW, save_liquid=True)
+
+    for expected in (1, 2, 3):
+        ferment.start_batch(conn, "Tub 1", now=NOW, use_starter=True)
+        batch = ferment.batches(conn, now=NOW)[0]
+        assert batch["generation"] == expected
+        ferment.close_batch(conn, batch["id"], ferment.FED, now=NOW, save_liquid=True)
+    conn.commit()
+    assert ferment.current_starter(conn, now=NOW)["generation"] == 3
+
+
+def test_a_fresh_batch_after_a_seeded_line_starts_at_zero(conn):
+    """Declining the jar is starting over, and the generation count should say
+    so rather than remembering a lineage this batch is not part of."""
+    ferment.start_batch(conn, "Tub 1", now=NOW)
+    first = ferment.batches(conn, now=NOW)[0]["id"]
+    ferment.close_batch(conn, first, ferment.FED, now=NOW, save_liquid=True)
+
+    ferment.start_batch(conn, "Tub 2", now=NOW)
+    conn.commit()
+    assert ferment.batches(conn, now=NOW)[0]["generation"] == 0
+
+
+def test_saving_again_replaces_the_jar_rather_than_stacking(conn):
+    """There is one jar in the fridge. A list of five would be a model of
+    something that does not exist, and the keeper would have to guess which."""
+    for _ in range(3):
+        ferment.start_batch(conn, "Tub 1", now=NOW)
+        batch_id = ferment.batches(conn, now=NOW)[0]["id"]
+        ferment.close_batch(conn, batch_id, ferment.FED, now=NOW, save_liquid=True)
+    conn.commit()
+    unused = conn.execute(
+        "SELECT COUNT(*) AS n FROM ferment_starter WHERE used_at IS NULL").fetchone()["n"]
+    assert unused == 1
+
+
+def test_an_old_jar_is_flagged_but_never_refused(conn):
+    """A quiet culture gives you the wait you were avoiding plus a false sense
+    that you were not waiting. Worth saying; not worth blocking on — the keeper
+    can smell it and we cannot."""
+    ferment.start_batch(conn, "Tub 1", now=NOW)
+    batch_id = ferment.batches(conn, now=NOW)[0]["id"]
+    ferment.close_batch(conn, batch_id, ferment.FED, now=NOW, save_liquid=True)
+    conn.commit()
+
+    fresh = ferment.current_starter(conn, now=_hours(24))
+    assert fresh["stale"] is False and fresh["age_days"] == 1.0
+
+    old = _hours(24 * (ferment.STARTER_GOOD_FOR_DAYS + 1))
+    assert ferment.current_starter(conn, now=old)["stale"] is True
+    ferment.start_batch(conn, "Tub 2", now=old, use_starter=True)
+    assert ferment.batches(conn, now=old)[0]["generation"] == 1
+
+
+def test_a_long_line_suggests_starting_clean(conn):
+    conn.execute(
+        "INSERT INTO ferment_starter (saved_at, generation) VALUES (?, ?)",
+        (NOW.isoformat(timespec="seconds"), ferment.STARTER_GENERATION_HINT - 2))
+    conn.commit()
+    assert ferment.current_starter(conn, now=NOW)["many_generations"] is False
+
+    ferment.discard_starter(conn)
+    conn.execute(
+        "INSERT INTO ferment_starter (saved_at, generation) VALUES (?, ?)",
+        (NOW.isoformat(timespec="seconds"), ferment.STARTER_GENERATION_HINT - 1))
+    conn.commit()
+    assert ferment.current_starter(conn, now=NOW)["many_generations"] is True
+
+
+def test_discarding_the_jar_is_the_way_back_to_a_clean_start(conn):
+    ferment.start_batch(conn, "Tub 1", now=NOW)
+    batch_id = ferment.batches(conn, now=NOW)[0]["id"]
+    ferment.close_batch(conn, batch_id, ferment.FED, now=NOW, save_liquid=True)
+    ferment.discard_starter(conn)
+    conn.commit()
+    assert ferment.current_starter(conn, now=NOW) is None
+
+
+def test_the_jar_survives_the_batch_it_came_from_being_deleted(conn):
+    """Deliberately no foreign key. Pruning old history should not silently
+    take the culture in the fridge with it."""
+    ferment.start_batch(conn, "Tub 1", now=NOW)
+    batch_id = ferment.batches(conn, now=NOW)[0]["id"]
+    ferment.close_batch(conn, batch_id, ferment.FED, now=NOW, save_liquid=True)
+    conn.execute("DELETE FROM ferment_batches WHERE id = ?", (batch_id,))
+    conn.commit()
+    assert ferment.current_starter(conn, now=NOW) is not None
+
+
+def test_the_summary_carries_the_jar(conn):
+    assert ferment.summary(conn, 5, now=NOW)["starter"] is None
+    ferment.start_batch(conn, "Tub 1", now=NOW)
+    batch_id = ferment.batches(conn, now=NOW)[0]["id"]
+    ferment.close_batch(conn, batch_id, ferment.FED, now=NOW, save_liquid=True)
+    conn.commit()
+    assert ferment.summary(conn, 5, now=NOW)["starter"]["generation"] == 0
+
+
+def test_seeding_an_unknown_batch_is_refused(conn):
+    with pytest.raises(ValueError, match="no such batch"):
+        ferment.save_starter(conn, 999)
+
+
+# --- backslopping over HTTP ---------------------------------------------------
+
+
+def test_the_full_cycle_through_the_routes(client, set_options):
+    """Feed, keep the liquid, seed the next one — the loop the keeper actually
+    runs, start to finish."""
+    set_options(ferment_enabled=True, flock_isabrown_count=5)
+
+    first = client.post("/api/ferment/batches", json={"container": "Tub 1"}).get_json()
+    batch_id = first["batches"][0]["id"]
+    assert first["starter"] is None
+
+    fed = client.post(f"/api/ferment/batches/{batch_id}/close",
+                      json={"outcome": "fed", "save_liquid": True}).get_json()
+    assert fed["starter"]["generation"] == 0
+    assert fed["seeded_days"] == ferment.SEEDED_FERMENT_DAYS
+
+    seeded = client.post("/api/ferment/batches",
+                         json={"container": "Tub 1", "use_starter": True}).get_json()
+    assert seeded["batches"][0]["generation"] == 1
+    assert seeded["batches"][0]["ferment_days"] == ferment.SEEDED_FERMENT_DAYS
+    assert seeded["starter"] is None
+
+
+def test_seeding_with_an_empty_fridge_is_a_400(client, set_options):
+    set_options(ferment_enabled=True)
+    response = client.post("/api/ferment/batches",
+                           json={"container": "Tub 1", "use_starter": True})
+    assert response.status_code == 400
+    assert "saved liquid" in response.get_json()["error"]
+
+
+def test_keeping_the_liquid_from_a_binned_batch_is_a_400(client, set_options):
+    set_options(ferment_enabled=True)
+    started = client.post("/api/ferment/batches", json={"container": "Tub 1"}).get_json()
+    batch_id = started["batches"][0]["id"]
+    response = client.post(f"/api/ferment/batches/{batch_id}/close",
+                           json={"outcome": "discarded", "save_liquid": True})
+    assert response.status_code == 400
+    assert client.get("/api/ferment").get_json()["starter"] is None
+
+
+def test_the_jar_can_be_thrown_out_over_http(client, set_options):
+    set_options(ferment_enabled=True)
+    started = client.post("/api/ferment/batches", json={"container": "Tub 1"}).get_json()
+    client.post(f"/api/ferment/batches/{started['batches'][0]['id']}/close",
+                json={"outcome": "fed", "save_liquid": True})
+    assert client.get("/api/ferment").get_json()["starter"] is not None
+    assert client.delete("/api/ferment/starter").get_json()["starter"] is None
+
+
+def test_the_starter_table_is_in_the_change_feed(client):
+    """The lineage of the culture is data about the flock's feed, so a
+    downstream pipeline should see it like everything else."""
+    import app as coop
+    assert "ferment_starter" in coop.TRACKED_TABLES
+
+
+# --- the jar on the card ------------------------------------------------------
+
+
+def test_the_jar_is_shown_on_the_card():
+    html, js = _static("index.html"), _static("app.js")
+    assert "ferment-starter" in html
+    assert "renderStarter(" in js
+
+
+def test_keeping_the_liquid_is_only_offered_on_a_fed_batch():
+    """Never on a binned one. The server refuses it either way, but a UI that
+    asks the question at all invites somebody to answer yes."""
+    js = _static("app.js")
+    handler = js[js.index('document.getElementById("ferment-batches").addEventListener'):]
+    handler = handler[:handler.index("});")]
+    assert 'close.dataset.outcome === "fed" && confirm(' in handler
+    assert "save_liquid: saveLiquid" in handler
+
+
+def test_an_empty_fridge_offers_no_seeding():
+    """The prompt is conditional on there being a jar, so declining is the
+    default rather than a dialog you dismiss every time."""
+    js = _static("app.js")
+    fn = js[js.index('document.getElementById("ferment-new")'):]
+    assert "!!current.starter && confirm(" in fn
+    assert "use_starter: useStarter" in fn
+
+
+def test_a_stale_jar_is_the_only_starter_state_that_is_coloured():
+    css = _static("style.css")
+    assert ".starter-stale" in css and ".ferment-warn" in css
+
+
+def test_an_existing_install_gains_the_generation_column():
+    """1.45.0 shipped ferment_batches without it, and CREATE TABLE IF NOT
+    EXISTS will not add a column to a table that is already there. Without the
+    migration every read of a batch would fail on an add-on that had been
+    fermenting perfectly happily the day before."""
+    import sqlite3
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute("""
+        CREATE TABLE ferment_batches (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, container TEXT NOT NULL,
+            started_at TEXT NOT NULL, ferment_days INTEGER NOT NULL DEFAULT 3,
+            grams REAL, notes TEXT, closed_at TEXT, outcome TEXT)
+    """)
+    conn.execute("INSERT INTO ferment_batches (container, started_at) VALUES (?, ?)",
+                 ("Tub 1", NOW.isoformat(timespec="seconds")))
+
+    ferment.create_schema(conn)
+    conn.commit()
+
+    # The batch that predates the feature reads as unseeded, which it was.
+    assert ferment.batches(conn, now=NOW)[0]["generation"] == 0
+    ferment.create_schema(conn)  # and running it twice is not an error

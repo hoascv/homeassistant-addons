@@ -22,6 +22,23 @@ import datetime
 # in February and a warm kitchen in July are not the same place.
 DEFAULT_FERMENT_DAYS = 3
 
+# A batch seeded with liquid from the last one starts with a working culture
+# rather than waiting for wild lactobacillus to find it, so it gets there
+# sooner. Two days is the usual answer; it is a floor on the setting rather
+# than a replacement for it, because a cold room still slows it down.
+SEEDED_FERMENT_DAYS = 2
+
+# How long saved liquid stays worth using, in days. It is a live culture in a
+# jar in the fridge: it does not spoil so much as go quiet, and seeding with
+# something exhausted gives you the wait you were trying to avoid plus a false
+# sense that you did not.
+STARTER_GOOD_FOR_DAYS = 7
+
+# Generations before it is worth starting clean. Backslopping indefinitely lets
+# whatever is most vigorous take over, which is not always what you want. This
+# is advice on the page, never a refusal — it is the keeper's jar.
+STARTER_GENERATION_HINT = 8
+
 # How long a batch may go unstirred before it is at risk. Twice a day is the
 # common advice, so twelve hours is the interval that produces it.
 DEFAULT_STIR_HOURS = 12
@@ -50,7 +67,27 @@ SCHEMA = (
         -- 'fed' or 'discarded'. A batch thrown away for mould is not the same
         -- event as one the birds ate, and a keeper wanting to know how often
         -- that happens should be able to find out.
-        outcome TEXT
+        outcome TEXT,
+        -- How many times the culture in this batch has been carried forward.
+        -- 0 is a batch started from nothing; 1 was seeded from a generation-0
+        -- batch, and so on. Worth keeping because a culture drifts with each
+        -- pass and the number is the only way to notice.
+        generation INTEGER NOT NULL DEFAULT 0
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS ferment_starter (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        saved_at TEXT NOT NULL,
+        -- The batch the liquid was drained from, and the one it later seeded.
+        -- Kept as plain ids without a foreign key: a jar outlives the batch it
+        -- came from, and deleting old history should not take the culture's
+        -- provenance with it.
+        from_batch_id INTEGER,
+        used_at TEXT,
+        used_by_batch_id INTEGER,
+        generation INTEGER NOT NULL DEFAULT 0,
+        notes TEXT
     )
     """,
     """
@@ -62,12 +99,18 @@ SCHEMA = (
     """,
     "CREATE INDEX IF NOT EXISTS idx_ferment_open ON ferment_batches(closed_at, started_at)",
     "CREATE INDEX IF NOT EXISTS idx_ferment_stirs ON ferment_stirs(batch_id, stirred_at)",
+    "CREATE INDEX IF NOT EXISTS idx_ferment_starter ON ferment_starter(used_at, saved_at)",
 )
 
 
 def create_schema(conn):
     for statement in SCHEMA:
         conn.execute(statement)
+    # CREATE TABLE IF NOT EXISTS handles a fresh install; an add-on that already
+    # ran 1.45.0 has the table without this column.
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(ferment_batches)")}
+    if "generation" not in columns:
+        conn.execute("ALTER TABLE ferment_batches ADD COLUMN generation INTEGER NOT NULL DEFAULT 0")
 
 
 def _now_iso(now=None):
@@ -101,17 +144,45 @@ def suggested_grams(birds, days=DEFAULT_FERMENT_DAYS, per_bird=GRAMS_PER_BIRD_PE
 
 
 def start_batch(conn, container, grams=None, ferment_days=DEFAULT_FERMENT_DAYS,
-                notes=None, now=None):
+                notes=None, now=None, use_starter=False):
+    """Begin a batch, optionally seeded with saved liquid from the last one.
+
+    Seeding is the whole point of keeping the jar: the new grain arrives with a
+    working culture instead of waiting for wild lactobacillus to find it, and
+    gets there in about two days rather than three or four.
+
+    The liquid is carried forward and the *grain* is not, which is the part
+    that matters. Old wet grain is where spoilage organisms have had days to
+    establish; the drained liquid is the culture without the substrate they
+    were living on.
+    """
     container = (container or "").strip()
     if not container:
         raise ValueError("a batch needs a container")
     days = max(1, min(14, int(ferment_days or DEFAULT_FERMENT_DAYS)))
 
+    starter = current_starter(conn, now=now) if use_starter else None
+    generation = 0
+    if use_starter:
+        if starter is None:
+            raise ValueError("there is no saved liquid to start from")
+        generation = starter["generation"] + 1
+        # A seeded batch is faster, but the setting is still a ceiling: a cold
+        # room slows a live culture down too, so this shortens rather than
+        # overrides.
+        days = min(days, SEEDED_FERMENT_DAYS)
+
     cursor = conn.execute(
-        "INSERT INTO ferment_batches (container, started_at, ferment_days, grams, notes) "
-        "VALUES (?, ?, ?, ?, ?)",
-        (container, _now_iso(now), days, grams, (notes or "").strip() or None),
+        "INSERT INTO ferment_batches "
+        "(container, started_at, ferment_days, grams, notes, generation) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (container, _now_iso(now), days, grams, (notes or "").strip() or None, generation),
     )
+    if starter is not None:
+        conn.execute(
+            "UPDATE ferment_starter SET used_at = ?, used_by_batch_id = ? WHERE id = ?",
+            (_now_iso(now), cursor.lastrowid, starter["id"]),
+        )
     # A batch starts stirred. You just mixed the grain into the water, and
     # without this the first reminder fires an interval after starting rather
     # than an interval after the last time anybody touched it.
@@ -135,14 +206,83 @@ def log_stir(conn, batch_id, now=None):
     )
 
 
-def close_batch(conn, batch_id, outcome, now=None):
-    """Take a batch out of the rotation, as fed or as thrown away."""
+# --- the jar ------------------------------------------------------------------
+
+
+def save_starter(conn, batch_id, notes=None, now=None):
+    """Keep the liquid from a batch to seed the next one.
+
+    Only one jar is kept. Saving again replaces what was there rather than
+    accumulating: there is one jar in the fridge, and a list of five would be a
+    model of something that does not exist.
+    """
+    row = conn.execute(
+        "SELECT generation FROM ferment_batches WHERE id = ?", (batch_id,)).fetchone()
+    if row is None:
+        raise ValueError("no such batch")
+
+    conn.execute("DELETE FROM ferment_starter WHERE used_at IS NULL")
+    conn.execute(
+        "INSERT INTO ferment_starter (saved_at, from_batch_id, generation, notes) "
+        "VALUES (?, ?, ?, ?)",
+        (_now_iso(now), batch_id, row["generation"], (notes or "").strip() or None),
+    )
+
+
+def discard_starter(conn):
+    """Throw the jar out — the way back to a clean start."""
+    conn.execute("DELETE FROM ferment_starter WHERE used_at IS NULL")
+
+
+def current_starter(conn, now=None):
+    """The jar in the fridge, or None.
+
+    Carries its age and how many times the culture has been passed on, because
+    both are things the keeper should decide about rather than have decided for
+    them: this never refuses to seed a batch, it only says what it knows.
+    """
+    row = conn.execute(
+        "SELECT * FROM ferment_starter WHERE used_at IS NULL ORDER BY saved_at DESC LIMIT 1"
+    ).fetchone()
+    if row is None:
+        return None
+
+    now = now or datetime.datetime.now()
+    saved = _parse(row["saved_at"])
+    age_days = ((now - saved).total_seconds() / 86400.0) if saved else None
+    return {
+        "id": row["id"],
+        "saved_at": row["saved_at"],
+        "from_batch_id": row["from_batch_id"],
+        "generation": row["generation"],
+        "notes": row["notes"],
+        "age_days": round(age_days, 1) if age_days is not None else None,
+        # Not "bad" — a quiet culture gives you the wait you were avoiding plus
+        # a false sense that you were not waiting.
+        "stale": bool(age_days is not None and age_days > STARTER_GOOD_FOR_DAYS),
+        "many_generations": row["generation"] + 1 >= STARTER_GENERATION_HINT,
+    }
+
+
+def close_batch(conn, batch_id, outcome, now=None, save_liquid=False):
+    """Take a batch out of the rotation, as fed or as thrown away.
+
+    `save_liquid` drains the brine into the jar on the way out, which is the
+    step that makes the next batch a two-day one. It is deliberately refused on
+    a discarded batch: a batch thrown out for mould is exactly the culture you
+    do not want to carry into the next bucket, and the one moment someone would
+    be tempted to save it is the moment it is most expensive to.
+    """
     if outcome not in (FED, DISCARDED):
         raise ValueError(f"outcome must be {FED!r} or {DISCARDED!r}")
+    if save_liquid and outcome != FED:
+        raise ValueError("only keep the liquid from a batch the birds ate")
     conn.execute(
         "UPDATE ferment_batches SET closed_at = ?, outcome = ? WHERE id = ? AND closed_at IS NULL",
         (_now_iso(now), outcome, batch_id),
     )
+    if save_liquid:
+        save_starter(conn, batch_id, now=now)
 
 
 def _state(row, last_stir, now):
@@ -186,6 +326,7 @@ def batches(conn, include_closed=False, now=None, stir_hours=DEFAULT_STIR_HOURS)
             "ferment_days": row["ferment_days"],
             "grams": row["grams"],
             "notes": row["notes"],
+            "generation": row["generation"],
             "state": state,
             "outcome": row["outcome"],
             "ready_at": ready_at.isoformat() if ready_at else None,
@@ -208,10 +349,6 @@ def due_for_stir(conn, now=None, stir_hours=DEFAULT_STIR_HOURS):
     return [b for b in batches(conn, now=now, stir_hours=stir_hours) if b["stir_due"]]
 
 
-def ready_batches(conn, now=None):
-    return [b for b in batches(conn, now=now) if b["state"] == READY]
-
-
 def stir_message(due):
     """What the notification says.
 
@@ -232,6 +369,7 @@ def summary(conn, birds, now=None, stir_hours=DEFAULT_STIR_HOURS):
     open_batches = batches(conn, now=now, stir_hours=stir_hours)
     return {
         "batches": open_batches,
+        "starter": current_starter(conn, now=now),
         "open": len(open_batches),
         "ready": sum(1 for b in open_batches if b["state"] == READY),
         "stir_due": sum(1 for b in open_batches if b["stir_due"]),
