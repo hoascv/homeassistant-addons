@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.47.1
+
+- **The day counter read a day ahead for the last hour of every day.** A batch
+  three days and twenty-three hours old showed **day 4 of 11**: its age was
+  rounded to the nearest tenth before the card floored it, and 3.958 rounds up.
+  At the eleven-day line the row said **day 11 of 11** while the batch was
+  still ready and no bin warning had gone out. Age now truncates — a batch is
+  not four days old until it is.
+
 ## 1.47.0
 
 - **A feeding window, and an end to it.** A batch now has three lives rather

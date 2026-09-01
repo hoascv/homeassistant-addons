@@ -988,3 +988,20 @@ def test_an_unreadable_start_time_does_not_break_the_card(conn):
     assert batch["state"] == ferment.ACTIVE
     assert batch["age_days"] is None and batch["use_by"] is None
     assert batch["spent"] is False
+
+
+def test_the_day_counter_never_reads_ahead_of_itself(conn):
+    """The card floors age_days to say "day 5 of 11". Rounding to nearest hands
+    it 4.0 for a batch three days and twenty-three hours old, so the row read a
+    day ahead for the last hour of every day — and at the eleven-day line it
+    said "day 11 of 11" while the batch was still ready and no bin warning had
+    fired. Age truncates: a batch is not four days old until it is."""
+    import math
+    ferment.start_batch(conn, "Tub 1", ferment_days=3, now=NOW)
+    conn.commit()
+    for hours, expected_day in ((23, 0), (95, 3), (263, 10), (264, 11)):
+        now = NOW + datetime.timedelta(hours=hours)
+        batch = ferment.batches(conn, now=now, max_age_days=11)[0]
+        assert math.floor(batch["age_days"]) == expected_day, f"at {hours}h"
+        # And the counter never claims the window has closed before it has.
+        assert batch["spent"] is (expected_day >= 11), f"at {hours}h"

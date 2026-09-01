@@ -16,6 +16,7 @@ Kept out of app.py, which is already 3,600 lines: the schema, the state machine
 and the arithmetic all live here, and app.py gains routes only.
 """
 import datetime
+import math
 
 # How long a batch ferments before it is ready to feed. Three days is the usual
 # answer at room temperature; it is a setting because a cold Danish utility room
@@ -355,7 +356,11 @@ def batches(conn, include_closed=False, now=None, stir_hours=DEFAULT_STIR_HOURS,
             "outcome": row["outcome"],
             "ready_at": ready_at.isoformat() if ready_at else None,
             "use_by": use_by.isoformat() if use_by else None,
-            "age_days": round(age_days, 1) if age_days is not None else None,
+            # Truncated, never rounded to nearest. The card floors this to say
+            # "day 5 of 11", and round() would hand it 4.0 for a batch 3 days
+            # 23 hours old — reading a day ahead of the truth for the last hour
+            # of every day, including at the line where the bin warning starts.
+            "age_days": math.floor(age_days * 10) / 10 if age_days is not None else None,
             # Ready, and still inside the window where feeding it is a good
             # idea. Kept apart from the state so the card can say "day 5 of 11"
             # while the reminder only has to ask one question.
