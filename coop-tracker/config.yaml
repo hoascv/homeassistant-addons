@@ -1,5 +1,5 @@
 name: "Coop Tracker"
-version: "1.46.0"
+version: "1.47.0"
 slug: "coop-tracker"
 description: "Log egg collection, coop cleaning, and feeding for your chickens"
 url: "https://github.com/hoascv/homeassistant-addons/tree/main/coop-tracker"
@@ -44,6 +44,15 @@ options:
   # interval, because "every 12 hours" lands at 3am half the time and a
   # notification nobody can act on is one you learn to ignore.
   ferment_stir_times: "08:00, 20:00"
+  # Where stir reminders go. Blank falls back to notify_service, so the common
+  # case needs no second setting; fermenting is a twice-a-day job and egg
+  # collection a once-a-day one, so a household may want them on different
+  # phones.
+  ferment_notify_service: ""
+  # How long a batch stays good to feed from, counted from the day it was
+  # mixed. Past this it is spent: the culture has run out of sugar and stopped
+  # holding the spoilage organisms back, and the tub still looks fine.
+  ferment_max_age_days: 11
   flock_isabrown_count: 3
   flock_sussex_count: 2
   supermarket_egg_price: 2.5
@@ -64,6 +73,8 @@ schema:
   ferment_days: "int(1,14)"
   ferment_stir_hours: "int(2,48)"
   ferment_stir_times: "str?"
+  ferment_notify_service: "str?"
+  ferment_max_age_days: "int(2,60)"
   flock_isabrown_count: "int(0,100)"
   flock_sussex_count: "int(0,100)"
   supermarket_egg_price: "float(0,100)"

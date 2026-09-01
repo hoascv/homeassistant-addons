@@ -202,10 +202,28 @@ def test_the_summary_counts_what_needs_attention(conn):
 
 @pytest.fixture
 def notified(monkeypatch):
-    """Capture notifications instead of sending them."""
+    """Capture notifications instead of sending them.
+
+    A plain list of messages, because that is what almost every test here cares
+    about. Where the *destination* matters, `notified.services` has it — kept
+    beside rather than inside so the common assertion stays a string compare.
+    """
     import app as coop
-    sent = []
-    monkeypatch.setattr(coop, "send_notification", lambda msg, title=None: sent.append(msg))
+
+    class _Sent(list):
+        """A list of messages that also remembers where each one went. A plain
+        list will not take an attribute, and the destination is a side concern
+        for all but a couple of tests."""
+        services = None
+
+    sent = _Sent()
+    sent.services = []
+
+    def _capture(msg, title=None, service=None):
+        sent.append(msg)
+        sent.services.append(service)
+
+    monkeypatch.setattr(coop, "send_notification", _capture)
     monkeypatch.setattr(coop, "_stir_last_notified", None)
     return sent
 
@@ -392,9 +410,10 @@ def test_the_card_is_hidden_when_the_feature_is_off():
     assert "data.enabled" in fn and "card.hidden = true" in fn
 
 
-def test_only_the_overdue_state_is_coloured():
-    """It is the one thing on the card worth reacting to today; colouring the
-    rest would bury it."""
+def test_only_states_needing_action_today_are_coloured():
+    """Originally this was "only the overdue stir". A tub past its window earns
+    a colour on the same grounds and no other state does — colouring the
+    fermenting ones too would bury both."""
     css = _static("style.css")
     assert ".stir-due" in css
     assert "stir it" in css
@@ -723,3 +742,249 @@ def test_an_existing_install_gains_the_generation_column():
     # The batch that predates the feature reads as unseeded, which it was.
     assert ferment.batches(conn, now=NOW)[0]["generation"] == 0
     ferment.create_schema(conn)  # and running it twice is not an error
+
+
+# --- the feeding window and the end of it -------------------------------------
+#
+# A batch has three lives, not two: it ferments, then you feed from it, then it
+# is spent. The third is the one people miss, because a tub that has been ready
+# for a week looks exactly like one that was ready this morning. Nothing about
+# the batch announces that it has gone over — only the clock knows.
+
+
+def _days(n):
+    return NOW + datetime.timedelta(days=n)
+
+
+def test_a_batch_moves_from_fermenting_to_ready_to_spent(conn):
+    ferment.start_batch(conn, "Tub 1", ferment_days=3, now=NOW)
+    conn.commit()
+
+    def state_on(day):
+        return ferment.batches(conn, now=_days(day), max_age_days=11)[0]["state"]
+
+    assert state_on(1) == ferment.ACTIVE
+    assert state_on(3) == ferment.READY
+    assert state_on(10) == ferment.READY
+    assert state_on(11) == ferment.SPENT
+    assert state_on(20) == ferment.SPENT
+
+
+def test_the_row_counts_the_days_of_the_window(conn):
+    """"Day 5 of 11" is the useful fact. "Ready" stopped being useful on day 3
+    and says nothing about how much longer you have."""
+    ferment.start_batch(conn, "Tub 1", ferment_days=3, now=NOW)
+    conn.commit()
+    batch = ferment.batches(conn, now=_days(5), max_age_days=11)[0]
+    assert batch["age_days"] == 5.0
+    assert batch["use_by"] == _days(11).isoformat()
+    assert batch["feed_due"] is True and batch["spent"] is False
+
+
+def test_a_spent_batch_is_no_longer_offered_for_feeding(conn):
+    ferment.start_batch(conn, "Tub 1", now=NOW)
+    conn.commit()
+    assert ferment.ready_to_feed(conn, now=_days(5), max_age_days=11) != []
+    assert ferment.ready_to_feed(conn, now=_days(12), max_age_days=11) == []
+    assert [b["container"] for b in ferment.spent(conn, now=_days(12), max_age_days=11)] == ["Tub 1"]
+
+
+def test_a_closed_batch_never_goes_spent(conn):
+    """It left the rotation. Nagging somebody to bin a tub they emptied last
+    week is how a reminder loses its authority."""
+    ferment.start_batch(conn, "Tub 1", now=NOW)
+    batch_id = ferment.batches(conn, now=NOW)[0]["id"]
+    ferment.close_batch(conn, batch_id, ferment.FED, now=_days(4))
+    conn.commit()
+    assert ferment.spent(conn, now=_days(30), max_age_days=11) == []
+    closed = ferment.batches(conn, include_closed=True, now=_days(30), max_age_days=11)[0]
+    assert closed["state"] == ferment.FED and closed["spent"] is False
+
+
+def test_the_window_cannot_close_before_it_opens(conn, set_options):
+    """A max age below ferment_days would make a batch spent before it was ever
+    ready — a state the settings can express and the tub cannot be in."""
+    import app as coop
+    set_options(ferment_days=8, ferment_max_age_days=3)
+    assert coop.get_ferment_config()["max_age_days"] == 9
+
+
+def test_the_summary_counts_what_is_past_it(conn):
+    ferment.start_batch(conn, "Tub 1", now=NOW)
+    ferment.start_batch(conn, "Tub 2", now=_days(9))
+    conn.commit()
+    body = ferment.summary(conn, 5, now=_days(12), max_age_days=11)
+    assert body["spent"] == 1
+    assert body["ready"] == 1
+    assert body["max_age_days"] == 11
+
+
+# --- what the one notification says -------------------------------------------
+
+
+def test_nothing_to_say_means_no_message():
+    assert ferment.reminder_message([], [], []) is None
+
+
+def test_the_three_concerns_arrive_as_one_message(conn):
+    """Three pushes landing together at 08:00 is how you teach somebody to
+    swipe the whole lot away — including the stir reminder, which is the one
+    that cannot afford to be ignored."""
+    ferment.start_batch(conn, "Old tub", now=NOW)
+    ferment.start_batch(conn, "Ready tub", now=_days(8))
+    conn.commit()
+    now = _days(12)
+    message = ferment.reminder_message(
+        ferment.due_for_stir(conn, now=now),
+        ferment.ready_to_feed(conn, now=now, max_age_days=11),
+        ferment.spent(conn, now=now, max_age_days=11),
+        max_age_days=11)
+    assert "Old tub" in message and "Ready tub" in message
+    # Stirring stops mould, binning stops somebody feeding spoiled grain, and
+    # feeding will still be true in an hour. Worst-to-get-wrong first.
+    assert message.index("Stir") < message.index("Bin ") < message.index("Feed from")
+
+
+def test_the_bin_message_is_blunt(conn):
+    ferment.start_batch(conn, "Tub 1", now=NOW)
+    conn.commit()
+    over = ferment.spent(conn, now=_days(13), max_age_days=11)
+    message = ferment.spent_message(over, max_age_days=11)
+    assert "Bin Tub 1" in message
+    assert "13 days" in message and "11-day" in message
+    assert "Do not feed it" in message
+
+
+def test_several_spent_tubs_are_named_together(conn):
+    ferment.start_batch(conn, "Tub 1", now=NOW)
+    ferment.start_batch(conn, "Tub 2", now=NOW)
+    conn.commit()
+    message = ferment.spent_message(ferment.spent(conn, now=_days(12), max_age_days=11),
+                                    max_age_days=11)
+    assert "Tub 1" in message and "Tub 2" in message and "Do not feed them" in message
+
+
+def test_the_feed_message_says_which_tub_to_use_first(conn):
+    """Once three tubs are ready, "ready" is not the useful fact — which one is
+    closest to going over is."""
+    ferment.start_batch(conn, "Older", now=NOW)
+    ferment.start_batch(conn, "Newer", now=_days(4))
+    conn.commit()
+    message = ferment.feed_message(
+        ferment.ready_to_feed(conn, now=_days(8), max_age_days=11), max_age_days=11)
+    assert "Use Older first" in message and "day 8 of 11" in message
+
+
+def test_one_ready_tub_is_named_plainly(conn):
+    ferment.start_batch(conn, "Tub 1", now=NOW)
+    conn.commit()
+    message = ferment.feed_message(
+        ferment.ready_to_feed(conn, now=_days(5), max_age_days=11), max_age_days=11)
+    assert message == "Feed from Tub 1 — day 5 of 11."
+
+
+def test_no_feed_or_spent_message_without_batches():
+    assert ferment.feed_message([]) is None
+    assert ferment.spent_message([]) is None
+
+
+# --- where the reminder goes --------------------------------------------------
+
+
+def test_stir_reminders_can_have_their_own_service(conn, set_options, notified):
+    """Fermenting is a twice-a-day job and collecting eggs a once-a-day one, so
+    a household may well want them on different phones."""
+    import app as coop
+    _configure(set_options, notify_service="mobile_app_eggs",
+               ferment_notify_service="mobile_app_tubs")
+    ferment.start_batch(conn, "Tub 1", now=NOW)
+    conn.commit()
+    coop._ferment_stir_tick(datetime.datetime(2026, 9, 1, 20, 5), conn)
+    assert notified.services == ["mobile_app_tubs"]
+
+
+def test_a_blank_ferment_service_falls_back_to_the_egg_one(conn, set_options, notified):
+    """The common case is one phone. Nobody should have to fill in two options
+    to get it."""
+    import app as coop
+    _configure(set_options, notify_service="mobile_app_eggs",
+               ferment_notify_service="")
+    ferment.start_batch(conn, "Tub 1", now=NOW)
+    conn.commit()
+    coop._ferment_stir_tick(datetime.datetime(2026, 9, 1, 20, 5), conn)
+    assert notified.services == ["mobile_app_eggs"]
+
+
+def test_a_ferment_service_works_without_an_egg_reminder_service(conn, set_options, notified):
+    """Somebody who wants stir alerts and no egg reminder should not have to
+    turn on the egg reminder to get them."""
+    import app as coop
+    _configure(set_options, notify_service="",
+               ferment_notify_service="mobile_app_tubs")
+    ferment.start_batch(conn, "Tub 1", now=NOW)
+    conn.commit()
+    coop._ferment_stir_tick(datetime.datetime(2026, 9, 1, 20, 5), conn)
+    assert notified.services == ["mobile_app_tubs"]
+
+
+def test_a_spent_batch_notifies_even_with_nothing_to_stir(conn, set_options, notified):
+    """The stir clock is what used to decide whether anything was said at all.
+    A tub eleven days old that was stirred an hour ago still has to be reported."""
+    import app as coop
+    _configure(set_options)
+    ferment.start_batch(conn, "Tub 1", now=NOW)
+    conn.commit()
+    later = datetime.datetime(2026, 9, 13, 8, 5)
+    ferment.log_stir(conn, ferment.batches(conn, now=later)[0]["id"], now=later)
+    conn.commit()
+    coop._ferment_stir_tick(later, conn)
+    assert len(notified) == 1 and "Bin Tub 1" in notified[0]
+
+
+def test_the_ferment_service_is_reported_for_diagnosis(client, set_options):
+    set_options(ferment_enabled=True, ferment_notify_service="mobile_app_tubs")
+    body = client.get("/api/ferment").get_json()
+    assert body["notify_service"] == "mobile_app_tubs"
+    assert body["max_age_days"] == 11
+
+
+# --- the spent state on the card ----------------------------------------------
+
+
+def test_a_batch_past_the_window_is_coloured_too():
+    """The rule was "only the overdue stir is coloured". A tub to bin earns it
+    on the same grounds: it needs acting on today."""
+    css = _static("style.css")
+    assert ".batch-spent" in css and "bin it" in css
+
+
+def test_binning_wins_over_stirring_when_both_apply():
+    """There is no point stirring something you are about to throw away."""
+    css = _static("style.css")
+    assert ".batch-spent.stir-due .ferment-name::after" in css
+
+
+def test_a_spent_batch_offers_no_stir_button():
+    js = _static("app.js")
+    fn = js[js.index("function renderFerment("):js.index("function renderStarter(")]
+    assert 'b.spent ? "" : `<button type="button" class="btn-small" data-stir=' in fn
+
+
+def test_the_row_shows_the_day_of_the_window():
+    js = _static("app.js")
+    fn = js[js.index("function renderFerment("):js.index("function renderStarter(")]
+    assert "day ${day} of ${data.max_age_days}" in fn
+
+
+def test_an_unreadable_start_time_does_not_break_the_card(conn):
+    """Nothing writes a bad timestamp today, but the card reads every open
+    batch to draw one row, so a single unparsable value would take the whole
+    card down rather than one row. It reads as fermenting: the safe answer,
+    since that is the state that still asks you to go and look at it."""
+    ferment.start_batch(conn, "Tub 1", now=NOW)
+    conn.execute("UPDATE ferment_batches SET started_at = 'not a date'")
+    conn.commit()
+    batch = ferment.batches(conn, now=_days(30))[0]
+    assert batch["state"] == ferment.ACTIVE
+    assert batch["age_days"] is None and batch["use_by"] is None
+    assert batch["spent"] is False

@@ -1,5 +1,35 @@
 # Changelog
 
+## 1.47.0
+
+- **A feeding window, and an end to it.** A batch now has three lives rather
+  than two: fermenting, ready to feed from, and spent. Past
+  `ferment_max_age_days` (default 11) the row turns red, says **Past it — day
+  12 of 11**, loses its **Stirred** button and the reminder says to bin it.
+- This is the state people miss. A tub that has been ready for a week looks
+  exactly like one that was ready this morning — nothing about it announces
+  that it has gone over, only the clock knows. Past the window the culture has
+  run out of sugar and stopped holding the spoilage organisms back.
+- While it is in the window the row counts the days — **Ready · day 5 of 11** —
+  and with several tubs ready the reminder says which to use up first. Once
+  three are ready, "ready" is not the useful fact.
+- **`ferment_notify_service`.** Ferment reminders can go somewhere other than
+  the egg reminder. Blank falls back to `notify_service`, so the common case
+  still needs one setting; set only the ferment one and you get stir alerts
+  without turning on the egg reminder at all.
+- **Still one notification.** When there is more than one thing to say the
+  lines are combined, worst-to-get-wrong first: stirring stops mould, binning
+  stops somebody feeding spoiled grain, and feeding will still be true in an
+  hour. Three pushes at 08:00 is how you teach somebody to swipe the whole lot
+  away, starting with the one that cannot afford to be ignored.
+- A spent tub is now reported even when everything has just been stirred. The
+  stir clock used to decide on its own whether anything got said at all.
+- A closed batch never goes spent. Nagging somebody to bin a tub they emptied
+  last week is how a reminder loses its authority.
+- `ferment_max_age_days` is held to at least `ferment_days + 1` — a batch that
+  went off before it was ever ready is a state the settings can express and a
+  tub cannot be in.
+
 ## 1.46.0
 
 - **Carry the culture forward.** When you press **Fed**, the add-on offers to

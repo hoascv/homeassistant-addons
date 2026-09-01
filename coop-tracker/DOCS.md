@@ -168,11 +168,49 @@ Buttons per batch: **Stirred**, **Fed** (once it is ready), and **Binned**.
 Binned asks first, and is recorded separately from fed — a batch lost to mould
 is a different event, and how often it happens is worth being able to find out.
 
+A batch has three lives, and the row says which one it is in:
+
+| | | |
+|---|---|---|
+| **Fermenting** | day 0 to `ferment_days` | working; stir it |
+| **Ready · day 5 of 11** | until `ferment_max_age_days` | feed from it |
+| **Past it — day 12 of 11** | after that | bin it, coloured red |
+
+The third is the one people miss. A tub that has been ready for a week looks
+exactly like one that was ready this morning — nothing about it announces that
+it has gone over, only the clock knows. Past the window the culture has run out
+of sugar and stopped holding the spoilage organisms back, so the row loses its
+**Stirred** button (there is no point stirring something you are about to throw
+away) and **Binned** stops being the quiet option.
+
+`ferment_max_age_days` defaults to 11 and is held to at least `ferment_days + 1`
+— a batch that went off before it was ever ready is a state the settings can
+express and a tub cannot be in.
+
 ### The stir reminder
 
-A push notification through your `notify_service`, naming the containers:
+A push notification naming the containers:
 
 > Stir the fermenting feed in Tub 1 — it has been 14h.
+
+**One notification, not three.** When there is more than one thing to say the
+lines are combined, worst-to-get-wrong first — stirring stops mould, binning
+stops somebody feeding spoiled grain, and feeding will still be true in an hour:
+
+> Stir the fermenting feed in Tub 1 — it has been 14h. Bin Tub 3 — it has been
+> going 12 days, past the 11-day mark. Do not feed it. Ready to feed: Tub 1,
+> Tub 2. Use Tub 1 first, it is on day 8 of 11.
+
+Three pushes arriving together at 08:00 is how you teach somebody to swipe the
+whole lot away — including the stir reminder, which is the one that cannot
+afford to be ignored.
+
+It goes to **`ferment_notify_service`**, falling back to `notify_service` when
+that is blank. Fermenting is a twice-a-day job and collecting eggs a once-a-day
+one, so a household may want them on different phones — but the common case is
+one phone, and nobody should have to fill in two options to get it. Setting only
+`ferment_notify_service` works too: you can have stir alerts without turning on
+the egg reminder.
 
 It is deliberately **not** part of the daily egg reminder. Stirring is a
 twice-a-day job, and a reminder that can only arrive at 18:00 is no use for the
@@ -183,9 +221,11 @@ half the time, and a notification nobody can act on is one you learn to swipe
 away — which costs you the reminders that mattered too. Default is 08:00 and
 20:00; `ferment_stir_times` changes them.
 
-One notification per window, remembered across a restart. A window where nothing
-was due does not count as used, so a batch falling due at 20:30 still gets its
-reminder at 20:30.
+One notification per window, remembered across a restart. A window where there
+was nothing to say does not count as used, so a batch falling due at 20:30 still
+gets its reminder at 20:30. A tub that is past its window is reported even when
+everything has just been stirred — the stir clock no longer decides on its own
+whether anything gets said.
 
 ### Carrying the culture forward
 
@@ -249,8 +289,10 @@ the first reminder arrives an interval after you last touched it.
 | `ferment_days` | How long a batch sits before it is ready. Default 3. A seeded batch takes 2 unless this is lower. |
 | `ferment_stir_hours` | How long it may go unstirred before it counts as due. Default 12. |
 | `ferment_stir_times` | When reminders may fire. Default `08:00, 20:00`. |
+| `ferment_max_age_days` | How long a batch stays good to feed from. Default 11. |
+| `ferment_notify_service` | Where ferment reminders go. Blank uses `notify_service`. |
 
-The reminder also needs `notify_service` set, the same one the egg reminder uses.
+The reminder needs one of `ferment_notify_service` or `notify_service` set.
 
 ## Egg photo counting & sizing (experimental)
 

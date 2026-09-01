@@ -39,6 +39,13 @@ STARTER_GOOD_FOR_DAYS = 7
 # is advice on the page, never a refusal — it is the keeper's jar.
 STARTER_GENERATION_HINT = 8
 
+# How long a batch stays good to feed from, counted from the day it was mixed.
+# A ferment does not stop when it is ready — it keeps going, gets steadily more
+# sour and alcoholic, and eventually the lactobacillus runs out of sugar and
+# stops holding the spoilage organisms back. Past this the batch is spent and
+# the right move is to bin it rather than feed it.
+DEFAULT_MAX_AGE_DAYS = 11
+
 # How long a batch may go unstirred before it is at risk. Twice a day is the
 # common advice, so twelve hours is the interval that produces it.
 DEFAULT_STIR_HOURS = 12
@@ -48,7 +55,8 @@ DEFAULT_STIR_HOURS = 12
 # up, so this is what goes *in*, not what comes out.
 GRAMS_PER_BIRD_PER_DAY = 45
 
-ACTIVE, READY, FED, DISCARDED = "fermenting", "ready", "fed", "discarded"
+ACTIVE, READY, SPENT, FED, DISCARDED = (
+    "fermenting", "ready", "spent", "fed", "discarded")
 
 SCHEMA = (
     """
@@ -285,16 +293,28 @@ def close_batch(conn, batch_id, outcome, now=None, save_liquid=False):
         save_starter(conn, batch_id, now=now)
 
 
-def _state(row, last_stir, now):
+def _state(row, now, max_age_days=DEFAULT_MAX_AGE_DAYS):
+    """Where a batch is in its life, worked out from the clock.
+
+    Three open states, in order: fermenting while it works, ready while you are
+    feeding from it, spent once it has been going too long. The last is the one
+    people miss — a tub that has been ready for a week still looks fine, and the
+    batch does not announce that it has gone over.
+    """
     if row["closed_at"]:
         return row["outcome"] or FED
     started = _parse(row["started_at"])
-    if started and now >= started + datetime.timedelta(days=row["ferment_days"]):
+    if not started:
+        return ACTIVE
+    if now >= started + datetime.timedelta(days=max_age_days):
+        return SPENT
+    if now >= started + datetime.timedelta(days=row["ferment_days"]):
         return READY
     return ACTIVE
 
 
-def batches(conn, include_closed=False, now=None, stir_hours=DEFAULT_STIR_HOURS):
+def batches(conn, include_closed=False, now=None, stir_hours=DEFAULT_STIR_HOURS,
+            max_age_days=DEFAULT_MAX_AGE_DAYS):
     """Every batch with its derived state and how overdue a stir is.
 
     Derived rather than stored: a batch becomes ready by the clock moving, not
@@ -314,10 +334,14 @@ def batches(conn, include_closed=False, now=None, stir_hours=DEFAULT_STIR_HOURS)
         ).fetchone()
         last_stir = _parse(stir_row["last"]) if stir_row else None
         started = _parse(row["started_at"])
-        state = _state(row, last_stir, now)
+        state = _state(row, now, max_age_days=max_age_days)
 
         hours_since = ((now - last_stir).total_seconds() / 3600.0) if last_stir else None
         ready_at = (started + datetime.timedelta(days=row["ferment_days"])) if started else None
+        age_days = ((now - started).total_seconds() / 86400.0) if started else None
+        # The last day it is worth feeding from, so the card can count down
+        # rather than making somebody work out eleven days from a date.
+        use_by = (started + datetime.timedelta(days=max_age_days)) if started else None
 
         out.append({
             "id": row["id"],
@@ -330,6 +354,13 @@ def batches(conn, include_closed=False, now=None, stir_hours=DEFAULT_STIR_HOURS)
             "state": state,
             "outcome": row["outcome"],
             "ready_at": ready_at.isoformat() if ready_at else None,
+            "use_by": use_by.isoformat() if use_by else None,
+            "age_days": round(age_days, 1) if age_days is not None else None,
+            # Ready, and still inside the window where feeding it is a good
+            # idea. Kept apart from the state so the card can say "day 5 of 11"
+            # while the reminder only has to ask one question.
+            "feed_due": bool(not row["closed_at"] and state == READY),
+            "spent": bool(not row["closed_at"] and state == SPENT),
             "last_stirred_at": stir_row["last"] if stir_row else None,
             "hours_since_stir": round(hours_since, 1) if hours_since is not None else None,
             # Only ever true for an open batch. A finished one cannot need
@@ -349,6 +380,16 @@ def due_for_stir(conn, now=None, stir_hours=DEFAULT_STIR_HOURS):
     return [b for b in batches(conn, now=now, stir_hours=stir_hours) if b["stir_due"]]
 
 
+def ready_to_feed(conn, now=None, max_age_days=DEFAULT_MAX_AGE_DAYS):
+    """Open batches inside the window where feeding from them is a good idea."""
+    return [b for b in batches(conn, now=now, max_age_days=max_age_days) if b["feed_due"]]
+
+
+def spent(conn, now=None, max_age_days=DEFAULT_MAX_AGE_DAYS):
+    """Open batches that have been going too long to feed."""
+    return [b for b in batches(conn, now=now, max_age_days=max_age_days) if b["spent"]]
+
+
 def stir_message(due):
     """What the notification says.
 
@@ -364,15 +405,70 @@ def stir_message(due):
     return f"Stir the fermenting feed: {names} ({len(due)} containers waiting)."
 
 
-def summary(conn, birds, now=None, stir_hours=DEFAULT_STIR_HOURS):
+def feed_message(feedable, max_age_days=DEFAULT_MAX_AGE_DAYS):
+    """What the notification says about tubs that are ready to use.
+
+    Says which day of the window each one is on, because "ready" is not the
+    useful fact once three tubs are ready — which to use up first is.
+    """
+    if not feedable:
+        return None
+    oldest = max(feedable, key=lambda b: b["age_days"] or 0)
+    day = int(oldest["age_days"] or 0)
+    if len(feedable) == 1:
+        return (f"Feed from {oldest['container']} — day {day} of {max_age_days}.")
+    names = ", ".join(b["container"] for b in feedable)
+    return (f"Ready to feed: {names}. Use {oldest['container']} first, "
+            f"it is on day {day} of {max_age_days}.")
+
+
+def spent_message(over, max_age_days=DEFAULT_MAX_AGE_DAYS):
+    """What the notification says about a batch that has gone too long.
+
+    Blunt on purpose. A spent tub looks exactly like a good one, so the message
+    has to carry the judgement the eye will not.
+    """
+    if not over:
+        return None
+    names = ", ".join(b["container"] for b in over)
+    if len(over) == 1:
+        days = int(over[0]["age_days"] or 0)
+        return (f"Bin {names} — it has been going {days} days, past the "
+                f"{max_age_days}-day mark. Do not feed it.")
+    return (f"Bin these, they are past {max_age_days} days: {names}. Do not feed them.")
+
+
+def reminder_message(due_stir, feedable, over, max_age_days=DEFAULT_MAX_AGE_DAYS):
+    """One notification covering everything the tubs need right now.
+
+    Composed rather than sent separately: three pushes arriving together at
+    08:00 is how you teach somebody to swipe the whole lot away, and the stir
+    reminder is the one that cannot afford to be ignored.
+
+    Ordered by how bad it is to get wrong — stirring stops mould, binning stops
+    somebody feeding spoiled grain, and feeding is the one that will still be
+    true in an hour.
+    """
+    parts = [
+        stir_message(due_stir),
+        spent_message(over, max_age_days=max_age_days),
+        feed_message(feedable, max_age_days=max_age_days),
+    ]
+    return " ".join(p for p in parts if p) or None
+
+
+def summary(conn, birds, now=None, stir_hours=DEFAULT_STIR_HOURS,
+            max_age_days=DEFAULT_MAX_AGE_DAYS):
     """The figures the card and the sensor both show."""
-    open_batches = batches(conn, now=now, stir_hours=stir_hours)
+    open_batches = batches(conn, now=now, stir_hours=stir_hours, max_age_days=max_age_days)
     return {
         "batches": open_batches,
         "starter": current_starter(conn, now=now),
         "open": len(open_batches),
-        "ready": sum(1 for b in open_batches if b["state"] == READY),
+        "ready": sum(1 for b in open_batches if b["feed_due"]),
         "stir_due": sum(1 for b in open_batches if b["stir_due"]),
+        "spent": sum(1 for b in open_batches if b["spent"]),
+        "max_age_days": max_age_days,
         "suggested_grams": suggested_grams(birds),
         "birds": birds,
     }

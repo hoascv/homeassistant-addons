@@ -1146,6 +1146,14 @@ img.chicken-avatar {
 .stir-due { background: rgba(240, 168, 58, 0.12); border-radius: 8px;
   margin: 0 -0.4rem; padding-left: 0.4rem; padding-right: 0.4rem; }
 .stir-due .ferment-name::after { content: " · stir it"; color: #b45309; font-weight: 700; }
+/* Past the feeding window. Coloured for the same reason as an overdue stir —
+   it needs acting on today — but red rather than amber, because the action is
+   throw it away rather than go and fix it. Wins over stir-due when both apply:
+   there is no point stirring something you are about to bin. */
+.batch-spent { background: rgba(220, 80, 70, 0.14); border-radius: 8px;
+  margin: 0 -0.4rem; padding-left: 0.4rem; padding-right: 0.4rem; }
+.batch-spent .ferment-name::after { content: " · bin it"; color: #b91c1c; font-weight: 700; }
+.batch-spent.stir-due .ferment-name::after { content: " · bin it"; }
 .btn-small { font: inherit; font-size: 0.76rem; padding: 0.25rem 0.55rem; cursor: pointer;
   border-radius: 999px; border: 1px solid rgba(128, 128, 128, 0.3);
   background: rgba(128, 128, 128, 0.08); color: inherit; }

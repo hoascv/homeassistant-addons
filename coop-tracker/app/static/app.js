@@ -2728,6 +2728,7 @@ function renderFerment(data) {
   hint.textContent = data.open
     ? `${data.open} going${data.ready ? `, ${data.ready} ready to feed` : ""}`
       + `${data.stir_due ? ` · ${data.stir_due} needs stirring` : ""}`
+      + `${data.spent ? ` · ${data.spent} past ${data.max_age_days} days, bin it` : ""}`
     // Nothing on the go: say what a batch for this flock would take, since
     // that is the number you need before you can start one.
     : `Nothing fermenting. A ${data.ferment_days}-day batch for ${data.birds} `
@@ -2739,21 +2740,28 @@ function renderFerment(data) {
     const since = b.hours_since_stir == null ? "—"
       : b.hours_since_stir < 1 ? "just now"
       : `${Math.round(b.hours_since_stir)}h ago`;
+    // Where it is in its life, in the words you would use out loud. A spent tub
+    // looks exactly like a good one, so the row has to carry the judgement.
+    const day = Math.floor(b.age_days);
+    const stage = b.spent ? `Past it — day ${day} of ${data.max_age_days}`
+      : b.state === "ready" ? `Ready · day ${day} of ${data.max_age_days}`
+      : `Ready ${fmtDay(b.ready_at)}`;
     return `
-      <div class="ferment-row${b.stir_due ? " stir-due" : ""}" data-id="${b.id}">
+      <div class="ferment-row${b.stir_due ? " stir-due" : ""}${b.spent ? " batch-spent" : ""}"
+        data-id="${b.id}">
         <div class="ferment-main">
           <span class="ferment-name">${escapeHtml(b.container)}</span>
           <span class="ferment-meta">
-            ${b.state === "ready" ? "Ready to feed" : `Ready ${fmtDay(b.ready_at)}`}
+            ${stage}
             · stirred ${since}${b.grams ? ` · ${Math.round(b.grams)} g` : ""}`
     + `${b.generation ? ` · seeded (gen ${b.generation})` : ""}</span>
         </div>
         <div class="ferment-actions">
-          <button type="button" class="btn-small" data-stir="${b.id}">Stirred</button>
+          ${b.spent ? "" : `<button type="button" class="btn-small" data-stir="${b.id}">Stirred</button>`}
           ${b.state === "ready"
             ? `<button type="button" class="btn-small" data-close="${b.id}" data-outcome="fed">Fed</button>`
             : ""}
-          <button type="button" class="btn-small btn-quiet" data-close="${b.id}"
+          <button type="button" class="btn-small${b.spent ? "" : " btn-quiet"}" data-close="${b.id}"
             data-outcome="discarded" title="Threw it away">Binned</button>
         </div>
       </div>`;

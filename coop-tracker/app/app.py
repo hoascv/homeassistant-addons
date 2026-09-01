@@ -67,7 +67,7 @@ except ImportError as e:
     SKLEARN_AVAILABLE = False
     SKLEARN_ERROR = str(e)
 
-APP_VERSION = "1.46.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.47.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("COOP_DB_PATH", "/data/coop.db")
 OPTIONS_PATH = os.environ.get("COOP_OPTIONS_PATH", "/data/options.json")
@@ -477,11 +477,27 @@ def get_ferment_config():
         days = max(1, min(14, int(opts.get("ferment_days", ferment.DEFAULT_FERMENT_DAYS))))
     except (TypeError, ValueError):
         days = ferment.DEFAULT_FERMENT_DAYS
+    try:
+        max_age = max(2, min(60, int(
+            opts.get("ferment_max_age_days", ferment.DEFAULT_MAX_AGE_DAYS))))
+    except (TypeError, ValueError):
+        max_age = ferment.DEFAULT_MAX_AGE_DAYS
+    # A ferment that is ready before the feed window opens is a contradiction
+    # the settings can express and the state machine cannot. Rather than refuse
+    # it, hold the window open at least a day past ready.
+    max_age = max(max_age, days + 1)
     return {
         "enabled": bool(opts.get("ferment_enabled", False)),
         "stir_times": times or ["08:00", "20:00"],
         "stir_hours": hours,
         "ferment_days": days,
+        "max_age_days": max_age,
+        # Its own service, falling back to the egg reminder's. Fermenting is a
+        # twice-a-day job and collecting eggs is a once-a-day one, so a
+        # household may well want them on different phones — but nobody should
+        # have to set two options to get the common case.
+        "notify_service": (str(opts.get("ferment_notify_service") or "").strip()
+                           or get_reminder_config()["notify_service"]),
     }
 
 
@@ -872,8 +888,8 @@ def _ha_api_request(method, path, payload=None, timeout=5):
         return None, str(e)
 
 
-def send_notification(message, title="Coop Tracker"):
-    service = get_reminder_config()["notify_service"]
+def send_notification(message, title="Coop Tracker", service=None):
+    service = service or get_reminder_config()["notify_service"]
     if not service:
         return False, "no notify service configured"
     _, err = _ha_api_request(
@@ -953,8 +969,7 @@ def _ferment_stir_tick(now, conn):
     """
     global _stir_last_notified
     cfg = get_ferment_config()
-    reminders = get_reminder_config()
-    if not (cfg["enabled"] and reminders["notify_service"]):
+    if not (cfg["enabled"] and cfg["notify_service"]):
         return
 
     window = None
@@ -974,8 +989,13 @@ def _ferment_stir_tick(now, conn):
     if _stir_last_notified == key:
         return
 
-    due = ferment.due_for_stir(conn, now=now, stir_hours=cfg["stir_hours"])
-    if not due:
+    message = ferment.reminder_message(
+        ferment.due_for_stir(conn, now=now, stir_hours=cfg["stir_hours"]),
+        ferment.ready_to_feed(conn, now=now, max_age_days=cfg["max_age_days"]),
+        ferment.spent(conn, now=now, max_age_days=cfg["max_age_days"]),
+        max_age_days=cfg["max_age_days"],
+    )
+    if message is None:
         # Nothing to say. The window is *not* recorded as used, so a batch that
         # becomes due later in the same window still gets its reminder.
         return
@@ -983,7 +1003,8 @@ def _ferment_stir_tick(now, conn):
     _stir_last_notified = key
     _set_app_state(conn, "ferment_stir_last_window", key)
     conn.commit()
-    send_notification(ferment.stir_message(due), title="Coop Tracker — fermenting feed")
+    send_notification(message, title="Coop Tracker — fermenting feed",
+                      service=cfg["notify_service"])
 
 
 def _push_ha_state(entity_id, state, attributes=None):
@@ -1241,12 +1262,14 @@ def _grams(data):
 def _ferment_payload(conn):
     cfg = get_ferment_config()
     birds = sum(get_flock_counts().values())
-    body = ferment.summary(conn, birds, stir_hours=cfg["stir_hours"])
+    body = ferment.summary(conn, birds, stir_hours=cfg["stir_hours"],
+                           max_age_days=cfg["max_age_days"])
     body["enabled"] = cfg["enabled"]
     body["ferment_days"] = cfg["ferment_days"]
     body["stir_hours"] = cfg["stir_hours"]
     body["stir_times"] = cfg["stir_times"]
     body["seeded_days"] = ferment.SEEDED_FERMENT_DAYS
+    body["notify_service"] = cfg["notify_service"]
     body["starter_good_for_days"] = ferment.STARTER_GOOD_FOR_DAYS
     return body
 
@@ -1260,7 +1283,8 @@ def api_ferment():
 def api_ferment_history():
     cfg = get_ferment_config()
     return jsonify(ferment.batches(get_db(), include_closed=True,
-                                   stir_hours=cfg["stir_hours"]))
+                                   stir_hours=cfg["stir_hours"],
+                                   max_age_days=cfg["max_age_days"]))
 
 
 @app.route("/api/ferment/batches", methods=["POST"])
