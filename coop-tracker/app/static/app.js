@@ -1710,21 +1710,43 @@ const trendsChartWrap = document.getElementById("trends-chart-wrap");
 const trendsEmpty = document.getElementById("trends-empty");
 const trendsTableBody = document.getElementById("trends-table-body");
 const trendsForecastCaption = document.getElementById("trends-forecast-caption");
-const trendsExpandBtn = document.getElementById("trends-expand-btn");
 
-function setTrendsFullscreen(isFullscreen) {
-  trendsChartWrap.classList.toggle("is-fullscreen", isFullscreen);
-  trendsExpandBtn.textContent = isFullscreen ? "✕" : "⛶";
-  trendsExpandBtn.setAttribute("aria-label", isFullscreen ? "Collapse chart" : "Expand chart");
+// Every chart on this tab expands, not just the first one. These are small on a
+// phone and the daily one packs ninety points into a few hundred pixels, which
+// is precisely the chart worth making bigger.
+//
+// One delegated handler over the class rather than a listener per id: a fifth
+// chart then needs a button and no JavaScript at all.
+function setChartFullscreen(wrap, isFullscreen) {
+  wrap.classList.toggle("is-fullscreen", isFullscreen);
+  const button = wrap.querySelector(".trends-expand-btn");
+  if (!button) return;
+  button.textContent = isFullscreen ? "✕" : "⛶";
+  button.setAttribute("aria-label", isFullscreen ? "Collapse chart" : "Expand chart");
 }
 
-trendsExpandBtn.addEventListener("click", () => {
-  setTrendsFullscreen(!trendsChartWrap.classList.contains("is-fullscreen"));
+// Kept as a named wrapper because the tab switcher calls it to collapse the
+// chart on the way out — leaving one expanded over another page is how you get
+// a chart floating above the Home tab.
+function setTrendsFullscreen(isFullscreen) {
+  for (const wrap of document.querySelectorAll(".trends-chart-wrap")) {
+    if (isFullscreen === false || wrap === trendsChartWrap) {
+      setChartFullscreen(wrap, isFullscreen);
+    }
+  }
+}
+
+document.addEventListener("click", (event) => {
+  const button = event.target.closest(".trends-expand-btn");
+  if (!button) return;
+  const wrap = button.closest(".trends-chart-wrap");
+  if (wrap) setChartFullscreen(wrap, !wrap.classList.contains("is-fullscreen"));
 });
 
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && trendsChartWrap.classList.contains("is-fullscreen")) {
-    setTrendsFullscreen(false);
+  if (e.key !== "Escape") return;
+  for (const wrap of document.querySelectorAll(".trends-chart-wrap.is-fullscreen")) {
+    setChartFullscreen(wrap, false);
   }
 });
 

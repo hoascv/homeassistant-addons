@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.18.1
+
+- **Fixed: the whole page showed dashes.** The trips code added in 1.18.0 used
+  an `el()` helper carried over from another add-on in this repo, where it
+  exists. Here it did not. The call sits at the left margin, so it ran during
+  script evaluation and threw — stopping the entire file before `init()`, which
+  left every figure blank and the charging cards missing altogether. `el()` is
+  now defined.
+- A test in every add-on with a UI now checks that nothing called at the left
+  margin is undefined. Nothing caught this because no test in this repo
+  executes JavaScript, and this is the cheap check that would have.
+
 ## 1.18.0
 
 - **Log a long trip.** A date or date range, a label, and optionally a

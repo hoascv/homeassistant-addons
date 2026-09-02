@@ -223,6 +223,7 @@
         </select>
       </div>
       <div class="trends-chart-wrap" id="daily-eggs-chart-wrap">
+        <button type="button" class="trends-expand-btn" aria-label="Expand eggs per day chart">⛶</button>
         <p class="empty-state" id="daily-eggs-empty" hidden>No egg collection logged yet</p>
       </div>
       <p class="trends-forecast-caption" id="daily-eggs-caption"></p>
@@ -231,6 +232,7 @@
     <div class="eggs-per-day">
       <h2>Eggs per day, by month</h2>
       <div class="trends-chart-wrap" id="eggs-per-day-chart-wrap">
+        <button type="button" class="trends-expand-btn" aria-label="Expand eggs per day by month chart">⛶</button>
         <p class="empty-state" id="eggs-per-day-empty" hidden>No egg collection logged yet</p>
       </div>
       <p class="trends-forecast-caption" id="eggs-per-day-caption"></p>
@@ -271,7 +273,9 @@
       <summary>Experimental: statistical forecast (Holt-Winters)</summary>
       <div id="advanced-forecast-body">
         <p class="trends-forecast-caption" id="advanced-forecast-message"></p>
-        <div class="trends-chart-wrap" id="advanced-forecast-chart-wrap" hidden></div>
+        <div class="trends-chart-wrap" id="advanced-forecast-chart-wrap" hidden>
+          <button type="button" class="trends-expand-btn" aria-label="Expand forecast chart">⛶</button>
+        </div>
       </div>
     </details>
   </section>

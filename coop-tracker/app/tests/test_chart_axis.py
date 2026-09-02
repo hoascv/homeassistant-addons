@@ -148,3 +148,52 @@ def test_the_transcription_matches_the_javascript():
     assert "wanted = 3" in fn
     assert "normalised < 1.5 ? 1 : normalised < 3 ? 2 : normalised < 7 ? 5 : 10" in fn
     assert re.search(r"for \(let v = 0; v <= max \+ slack; v \+= step\)", fn)
+
+
+# --- expanding ----------------------------------------------------------------
+
+
+def test_every_chart_has_an_expand_button():
+    """Three of the four had none. These are small on a phone, and the daily
+    view packs ninety points into a few hundred pixels — precisely the chart
+    worth making bigger."""
+    import re
+    html = _static("index.html")
+    wraps = re.findall(r'<div class="trends-chart-wrap"[^>]*id="([\w-]+)"', html)
+    assert len(wraps) == 4, f"found {wraps}"
+    for wrap in wraps:
+        block = html[html.index(f'id="{wrap}"'):]
+        block = block[:block.index("</div>")]
+        assert "trends-expand-btn" in block, f"{wrap} has no expand button"
+
+
+def test_expansion_is_delegated_rather_than_wired_per_chart():
+    """A fifth chart should need a button and no JavaScript."""
+    js = _static("app.js")
+    assert 'event.target.closest(".trends-expand-btn")' in js
+    assert 'getElementById("trends-expand-btn")' not in js, "a per-id listener is back"
+
+
+def test_escape_collapses_whichever_chart_is_open():
+    js = _static("app.js")
+    handler = js[js.index('document.addEventListener("keydown"'):]
+    assert ".trends-chart-wrap.is-fullscreen" in handler[:400]
+
+
+def test_leaving_the_tab_collapses_every_chart():
+    """A chart left expanded is position: fixed, so it would float over the
+    Home tab with no way back to the button that closed it."""
+    js = _static("app.js")
+    fn = js[js.index("function setTrendsFullscreen("):]
+    fn = fn[:fn.index("\n}\n")]
+    assert 'querySelectorAll(".trends-chart-wrap")' in fn
+    assert "isFullscreen === false" in fn
+
+
+def test_the_expand_button_can_position_itself():
+    """It is absolutely positioned, which only works because the wrap it sits
+    in establishes a containing block."""
+    css = _static("style.css")
+    wrap = css[css.index(".trends-chart-wrap {"):]
+    wrap = wrap[:wrap.index("}")]
+    assert "position: relative" in wrap

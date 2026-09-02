@@ -9,6 +9,12 @@ const state = {
   insightsDays: 30,
 };
 
+// Shorthand for document.getElementById. Added because the trips code was
+// written with it — an idiom carried over from another add-on in this repo
+// where it does exist — and calling an undefined function at the top level
+// stopped the whole script, leaving every figure on the page as a dash.
+function el(id) { return document.getElementById(id); }
+
 function escapeHtml(str) {
   return String(str).replace(/[&<>"']/g, (c) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",

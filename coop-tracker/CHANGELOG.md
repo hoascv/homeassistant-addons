@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.51.0
+
+- **Every chart on Trends expands**, not just the first. Eggs per day, eggs per
+  day by month and the advanced forecast all had the frame for it and no
+  button. The daily one packs ninety points into a few hundred pixels, so it
+  is the one that most wanted making bigger.
+- One delegated handler over the button class rather than a listener per id, so
+  a fifth chart needs a button and no JavaScript. Escape collapses whichever is
+  open, and leaving the tab collapses all of them — an expanded chart is
+  `position: fixed` and would otherwise float over the Home tab with its close
+  button out of reach.
+- A test asserts that every `.trends-chart-wrap` contains an expand button, so
+  a chart added later cannot quietly miss one.
+
 ## 1.50.0
 
 - **Flock tonics.** Garlic in the water, oregano in the feed, cider vinegar,
