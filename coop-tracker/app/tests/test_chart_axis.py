@@ -197,3 +197,67 @@ def test_the_expand_button_can_position_itself():
     wrap = css[css.index(".trends-chart-wrap {"):]
     wrap = wrap[:wrap.index("}")]
     assert "position: relative" in wrap
+
+
+# --- reading a value off the chart --------------------------------------------
+
+
+def test_every_chart_has_hover_targets():
+    """None of these charts could tell you an exact date or value. The line
+    showed a shape and that was all — you could see a spike on roughly the 22nd
+    and had no way to ask what it was."""
+    js = _static("app.js")
+    for name, _unit in BUILDERS:
+        start = js.index(f"function {name}(")
+        body = js[start:js.index("\n}\n", start)]
+        assert "hitTargets(" in body, f"{name} has no hover targets"
+
+
+def test_the_hit_target_is_hoverable():
+    """`fill: none` is not hit-tested by the browser, so the tooltip would
+    never appear — the target has to be transparent, not absent."""
+    css = _static("style.css")
+    block = css[css.index(".chart-hit {"):]
+    assert "fill: transparent" in block[:120]
+
+
+# --- the flock ceiling --------------------------------------------------------
+
+
+def test_the_eggs_per_day_charts_draw_the_flock_ceiling():
+    """A hen lays at most one egg a day, so the flock size is a hard bound.
+    Drawn because it turns a number into a proportion: four from five hens
+    reads very differently once you can see where five is."""
+    js = _static("app.js")
+    for name in ("buildDailyEggsSvg", "buildEggsPerDaySvg"):
+        start = js.index(f"function {name}(")
+        body = js[start:js.index("\n}\n", start)]
+        assert "flockCeiling(" in body, f"{name} draws no ceiling"
+
+
+def test_the_ceiling_is_part_of_the_range():
+    """With five hens laying four, an axis that stopped at four would hide how
+    much headroom there was."""
+    js = _static("app.js")
+    for name in ("buildDailyEggsSvg", "buildEggsPerDaySvg"):
+        start = js.index(f"function {name}(")
+        body = js[start:js.index("\n}\n", start)]
+        assert "Math.max(1, birds," in body, f"{name} ignores birds in its range"
+
+
+def test_the_ceiling_label_avoids_the_expand_button():
+    """It sits in the top-right corner of every one of these charts, and a
+    right-aligned label near the top of the plot lands underneath it."""
+    js = _static("app.js")
+    fn = js[js.index("function flockCeiling("):js.index("function monthLabel(")]
+    assert "gutter + 3" in fn
+    assert 'text-anchor="end"' not in fn
+
+
+def test_the_forecast_divider_is_offset_by_the_gutter():
+    """Missed when the y axis arrived in 1.49.0: the divider was drawn at a raw
+    `historyCount * pointSpacing`, one gutter-width left of the boundary it
+    marks, so it pointed at the wrong month."""
+    js = _static("app.js")
+    assert "const dividerX = historyCount * pointSpacing;" not in js
+    assert js.count("const dividerX = axis.gutter + historyCount * pointSpacing;") == 2

@@ -927,6 +927,30 @@ img.chicken-avatar {
   fill: var(--text-muted);
 }
 
+/* Invisible, but it has to be a fill the browser will hit-test — `none` is not
+   hoverable, so the tooltip would never appear. */
+.chart-hit { fill: transparent; cursor: pointer; }
+
+/* One egg per hen per day, drawn as a ceiling. It turns the chart from a
+   number into a proportion: four from five hens reads very differently once
+   you can see where five is. */
+.chart-ceiling {
+  stroke: var(--text-muted);
+  stroke-width: 0.6;
+  stroke-dasharray: 3 2;
+  opacity: 0.7;
+}
+.chart-ceiling-label { font-size: 5.5px; fill: var(--text-muted); opacity: 0.8; }
+
+/* A day whose rate is above that ceiling. Ringed, not hidden and not clamped:
+   the figure is what the collections say, and what is wrong is the assumption
+   that each visit emptied the nest. */
+.egg-impossible {
+  fill: none;
+  stroke: var(--danger, #c0453a);
+  stroke-width: 1.4;
+}
+
 .trends-forecast-caption {
   font-size: 0.75rem;
   color: var(--text-muted);

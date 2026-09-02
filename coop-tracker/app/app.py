@@ -68,7 +68,7 @@ except ImportError as e:
     SKLEARN_AVAILABLE = False
     SKLEARN_ERROR = str(e)
 
-APP_VERSION = "1.51.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.52.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("COOP_DB_PATH", "/data/coop.db")
 OPTIONS_PATH = os.environ.get("COOP_OPTIONS_PATH", "/data/options.json")
@@ -1590,6 +1590,25 @@ def _attributed_eggs_by_day(conn):
     return attributed
 
 
+def impossible_days(values, birds):
+    """Indices where the attributed rate exceeds one egg per hen per day.
+
+    Not an error and not corrected: the number is what the collections say.
+    But a hen cannot lay twice in a day, so a rate above the flock size means
+    the spreading rule's assumption was broken — that each collection empties
+    the nest. Eggs missed on one visit and found on the next are credited
+    entirely to the gap since that previous visit, which is too short.
+
+    Reported so the chart can mark them, because the alternative is a keeper
+    seeing six eggs a day from five hens and either doubting the app or, worse,
+    believing it.
+    """
+    if not birds or birds <= 0:
+        return []
+    return [i for i, value in enumerate(values)
+            if value is not None and value > birds + 0.001]
+
+
 def _compute_daily_eggs(conn, now, days):
     """The same attributed rate, day by day up to today, for the recent
     view — the monthly one can't answer "how are they laying *now*",
@@ -1858,6 +1877,11 @@ def api_trends():
     result["forecast_margin"] = _compute_forecast_margin(
         result["collected"], result["forecast_backtest"]
     )
+    # The flock size, so the eggs-per-day charts can draw the ceiling. A hen
+    # lays at most one egg a day, so this is a hard physical bound and a rate
+    # above it says the data is wrong rather than that the birds excelled.
+    result["birds"] = sum(get_flock_counts().values())
+    result["impossible"] = impossible_days(result["eggs_per_day"], result["birds"])
     return jsonify(result)
 
 
@@ -1949,7 +1973,10 @@ def api_trends_daily():
         days = int(request.args.get("days", 30))
     except ValueError:
         days = 30
-    return jsonify(_compute_daily_eggs(get_db(), datetime.now(), days))
+    result = _compute_daily_eggs(get_db(), datetime.now(), days)
+    result["birds"] = sum(get_flock_counts().values())
+    result["impossible"] = impossible_days(result["eggs_per_day"], result["birds"])
+    return jsonify(result)
 
 
 def _compute_feeding_stats(conn, food_type, now):

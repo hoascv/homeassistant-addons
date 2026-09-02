@@ -231,6 +231,28 @@ Stirring pushes the grain back under the water and lets the gas out. Miss it for
 a day in a warm room and three days of waiting go in the compost. That is why
 the reminder is the load-bearing part of this feature.
 
+### Reading the charts
+
+Every chart on Trends has **hover targets**: point at any date and the browser
+shows the exact figure — the day, the rate, and for a forecast its range. Until
+now the line showed a shape and nothing more.
+
+The two eggs-per-day charts also draw a **flock ceiling**: a dashed line at one
+egg per hen per day, labelled `5 hens`. That is a hard physical bound, and
+having it on the chart turns a bare number into a proportion — four eggs a day
+reads very differently once you can see where five is.
+
+**A day above that line is ringed in red.** It is not a record harvest; it means
+the spreading rule's assumption broke. Each collection is credited to the days
+since the previous one, which assumes every visit empties the nest — so eggs
+missed on Monday and found on Tuesday are all credited to Tuesday alone, and
+five hens appear to have laid six.
+
+The figure is left as it is rather than capped, because the number is what your
+collections say and what is wrong is a fact about the collecting. If you see a
+ring, the usual cause is a nest box checked in a hurry. Nothing needs fixing in
+the app.
+
 ### The tab
 
 Fermented feed has its own tab, **🪣 Ferment**, between Home and Trends. The tab

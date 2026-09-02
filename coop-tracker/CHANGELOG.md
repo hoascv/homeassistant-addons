@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.52.0
+
+- **Hover any chart to read the exact figure.** None of the four had a way to
+  do this — the line showed a shape and you could see a spike on roughly the
+  22nd with no way to ask what it was. Same mechanism Electricity Tracker uses,
+  so the two behave alike.
+- **The eggs-per-day charts draw the flock ceiling**, a dashed line at one egg
+  per hen per day labelled `5 hens`. It is a hard physical bound, and it turns
+  a bare number into a proportion.
+- **A day above that ceiling is ringed in red.** Six eggs from five hens is not
+  a record harvest: it means the spreading rule's assumption broke, since each
+  collection is credited to the days since the previous one and that assumes
+  every visit empties the nest. Eggs missed on Monday and found on Tuesday all
+  land on Tuesday.
+- The figure is left alone rather than capped. The number is what the
+  collections say; what is wrong is a fact about the collecting, so it is the
+  keeper who is told rather than the number that is changed.
+- **Fixed: the forecast divider was a gutter-width off.** Adding the y axis in
+  1.49.0 offset every x except that one, so the dashed line marking where
+  history ends pointed at the wrong month on both monthly charts.
+
 ## 1.51.0
 
 - **Every chart on Trends expands**, not just the first. Eggs per day, eggs per

@@ -1813,6 +1813,35 @@ function chartYAxis(maxVal, unit, { topPad, chartH }) {
   };
 }
 
+// Hover targets. An invisible circle per point with an SVG <title>, which is
+// what the browser turns into a tooltip — the same mechanism Electricity
+// Tracker uses, so the two add-ons behave alike. Without them these charts had
+// no way at all to read an exact date or value off a line.
+function hitTargets(points, labelOf) {
+  return points.map((p, i) => {
+    if (!p) return "";
+    const text = labelOf(i);
+    if (!text) return "";
+    return `<circle class="chart-hit" cx="${p.x.toFixed(2)}" cy="${p.y.toFixed(2)}" r="8">`
+      + `<title>${escapeHtml(text)}</title></circle>`;
+  }).join("");
+}
+
+// A hen lays at most one egg a day, so the flock size is a hard ceiling on any
+// eggs-per-day figure. Drawn because it turns the chart from "some numbers" into
+// "how close are they to their best", and because it makes a rate above it —
+// which is a data problem, not a bumper harvest — visible instead of plausible.
+function flockCeiling(birds, yAt, maxVal, gutter, width) {
+  if (!birds || birds <= 0 || birds > maxVal) return "";
+  const y = yAt(birds).toFixed(2);
+  // Labelled at the left end, not the right: the expand button sits in the
+  // top-right corner of every one of these charts, and a right-aligned label
+  // near the top of the plot lands underneath it.
+  return `<line class="chart-ceiling" x1="${gutter}" y1="${y}" x2="${width}" y2="${y}"></line>`
+    + `<text class="chart-ceiling-label" x="${gutter + 3}" y="${(Number(y) - 2.5).toFixed(2)}">`
+    + `${birds} hens</text>`;
+}
+
 function monthLabel(ym) {
   const [year, month] = ym.split("-").map(Number);
   return `${MONTH_NAMES[month - 1].slice(0, 3)} ${year}`;
@@ -1890,9 +1919,22 @@ function buildTrendsSvg(data) {
     content += `<text class="trends-bar-label trends-bar-label-forecast" x="${xAt(historyCount + i)}" y="${height - 2}" text-anchor="middle">${monthLabel(ym).split(" ")[0]}</text>`;
   });
 
+  // One target per month covering all three series, since the tooltip names
+  // them all — three overlapping circles would just fight each other.
+  content += hitTargets(
+    data.months.map((_, i) => ({ x: xAt(i), y: yAt(data.collected[i]), i })),
+    (i) => `${monthLabel(data.months[i])} — ${data.collected[i]} collected, `
+           + `${data.sold[i]} sold, ${data.used[i]} used`);
+  content += hitTargets(
+    forecastCollected.map((v, i) => ({ x: xAt(historyCount + i), y: yAt(v), i })),
+    (i) => `${monthLabel(forecastMonths[i])} — ${Math.round(forecastCollected[i])} forecast`);
+
   let divider = "";
   if (forecastMonths.length > 0) {
-    const dividerX = historyCount * pointSpacing;
+    // Offset by the gutter like every other x. Missed when the y axis was
+    // added in 1.49.0, so this line sat one gutter-width left of the boundary
+    // it marks — pointing at the wrong month.
+    const dividerX = axis.gutter + historyCount * pointSpacing;
     divider = `<line x1="${dividerX}" y1="${topPad}" x2="${dividerX}" y2="${topPad + chartH}" stroke="var(--border)" stroke-width="1" stroke-dasharray="3,3"></line>`;
   }
 
@@ -1949,7 +1991,8 @@ function buildEggsPerDaySvg(data) {
   const totalCount = historyCount + forecastMonths.length;
   const plotW = totalCount * pointSpacing;
   const height = topPad + chartH + labelH;
-  const maxVal = Math.max(1, ...history.filter((v) => v != null), ...forecast);
+  const birds = data.birds || 0;
+  const maxVal = Math.max(1, birds, ...history.filter((v) => v != null), ...forecast);
 
   const axis = chartYAxis(maxVal, "eggs/day", { topPad, chartH });
   // The gutter is added beside the plot, never taken out of it: an axis that
@@ -1982,6 +2025,7 @@ function buildEggsPerDaySvg(data) {
   };
 
   let content = axis.render(width);
+  content += flockCeiling(birds, yAt, maxVal, axis.gutter, width);
   content += line(history, 0, "--accent-egg", { thin: (i) => isThinlyCovered(data, i) });
   content += line(forecast, historyCount, "--accent-egg", { dashed: true, opacity: 0.55 });
 
@@ -1992,9 +2036,18 @@ function buildEggsPerDaySvg(data) {
     content += `<text class="trends-bar-label trends-bar-label-forecast" x="${xAt(historyCount + i)}" y="${height - 2}" text-anchor="middle">${monthLabel(ym).split(" ")[0]}</text>`;
   });
 
+  content += hitTargets(
+    history.map((v, i) => (v == null ? null : { x: xAt(i), y: yAt(v), i })),
+    (i) => `${monthLabel(data.months[i])} — ${history[i].toFixed(2)} eggs/day`
+           + (isThinlyCovered(data, i) ? "\nOnly part of the month is covered." : ""));
+  content += hitTargets(
+    forecast.map((v, i) => (v == null ? null
+                            : { x: xAt(historyCount + i), y: yAt(v), i })),
+    (i) => `${monthLabel(forecastMonths[i])} — ${forecast[i].toFixed(2)} eggs/day (forecast)`);
+
   let divider = "";
   if (forecastMonths.length > 0) {
-    const dividerX = historyCount * pointSpacing;
+    const dividerX = axis.gutter + historyCount * pointSpacing;
     divider = `<line x1="${dividerX}" y1="${topPad}" x2="${dividerX}" y2="${topPad + chartH}" stroke="var(--border)" stroke-width="1" stroke-dasharray="3,3"></line>`;
   }
 
@@ -2026,7 +2079,10 @@ function buildDailyEggsSvg(data) {
   const count = values.length;
   const plotW = Math.max(count, 1) * pointSpacing + sidePad * 2;
   const height = topPad + chartH + labelH;
-  const maxVal = Math.max(1, ...values.filter((v) => v != null));
+  // The ceiling is part of the range: with five hens laying four, an axis that
+  // stopped at four would hide how much headroom there was.
+  const birds = data.birds || 0;
+  const maxVal = Math.max(1, birds, ...values.filter((v) => v != null));
 
   const axis = chartYAxis(maxVal, "eggs/day", { topPad, chartH });
   // The gutter is added beside the plot, never taken out of it: an axis that
@@ -2037,6 +2093,7 @@ function buildDailyEggsSvg(data) {
 
   const runs = splitRuns(values, xAt, yAt);
   let content = axis.render(width);
+  content += flockCeiling(birds, yAt, maxVal, axis.gutter, width);
   content += runs
     .filter((run) => run.length > 1)
     .map(
@@ -2062,12 +2119,32 @@ function buildDailyEggsSvg(data) {
     content += `<circle cx="${last.x}" cy="${last.y}" r="3.5" fill="var(--accent-egg)"></circle>`;
   }
 
+  // A day whose rate is above the flock size. Ringed rather than hidden or
+  // clamped: the figure is what the collections say, and what is wrong is the
+  // assumption that each visit emptied the nest — so it is the keeper who
+  // needs telling, not the number that needs changing.
+  const impossible = new Set(data.impossible || []);
+  runs.flat().forEach((point) => {
+    if (!impossible.has(point.i)) return;
+    content += `<circle class="egg-impossible" cx="${point.x}" cy="${point.y}" r="4"></circle>`;
+  });
+
   // Labelled from the right, so today's end of the window always carries
   // a date and the intervals fall back from it.
   const labelEvery = Math.max(1, Math.round(count / 5));
   for (let i = count - 1; i >= 0; i -= labelEvery) {
     content += `<text class="trends-bar-label" x="${xAt(i)}" y="${height - 2}" text-anchor="middle">${dayLabel(data.days[i])}</text>`;
   }
+
+  content += hitTargets(
+    values.map((v, i) => (v == null ? null : { x: xAt(i), y: yAt(v), i })),
+    (i) => {
+      const rate = values[i];
+      const base = `${dayLabel(data.days[i])} — ${rate.toFixed(2)} eggs/day`;
+      return impossible.has(i)
+        ? `${base}\nAbove ${birds} hens — some of these were laid earlier and found late.`
+        : base;
+    });
 
   return `<svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet">${content}</svg>`;
 }
@@ -2125,6 +2202,16 @@ function buildAdvancedForecastSvg(data) {
   data.advanced_months.forEach((ym, i) => {
     content += `<text class="trends-bar-label trends-bar-label-forecast" x="${xAt(historyCount + i)}" y="${height - 2}" text-anchor="middle">${monthLabel(ym).split(" ")[0]}</text>`;
   });
+
+  content += hitTargets(
+    data.collected.map((v, i) => ({ x: xAt(i), y: yAt(v), i })),
+    (i) => `${monthLabel(data.months[i])} — ${data.collected[i]} collected`);
+  content += hitTargets(
+    data.advanced_forecast.map((v, i) => ({ x: xAt(historyCount + i), y: yAt(v), i })),
+    (i) => `${monthLabel(data.advanced_months[i])} — `
+           + `${Math.round(data.advanced_forecast[i])} forecast `
+           + `(${Math.round(data.advanced_ci_lower[i])}–`
+           + `${Math.round(data.advanced_ci_upper[i])})`);
 
   return `<svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet">${content}</svg>`;
 }
