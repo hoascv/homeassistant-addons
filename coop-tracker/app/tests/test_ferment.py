@@ -421,20 +421,31 @@ def test_the_ferment_card_no_longer_sits_on_the_home_page():
     assert html.count('id="ferment-batches"') == 1
 
 
-def test_the_whole_tab_is_hidden_when_the_feature_is_off():
-    """A card about tubs of soaking grain is noise to somebody not fermenting —
-    and a tab you can reach that turns out empty reads as something broken
-    rather than something you never turned on."""
+def test_each_card_is_hidden_when_its_own_feature_is_off():
+    """A card about tubs of soaking grain is noise to somebody not fermenting,
+    and the same is true of a tonic schedule for someone who does not use one.
+    They are separate options and hide separately."""
     js = _static("app.js")
     fn = js[js.index("async function loadFerment("):js.index("function renderFerment(")]
-    assert "data.enabled" in fn and "tab.hidden = true" in fn
+    assert "card.hidden = !(data && data.enabled)" in fn
+
+
+def test_the_tab_is_shown_when_either_card_is_on():
+    """The tab carries two independent features now. Deciding its visibility
+    from one of them would let ferment being off hide the tonics card, which is
+    reachable nowhere else."""
+    js = _static("app.js")
+    fn = js[js.index("async function loadFerment("):js.index("function renderFerment(")]
+    assert "(data && data.enabled) || (tonic && tonic.enabled)" in fn
+    assert "tab.hidden = !anything" in fn
     assert 'getElementById("tab-ferment-btn")' in fn
 
 
-def test_turning_it_off_moves_you_off_the_page():
+def test_turning_the_last_one_off_moves_you_off_the_page():
     """Otherwise you are left standing on a tab whose button has just gone."""
     js = _static("app.js")
     fn = js[js.index("async function loadFerment("):js.index("function renderFerment(")]
+    assert '!anything && !document.getElementById("page-ferment").hidden' in fn
     assert 'switchTab("page-home")' in fn
 
 

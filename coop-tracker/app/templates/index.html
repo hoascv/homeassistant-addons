@@ -23,7 +23,7 @@
   </button>
   <button type="button" class="tabbar-btn" id="tab-ferment-btn" data-page="page-ferment" hidden>
     <span class="tabbar-icon">🪣</span>
-    <span>Ferment</span>
+    <span>Feed</span>
   </button>
   <button type="button" class="tabbar-btn" id="tab-trends-btn" data-page="page-trends">
     <span class="tabbar-icon">📈</span>
@@ -159,6 +159,24 @@
      is its tab button: an empty tab is worse than no tab, because it looks
      like something broke rather than something you never turned on. -->
 <main id="page-ferment" class="page" hidden>
+  <!-- Herbal tonics. Hidden independently of the ferment card: a keeper may
+       well want one and not the other, and the tab appears if either is on. -->
+  <section class="ferment" id="tonic-card" hidden>
+    <div class="ferment-header">
+      <h2>Flock tonics</h2>
+      <button type="button" class="link-btn" id="tonic-new">+ Add</button>
+    </div>
+    <p class="ferment-hint" id="tonic-hint"></p>
+    <div id="tonic-list"></div>
+    <!-- Said once, on the card, rather than buried in the docs. A tidy
+         schedule of tonics quietly implies the flock's health is handled, and
+         it is the implication rather than any single claim that misleads. -->
+    <p class="tonic-caveat">
+      Supplements, not medicine. A bird that is unwell needs a vet — none of
+      this treats an illness.
+    </p>
+  </section>
+
   <section class="ferment" id="ferment-card">
     <div class="ferment-header">
       <h2>Fermented feed</h2>

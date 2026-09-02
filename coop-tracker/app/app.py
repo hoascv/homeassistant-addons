@@ -21,6 +21,7 @@ from datetime import date, datetime, time as dtime, timedelta
 from flask import Flask, Response, g, jsonify, render_template, request, send_file
 
 import ferment
+import tonics
 
 try:
     import numpy as np
@@ -67,7 +68,7 @@ except ImportError as e:
     SKLEARN_AVAILABLE = False
     SKLEARN_ERROR = str(e)
 
-APP_VERSION = "1.49.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.50.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("COOP_DB_PATH", "/data/coop.db")
 OPTIONS_PATH = os.environ.get("COOP_OPTIONS_PATH", "/data/options.json")
@@ -501,6 +502,22 @@ def get_ferment_config():
     }
 
 
+def get_tonic_config():
+    """Settings for the herbal tonics reminder.
+
+    A weekly rhythm rather than a twice-daily one, so a single time of day is
+    the right shape: nobody needs telling about garlic water at 20:00 as well.
+    """
+    opts = _read_options()
+    times = [t.strip() for t in str(opts.get("tonic_times") or "").split(",") if t.strip()]
+    return {
+        "enabled": bool(opts.get("tonic_enabled", False)),
+        "times": times or ["09:00"],
+        "notify_service": (str(opts.get("tonic_notify_service") or "").strip()
+                           or get_reminder_config()["notify_service"]),
+    }
+
+
 def get_ha_sensors_enabled():
     return bool(_read_options().get("ha_sensors_enabled", False))
 
@@ -774,6 +791,7 @@ def init_db():
     # Fermented feed. Its own module rather than more of this file: the state
     # machine and the arithmetic have nothing to do with eggs.
     ferment.create_schema(conn)
+    tonics.create_schema(conn)
 
     _install_change_triggers(conn)
 
@@ -798,6 +816,8 @@ TRACKED_TABLES = {
     "ferment_batches": "id",
     "ferment_stirs": "id",
     "ferment_starter": "id",
+    "tonic_routines": "id",
+    "tonic_doses": "id",
 }
 # Never serialised into the feed. A chicken's photo is fetched from its own
 # endpoint; nothing downstream wants it inline.
@@ -1007,6 +1027,49 @@ def _ferment_stir_tick(now, conn):
                       service=cfg["notify_service"])
 
 
+_tonic_last_notified = None
+
+
+def _tonic_tick(now, conn):
+    """Notify when a tonic is due.
+
+    Same window machinery as the stir reminder and for the same reason — a
+    notification at 3am is one you learn to swipe — but once a day rather than
+    twice: this is a weekly rhythm and telling somebody twice in a day about a
+    thing they do on Sundays is how the reminder becomes noise.
+    """
+    global _tonic_last_notified
+    cfg = get_tonic_config()
+    if not (cfg["enabled"] and cfg["notify_service"]):
+        return
+
+    window = None
+    for value in cfg["times"]:
+        at = _parse_hhmm(value)
+        if at is not None and now.time() >= at:
+            window = value
+    if window is None:
+        return
+
+    key = f"{now.date().isoformat()} {window}"
+    if _tonic_last_notified is None:
+        _tonic_last_notified = _get_app_state(conn, "tonic_last_window")
+    if _tonic_last_notified == key:
+        return
+
+    message = tonics.reminder_message(tonics.due(conn, now=now))
+    if message is None:
+        # Nothing due. The window is not recorded as used, so a routine that
+        # falls due later today still gets its reminder today.
+        return
+
+    _tonic_last_notified = key
+    _set_app_state(conn, "tonic_last_window", key)
+    conn.commit()
+    send_notification(message, title="Coop Tracker — flock tonics",
+                      service=cfg["notify_service"])
+
+
 def _push_ha_state(entity_id, state, attributes=None):
     _, err = _ha_api_request(
         "POST", f"/states/{entity_id}", {"state": state, "attributes": attributes or {}}
@@ -1108,6 +1171,7 @@ def _background_loop():
             try:
                 _reminder_tick(datetime.now(), conn)
                 _ferment_stir_tick(datetime.now(), conn)
+                _tonic_tick(datetime.now(), conn)
                 _push_ha_sensors(conn)
                 _prune_change_log(conn)
                 conn.commit()
@@ -1348,6 +1412,81 @@ def api_discard_starter():
     ferment.discard_starter(conn)
     conn.commit()
     return jsonify(_ferment_payload(conn))
+
+
+def _tonic_payload(conn):
+    cfg = get_tonic_config()
+    body = tonics.summary(conn)
+    body["enabled"] = cfg["enabled"]
+    body["times"] = cfg["times"]
+    body["notify_service"] = cfg["notify_service"]
+    return body
+
+
+@app.route("/api/tonics")
+def api_tonics():
+    conn = get_db()
+    if get_tonic_config()["enabled"]:
+        # Seeded on first read rather than at startup, so a keeper who never
+        # turns the feature on never gets four rows they did not ask for.
+        if tonics.seed_if_empty(conn):
+            conn.commit()
+    return jsonify(_tonic_payload(conn))
+
+
+@app.route("/api/tonics/history")
+def api_tonic_history():
+    return jsonify(tonics.history(get_db()))
+
+
+@app.route("/api/tonics", methods=["POST"])
+def api_add_tonic():
+    data = request.get_json(force=True, silent=True) or {}
+    conn = get_db()
+    try:
+        tonics.add_routine(
+            conn,
+            name=data.get("name"),
+            dose=data.get("dose"),
+            cadence_days=data.get("cadence_days") or tonics.DEFAULT_CADENCE_DAYS,
+            notes=data.get("notes"),
+        )
+    except (TypeError, ValueError) as exc:
+        return jsonify({"error": str(exc)}), 400
+    conn.commit()
+    return jsonify(_tonic_payload(conn)), 201
+
+
+@app.route("/api/tonics/<int:routine_id>/given", methods=["POST"])
+def api_log_tonic(routine_id):
+    conn = get_db()
+    try:
+        tonics.log_dose(conn, routine_id, notes=(request.get_json(
+            force=True, silent=True) or {}).get("notes"))
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 404
+    conn.commit()
+    return jsonify(_tonic_payload(conn))
+
+
+@app.route("/api/tonics/<int:routine_id>/active", methods=["POST"])
+def api_pause_tonic(routine_id):
+    data = request.get_json(force=True, silent=True) or {}
+    conn = get_db()
+    try:
+        tonics.set_active(conn, routine_id, bool(data.get("active")))
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 404
+    conn.commit()
+    return jsonify(_tonic_payload(conn))
+
+
+@app.route("/api/tonics/<int:routine_id>", methods=["DELETE"])
+def api_delete_tonic(routine_id):
+    conn = get_db()
+    tonics.delete_routine(conn, routine_id)
+    conn.commit()
+    return jsonify(_tonic_payload(conn))
 
 
 @app.route("/api/summary")

@@ -2788,6 +2788,86 @@ loadHaStatus();
 loadSummary();
 loadHistory();
 
+// --- Flock tonics ------------------------------------------------------------
+//
+// Garlic in the water, oregano in the feed. Unlike a ferment nothing goes
+// mouldy if you miss one, which is exactly why it needs a reminder: it does not
+// fail, it just quietly stops happening.
+
+async function loadTonics() {
+  const card = document.getElementById("tonic-card");
+  let data;
+  try {
+    data = await fetch("api/tonics").then((r) => r.json());
+  } catch (err) {
+    card.hidden = true;
+    return null;
+  }
+  if (!data.enabled) { card.hidden = true; return data; }
+  card.hidden = false;
+  renderTonics(data);
+  return data;
+}
+
+function renderTonics(data) {
+  const hint = document.getElementById("tonic-hint");
+  hint.textContent = data.routines.length
+    ? (data.due
+        ? `${data.due} due now${data.overdue ? `, ${data.overdue} well overdue` : ""}`
+        : "Nothing due — all up to date.")
+    : "Nothing set up yet.";
+
+  document.getElementById("tonic-list").innerHTML = data.routines.map((r) => {
+    const when = r.never_given ? "never given"
+      : r.due ? `due — last ${fmtDay(r.last_given_at)}`
+      : `next ${fmtDay(r.next_due_at)}`;
+    return `
+      <div class="ferment-row${r.overdue ? " tonic-overdue" : ""}" data-id="${r.id}">
+        <div class="ferment-main">
+          <span class="ferment-name">${escapeHtml(r.name)}</span>
+          <span class="ferment-meta">${escapeHtml(when)} · every ${r.cadence_days} d${
+            r.doses ? ` · given ${r.doses}×` : ""}</span>
+          ${r.dose ? `<span class="tonic-dose">${escapeHtml(r.dose)}</span>` : ""}
+          ${r.notes ? `<details class="tonic-notes"><summary>Why, and what to watch</summary>
+            <p>${escapeHtml(r.notes)}</p></details>` : ""}
+        </div>
+        <div class="ferment-actions">
+          <button type="button" class="btn-small" data-tonic-given="${r.id}">Given</button>
+          <button type="button" class="btn-small btn-quiet" data-tonic-delete="${r.id}"
+            title="Remove this routine">✕</button>
+        </div>
+      </div>`;
+  }).join("");
+}
+
+document.getElementById("tonic-list").addEventListener("click", async (event) => {
+  const given = event.target.closest("[data-tonic-given]");
+  if (given) {
+    renderTonics(await fetch(`api/tonics/${given.dataset.tonicGiven}/given`,
+                             { method: "POST" }).then((r) => r.json()));
+    return;
+  }
+  const remove = event.target.closest("[data-tonic-delete]");
+  if (!remove) return;
+  if (!confirm("Remove this routine? Its history goes with it.")) return;
+  renderTonics(await fetch(`api/tonics/${remove.dataset.tonicDelete}`,
+                           { method: "DELETE" }).then((r) => r.json()));
+});
+
+document.getElementById("tonic-new").addEventListener("click", async () => {
+  const name = prompt("What is it?\n\ne.g. Garlic in the water");
+  if (!name) return;
+  const dose = prompt("How much?\n\ne.g. 1 crushed clove per litre") || "";
+  const cadence = prompt("How often, in days?", "7");
+  const response = await fetch("api/tonics", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, dose, cadence_days: Number(cadence) || 7 }),
+  });
+  const body = await response.json();
+  if (!response.ok) { alert(body.error || "Could not add that."); return; }
+  renderTonics(body);
+});
+
 // --- Fermented feed ----------------------------------------------------------
 //
 // The card exists to answer one question at a glance: is anything about to go
@@ -2797,23 +2877,26 @@ async function loadFerment() {
   // The tab *button*, not the page. A tab you can reach that turns out to be
   // empty reads as something broken; a tab that is not there reads as a
   // feature you have not turned on, which is the truth.
-  const tab = document.getElementById("tab-ferment-btn");
-  let data;
+  const card = document.getElementById("ferment-card");
+  let data = null;
   try {
     data = await fetch("api/ferment").then((r) => r.json());
   } catch (err) {
-    tab.hidden = true;
-    return;
+    data = null;
   }
-  if (!data.enabled) {
-    tab.hidden = true;
-    // Turning it off while somebody is standing on the page would otherwise
-    // leave them on a tab with no way back to it in the bar.
-    if (!document.getElementById("page-ferment").hidden) switchTab("page-home");
-    return;
-  }
-  tab.hidden = false;
-  renderFerment(data);
+  card.hidden = !(data && data.enabled);
+  if (data && data.enabled) renderFerment(data);
+
+  // The tab carries two independent cards now, so it is shown when *either*
+  // is on and hidden only when neither is. Deciding that here, after both
+  // have loaded, is what keeps one feature from hiding the other's tab.
+  const tonic = await loadTonics();
+  const anything = (data && data.enabled) || (tonic && tonic.enabled);
+  const tab = document.getElementById("tab-ferment-btn");
+  tab.hidden = !anything;
+  // Turning the last one off while somebody is standing on the page would
+  // otherwise leave them on a tab with no way back to it in the bar.
+  if (!anything && !document.getElementById("page-ferment").hidden) switchTab("page-home");
 }
 
 function renderFerment(data) {

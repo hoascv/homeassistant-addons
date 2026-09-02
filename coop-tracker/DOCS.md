@@ -143,6 +143,80 @@ it — independent of the 3/6/12-month range used for the egg chart above
 it, since a meaningful refill average usually needs longer than that to
 build up.
 
+## Flock tonics
+
+Off by default; turn on `tonic_enabled`. Shares the **🪣 Feed** tab with the
+fermented feed card, and either one showing is enough to bring the tab back.
+
+Garlic in the water, dried oregano in with the pellets, cider vinegar a couple
+of days a week — ordinary husbandry, and exactly the sort of thing that gets
+forgotten. Unlike a ferment nothing goes mouldy when you miss one. It does not
+fail; it just quietly stops happening, and six weeks later nobody can say when
+the birds last had anything.
+
+> **Supplements, not medicine.** The evidence for most of these is thin —
+> garlic and oregano have some support in poultry work, cider vinegar much less
+> — and none of them treats a sick bird. A bird that is unwell needs a vet.
+> The card says so too, because a tidy schedule of ticked-off tonics quietly
+> implies the flock's health is handled.
+
+### What ships
+
+Four routines, with the amounts keepers actually use and the cautions worth
+having. Each carries a **Why, and what to watch** note.
+
+| | | |
+|---|---|---|
+| **Garlic in the water** | weekly | 1 crushed clove per litre, 4 hours, then fresh water |
+| **Oregano and thyme** | weekly | a tbsp dried per kg of feed, or a fresh handful |
+| **Cider vinegar** | fortnightly | 20 ml per litre for two or three days |
+| **Fresh greens** | every 3 days | nettle tops (wilted), dandelion, kale |
+
+Two of those cautions are worth repeating here:
+
+- **Cider vinegar must never go in a galvanised metal drinker.** The acid
+  leaches zinc out of the coating and that genuinely poisons birds. Plastic or
+  ceramic only. The gut-health claims are thin; this risk is not.
+- **More garlic is not better.** It is an allium, and alliums in quantity cause
+  anaemia in birds. A clove per litre once a week is the usual amount and there
+  is no reason to go past it.
+
+They are seeded the first time you open the card with the feature on — never at
+startup, so a keeper who never turns it on does not find four rows they did not
+ask for. Delete the ones you do not want and they stay deleted.
+
+### The card
+
+One row per routine: when it is next due, how often, the dose, and how many
+times it has been given. **Given** logs it and pushes the next one out by the
+cadence. Only a routine more than three days late is coloured — "due" on a
+weekly rhythm is not an emergency, and spending the card's one alarm on it
+would bury the ferment row that is.
+
+**Pausing** keeps the history; deleting takes it with the routine. A routine
+paused over winter comes back in spring with its record intact.
+
+### The reminder
+
+Once a day, at `tonic_times` (default `09:00`), naming what is due:
+
+> Time for the flock's garlic in the water.
+
+Once a day rather than twice, unlike the stir reminder: this is a weekly rhythm
+and telling somebody twice in a day about a Sunday job is how a reminder
+becomes something they swipe away. Three or more due are counted rather than
+listed — a wall of names in a notification is not read.
+
+Goes to `tonic_notify_service`, falling back to `notify_service`.
+
+### Settings
+
+| Option | |
+|---|---|
+| `tonic_enabled` | Shows the card and enables the reminder. |
+| `tonic_times` | When it may fire. Default `09:00`. |
+| `tonic_notify_service` | Where it goes. Blank uses `notify_service`. |
+
 ## Fermented feed
 
 Off by default; turn on `ferment_enabled`.

@@ -1,5 +1,35 @@
 # Changelog
 
+## 1.50.0
+
+- **Flock tonics.** Garlic in the water, oregano in the feed, cider vinegar,
+  fresh greens — a schedule for the homemade things that support a flock's
+  condition, with a reminder when each is due. Unlike a ferment nothing goes
+  mouldy when one is missed, which is exactly why it needs reminding about: it
+  does not fail, it quietly stops happening.
+- **Four routines ship filled in**, with the amounts keepers actually use and
+  the cautions worth having. Cider vinegar must never go in a galvanised
+  drinker — the acid leaches zinc and that poisons birds. Garlic is an allium
+  and more is not better. Both are on the card, not buried in the docs.
+- **The card says these are supplements, not medicine**, and that a sick bird
+  needs a vet. A tidy schedule of ticked-off tonics quietly implies the flock's
+  health is handled, and that implication is what needed answering.
+- Seeded on first opening the card with the feature on, never at startup, and
+  only when the table is empty — so ones you delete stay deleted.
+- Only a routine more than three days late is coloured. "Due" on a weekly
+  rhythm is not an emergency, and colouring it would bury the ferment row that
+  is.
+- Pausing keeps a routine's history; deleting takes it. A routine paused over
+  winter comes back in spring with its record.
+- Reminder once a day at `tonic_times` (default `09:00`), to
+  `tonic_notify_service` or `notify_service`. Once, not twice like the stir
+  reminder: telling somebody twice a day about a Sunday job is how a reminder
+  becomes noise.
+- **The Ferment tab is now the Feed tab**, holding both cards. Each hides on
+  its own option and the tab appears if either is on.
+- New `tonics.py` rather than more of `app.py`. `tonic_routines` and
+  `tonic_doses` join the change feed.
+
 ## 1.49.0
 
 - **Every chart on Trends now has a labelled y axis.** Monthly egg totals, eggs

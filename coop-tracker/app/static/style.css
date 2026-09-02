@@ -1184,6 +1184,20 @@ img.chicken-avatar {
 .ferment-warn { color: var(--warn-ink); font-weight: 600; flex-basis: 100%; }
 .starter-stale { background: var(--warn-wash); }
 
+/* A tonic nobody has given for days. Coloured on the same rule as the rest of
+   this card — act on it today — and no other tonic state gets a colour, since
+   "due" on a weekly rhythm is not an emergency. */
+.tonic-overdue { background: var(--warn-wash); border-radius: 8px;
+  margin: 0 -0.4rem; padding-left: 0.4rem; padding-right: 0.4rem; }
+.tonic-dose { font-size: 0.76rem; color: var(--text-muted); margin-top: 0.15rem; }
+.tonic-notes { font-size: 0.74rem; color: var(--text-muted); margin-top: 0.2rem; }
+.tonic-notes summary { cursor: pointer; }
+.tonic-notes p { margin: 0.3rem 0 0; line-height: 1.45; }
+/* Stated on the card, not in the docs. A tidy schedule quietly implies the
+   flock's health is handled; that implication is what needs answering. */
+.tonic-caveat { font-size: 0.76rem; color: var(--text-muted); font-style: italic;
+  margin: 0.7rem 0 0; padding-top: 0.6rem; border-top: 1px solid var(--border); }
+
 /* Overdue for a stir — one of the two states that needs acting on today. */
 .stir-due { background: var(--warn-wash); border-radius: 8px;
   margin: 0 -0.4rem; padding-left: 0.4rem; padding-right: 0.4rem; }
