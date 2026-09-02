@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.18.2
+
+- **Fixed: the trips form was unstyled.** White boxes with dark text on a dark
+  card, and every label sitting beside its input instead of above it. Until the
+  trips card this add-on had no form at all — as the note above its tables puts
+  it, the UI was something to look at rather than something to fill in — so the
+  stylesheet had no input rules, and the markup arrived using a `.field` class
+  from another add-on that nothing here defined.
+- Inputs now take the theme's own surface, text and border, and declare
+  `color-scheme` so the date picker's calendar icon and the number spinner are
+  visible in dark mode rather than dark-on-dark.
+
 ## 1.18.1
 
 - **Fixed: the whole page showed dashes.** The trips code added in 1.18.0 used

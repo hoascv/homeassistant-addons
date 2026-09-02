@@ -318,7 +318,41 @@ code {
 .trips { margin-top: 0.9rem; border-top: 1px solid var(--border); padding-top: 0.7rem; }
 .trips summary { cursor: pointer; font-size: 0.86rem; font-weight: 600; }
 .trip-count { opacity: 0.6; font-variant-numeric: tabular-nums; font-weight: 400; }
-.trip-form { display: grid; gap: 0.5rem; margin: 0.6rem 0 0.8rem; }
+.trip-form { display: grid; gap: 0.7rem; margin: 0.7rem 0 0.9rem; }
+
+/* The first form this add-on has ever had — until the trips card everything
+   here was, as the note above the tables puts it, something to look at rather
+   than something to fill in. So there were no input styles at all, and the
+   browser's defaults gave white boxes with dark text sitting on a dark card.
+   The label/input pair also needs stacking: `.field` arrived from another
+   add-on in this repo along with the markup, and there was nothing here to
+   answer it. */
+.field { display: flex; flex-direction: column; gap: 0.25rem; }
+.field > span { font-size: 0.82rem; font-weight: 600; }
+
+.trip-form input {
+  font: inherit;
+  font-size: 0.9rem;
+  padding: 0.5rem 0.6rem;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  width: 100%;
+  /* Safari paints date and number inputs with its own light chrome unless the
+     field declares which schemes it supports. Without it the calendar icon and
+     the spinner stay dark-on-dark and effectively vanish. */
+  color-scheme: light dark;
+}
+.trip-form input::placeholder { color: var(--text-muted); opacity: 0.7; }
+.trip-form input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-color: transparent;
+}
+/* Left full width by the grid, which is what a submit button wants to be on a
+   phone — and it now sits under inputs that are the same width. */
+.trip-form .btn-secondary { margin-top: 0.2rem; }
 .trip-row {
   display: flex; align-items: center; justify-content: space-between;
   gap: 0.6rem; padding: 0.45rem 0; border-top: 1px solid var(--border);
