@@ -332,3 +332,37 @@ def test_no_top_level_call_is_undefined():
     called_at_load = set(re.findall(r"^([a-z][A-Za-z0-9_$]*)\(", source, re.M))
     missing = sorted(called_at_load - defined)
     assert missing == [], f"called at load but never defined: {missing}"
+
+
+def test_the_app_version_matches_config():
+    """APP_VERSION is the cache-buster on `static/app.js?v=` and
+    `static/style.css?v=`, so a stale one does more than misreport a number:
+    every browser that has been here keeps serving the JS it cached under that
+    URL, and new front-end work silently never arrives.
+
+    Electricity Tracker drifted to 1.12.2 while its config.yaml said 1.15.1 —
+    four releases of JS changes published at one URL. Hence a test rather than
+    a habit."""
+    import os
+    import re
+
+    here = os.path.dirname(__file__)
+    with open(os.path.join(here, "..", "app.py"), encoding="utf-8") as handle:
+        app_version = re.search(r'^APP_VERSION\s*=\s*"([^"]+)"', handle.read(), re.M).group(1)
+    with open(os.path.join(here, "..", "..", "config.yaml"), encoding="utf-8") as handle:
+        config_version = re.search(r'^version:\s*"([^"]+)"', handle.read(), re.M).group(1)
+    assert app_version == config_version, (
+        f'APP_VERSION is "{app_version}" but config.yaml says "{config_version}" — '
+        "browsers will keep the JS they cached under the old ?v="
+    )
+
+
+def test_the_static_assets_are_cache_busted():
+    """The other half of the same guarantee: a version kept in sync but not
+    actually on the URL busts nothing."""
+    import os
+    path = os.path.join(os.path.dirname(__file__), "..", "templates", "index.html")
+    with open(path, encoding="utf-8") as handle:
+        html = handle.read()
+    assert "static/app.js?v={{ app_version }}" in html
+    assert "static/style.css?v={{ app_version }}" in html

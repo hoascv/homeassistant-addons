@@ -18,23 +18,23 @@ jobs:
         # number rises, and never lower it to make a red build go green.
         include:
           - addon: coop-tracker
-            floor: 90
+            floor: 92
           - addon: gym-tracker
-            floor: 88
+            floor: 90
           - addon: detection-hub
             floor: 88
           - addon: addon-watchdog
-            floor: 91
+            floor: 92
           - addon: network-traffic
             floor: 92
           - addon: electricity-tracker
-            floor: 87
-          - addon: knowledge
-            floor: 88
-          - addon: journal
-            floor: 88
-          - addon: recipes
             floor: 90
+          - addon: knowledge
+            floor: 90
+          - addon: journal
+            floor: 90
+          - addon: recipes
+            floor: 92
     defaults:
       run:
         working-directory: ${{ matrix.addon }}
