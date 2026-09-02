@@ -68,3 +68,42 @@ def test_logging_a_trip_round_trips(page, app_server, page_errors):
     page.click("#trip-add")
     expect(page.locator("#trip-list")).to_contain_text("Aarhus and back")
     assert page_errors == []
+
+
+def test_hovering_a_chart_shows_a_tooltip(page, app_server, page_errors):
+    """The browser's own <title> tooltip waits about a second, is styled by the
+    OS and does nothing on a touchscreen, so the charts carry their own. Driven
+    by moving a real mouse, because "the markup contains a tooltip div" is the
+    kind of assertion that passes while nothing appears on screen.
+
+    Moved by coordinate rather than hovering one circle: the hit targets
+    overlap on a dense chart, and Playwright refuses a hover whose centre a
+    sibling covers. The handler picks the nearest by x, so that overlap does
+    not matter to it.
+    """
+    page.goto(app_server)
+    page.wait_for_load_state("networkidle")
+    
+    box = page.locator("#price-chart svg").first.bounding_box()
+    assert box, "no chart rendered to hover"
+    page.mouse.move(box["x"] + box["width"] * 0.5, box["y"] + box["height"] * 0.5)
+    page.wait_for_timeout(300)
+
+    tip = page.locator(".chart-tip")
+    assert tip.is_visible(), "no tooltip appeared"
+    assert tip.text_content().strip(), "the tooltip appeared empty"
+    assert page_errors == []
+
+
+def test_the_tooltip_goes_away(page, app_server, page_errors):
+    """Left on screen it would sit over the next thing you looked at."""
+    page.goto(app_server)
+    page.wait_for_load_state("networkidle")
+    
+    box = page.locator("#price-chart svg").first.bounding_box()
+    page.mouse.move(box["x"] + box["width"] * 0.5, box["y"] + box["height"] * 0.5)
+    page.wait_for_timeout(200)
+    page.mouse.move(5, 5)
+    page.wait_for_timeout(200)
+    assert page.locator(".chart-tip").is_hidden()
+    assert page_errors == []

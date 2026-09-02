@@ -97,3 +97,49 @@ def test_log_egg_via_photo_smoke(
     # (datetime-local input has only minute precision) can put either one
     # first in the ORDER BY ts DESC result — either is a correct save.
     expect(page.locator("#history-list")).to_contain_text("3 eggs collected")
+
+
+def test_hovering_a_chart_shows_a_tooltip(page, app_server, page_errors):
+    """The browser's own <title> tooltip waits about a second, is styled by the
+    OS and does nothing on a touchscreen, so the charts carry their own. Driven
+    by moving a real mouse, because "the markup contains a tooltip div" is the
+    kind of assertion that passes while nothing appears on screen.
+
+    Moved by coordinate rather than hovering one circle: the hit targets
+    overlap on a dense chart, and Playwright refuses a hover whose centre a
+    sibling covers. The handler picks the nearest by x, so that overlap does
+    not matter to it.
+    """
+    page.goto(app_server)
+    page.wait_for_load_state("networkidle")
+    page.click('.tabbar-btn[data-page="page-trends"]')
+    page.wait_for_timeout(800)
+    # Aimed at a hit target rather than the middle of the plot: this suite runs
+    # against a near-empty database, so the only covered day is today at the
+    # far right, and the tooltip correctly declines to appear for a point 44px
+    # or more from the cursor.
+    hits = page.locator("#daily-eggs-chart-wrap .chart-hit")
+    assert hits.count(), "no hover targets on the chart"
+    box = hits.last.bounding_box()
+    page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+    page.wait_for_timeout(300)
+
+    tip = page.locator(".chart-tip")
+    assert tip.is_visible(), "no tooltip appeared"
+    assert tip.text_content().strip(), "the tooltip appeared empty"
+    assert page_errors == []
+
+
+def test_the_tooltip_goes_away(page, app_server, page_errors):
+    """Left on screen it would sit over the next thing you looked at."""
+    page.goto(app_server)
+    page.wait_for_load_state("networkidle")
+    page.click('.tabbar-btn[data-page="page-trends"]')
+    page.wait_for_timeout(800)
+    box = page.locator("#daily-eggs-chart-wrap .chart-hit").last.bounding_box()
+    page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+    page.wait_for_timeout(200)
+    page.mouse.move(5, 5)
+    page.wait_for_timeout(200)
+    assert page.locator(".chart-tip").is_hidden()
+    assert page_errors == []

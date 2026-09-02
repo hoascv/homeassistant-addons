@@ -439,9 +439,13 @@ function renderSmoothChart(host, rows, opts) {
   const hitTargets = rows.map((r, i) => {
     const p = seriesPoints.map((sp) => sp[i]).find(Boolean);
     if (!p) return "";
+    // data-tip, not <title>: the browser draws its own tooltip from a <title>
+    // after about a second, so keeping both means two tooltips, one of them
+    // late and ugly. aria-label keeps the value available to a screen reader.
+    const text = escapeHtml(opts.tooltipOf(r));
     return (
-      `<circle class="chart-hit" cx="${p[0].toFixed(2)}" cy="${p[1].toFixed(2)}" r="7">` +
-      `<title>${escapeHtml(opts.tooltipOf(r))}</title></circle>`
+      `<circle class="chart-hit" cx="${p[0].toFixed(2)}" cy="${p[1].toFixed(2)}" r="7"` +
+      ` data-tip="${text}" aria-label="${text}"></circle>`
     );
   }).join("");
 
@@ -1533,3 +1537,88 @@ function init() {
 }
 
 document.addEventListener("DOMContentLoaded", init);
+
+// --- chart hover --------------------------------------------------------------
+//
+// A real tooltip rather than the browser's <title> one, which waits about a
+// second, is styled by the OS, and does nothing whatever on a touchscreen. Gym
+// Tracker's weight chart already worked this way; this is the same idea for the
+// charts here, which are built as SVG strings rather than assembled node by
+// node.
+//
+// Delegated from the document, so it covers every chart including ones that
+// re-render on a timer, and needs no wiring at the call site.
+
+const chartTip = {
+  el: null,
+  point: null,
+  node() {
+    if (!this.el) {
+      this.el = document.createElement("div");
+      this.el.className = "chart-tip";
+      this.el.hidden = true;
+      document.body.appendChild(this.el);
+    }
+    return this.el;
+  },
+  show(hit, text) {
+    const tip = this.node();
+    tip.textContent = text;
+    tip.hidden = false;
+    if (this.point && this.point !== hit) this.point.classList.remove("is-on");
+    hit.classList.add("is-on");
+    this.point = hit;
+
+    // Placed above the point and clamped to the viewport, so a tooltip near
+    // the top or the right edge stays readable instead of being cut off.
+    const box = hit.getBoundingClientRect();
+    const size = tip.getBoundingClientRect();
+    const left = Math.min(
+      Math.max(6, box.left + box.width / 2 - size.width / 2),
+      window.innerWidth - size.width - 6);
+    const above = box.top - size.height - 8;
+    tip.style.left = `${left}px`;
+    tip.style.top = `${above > 6 ? above : box.bottom + 8}px`;
+  },
+  hide() {
+    if (this.point) this.point.classList.remove("is-on");
+    this.point = null;
+    if (this.el) this.el.hidden = true;
+  },
+};
+
+// Nearest by horizontal distance rather than whatever is directly under the
+// cursor: on a dense chart the points are a few pixels apart and requiring a
+// direct hit makes the tooltip flicker in and out as you move along the line.
+function nearestChartHit(svg, clientX) {
+  let best = null;
+  let bestDistance = Infinity;
+  for (const hit of svg.querySelectorAll(".chart-hit")) {
+    const box = hit.getBoundingClientRect();
+    const distance = Math.abs(box.left + box.width / 2 - clientX);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      best = hit;
+    }
+  }
+  return bestDistance <= 44 ? best : null;
+}
+
+function handleChartPointer(event) {
+  const svg = event.target.closest("svg");
+  if (!svg || !svg.querySelector(".chart-hit")) {
+    chartTip.hide();
+    return;
+  }
+  const hit = nearestChartHit(svg, event.clientX);
+  const text = hit && hit.dataset.tip;
+  if (text) chartTip.show(hit, text);
+  else chartTip.hide();
+}
+
+document.addEventListener("pointermove", handleChartPointer);
+// Touch: a tap shows it, and a tap anywhere else puts it away. Without the
+// second half the tooltip would sit there until the next chart was touched.
+document.addEventListener("pointerdown", handleChartPointer);
+document.addEventListener("pointerleave", () => chartTip.hide());
+window.addEventListener("scroll", () => chartTip.hide(), { passive: true });

@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.53.0
+
+- **Proper hover tooltips on the charts.** 1.52.0 leaned on the browser's own
+  `<title>` tooltip, which waits about a second, is styled by the operating
+  system and does nothing at all on a touchscreen. The charts now carry their
+  own: instant, themed, positioned above the point, and shown on a tap as well
+  as a hover.
+- The point being read is ringed while you hover it, so on a dense chart you
+  can see which day the figure belongs to.
+- Nearest by horizontal distance rather than whatever is directly under the
+  cursor — on thirty points a few pixels apart, requiring a direct hit made it
+  flicker. A point more than about 40px away shows nothing, so an empty stretch
+  of chart stays empty.
+- The tooltip text moved from `<title>` to `data-tip`. Keeping both meant two
+  tooltips, one of them a second late; `aria-label` keeps the value available
+  to a screen reader.
+- The e2e suite gained the `page_errors` fixture the newer suites have, and a
+  test that drives a real mouse and asserts a tooltip appears — "the markup
+  contains a tooltip div" is exactly the kind of assertion that passes while
+  nothing shows on screen.
+
 ## 1.52.0
 
 - **Hover any chart to read the exact figure.** None of the four had a way to

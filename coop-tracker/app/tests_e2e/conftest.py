@@ -104,3 +104,19 @@ def browser_context_args(browser_context_args):
     with rendering errors that say nothing about authentication.
     """
     return {**browser_context_args, "extra_http_headers": INGRESS_HEADERS}
+
+
+@pytest.fixture
+def page_errors(page):
+    """Uncaught exceptions and console errors from the page.
+
+    Added after Electricity Tracker shipped a ReferenceError at the top of its
+    app.js that stopped the whole script: every figure showed a dash and no
+    test noticed, because none of them looked for an error. This suite predates
+    that and had the same gap.
+    """
+    errors = []
+    page.on("pageerror", lambda exc: errors.append(f"pageerror: {exc}"))
+    page.on("console", lambda msg: errors.append(f"console.{msg.type}: {msg.text}")
+            if msg.type == "error" else None)
+    return errors

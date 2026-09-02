@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.19.0
+
+- **Proper hover tooltips on the charts.** These were the browser's own
+  `<title>` tooltips: about a second's delay, operating-system styling, and
+  nothing whatever on a touchscreen. They are now instant, themed, positioned
+  above the point, and work on a tap.
+- The point being read is ringed while you hover it — useful on the price
+  chart, where 96 quarter-hour points sit a few pixels apart.
+- Nearest by horizontal distance rather than a direct hit, which on that
+  spacing made the tooltip flicker as the cursor moved along the line.
+- Text moved from `<title>` to `data-tip`, because keeping both meant two
+  tooltips with one arriving late. `aria-label` keeps it for screen readers.
+- An e2e test drives a real mouse and asserts the tooltip appears and then goes
+  away again.
+
 ## 1.18.2
 
 - **Fixed: the trips form was unstyled.** White boxes with dark text on a dark

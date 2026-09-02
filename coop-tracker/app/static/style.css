@@ -1241,3 +1241,30 @@ img.chicken-avatar {
   background: var(--bg); color: inherit; }
 .btn-quiet { opacity: 0.6; }
 
+
+/* --- chart tooltip ---------------------------------------------------------
+   The browser's own <title> tooltip waits about a second, is styled by the OS
+   and does nothing on a touchscreen, so these charts carry their own. */
+.chart-tip {
+  position: fixed;
+  z-index: 20;
+  pointer-events: none;
+  max-width: 15rem;
+  padding: 0.35rem 0.55rem;
+  border-radius: 8px;
+  font-size: 0.76rem;
+  line-height: 1.35;
+  white-space: pre-line;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+}
+
+/* The point being read. The hit circle is transparent and much larger than the
+   marker, so this rings the spot rather than filling it. */
+.chart-hit.is-on {
+  stroke: var(--text-muted);
+  stroke-width: 1;
+  fill: rgba(128, 128, 128, 0.18);
+}
