@@ -6,8 +6,11 @@ take a list of staples or a category name, not a config object they would have
 to stub.
 """
 import json
+import os
 
-OPTIONS_PATH = "/data/options.json"
+# Overridable like every other add-on in this repo, so a dev run and the
+# end-to-end suite can point it somewhere writable instead of /data.
+OPTIONS_PATH = os.environ.get("RECIPES_OPTIONS_PATH", "/data/options.json")
 
 DEFAULTS = {
     "categories": "Family, Bulk",
