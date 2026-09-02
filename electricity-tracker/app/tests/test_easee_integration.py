@@ -1,7 +1,7 @@
 """Tests for how app.py consumes Easee: config parsing, token caching,
 charger discovery, and session-cost derivation from sessionEnergy deltas.
 The REST client itself is covered by test_easee.py."""
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from unittest.mock import patch
 
 import app as electricityapp
@@ -652,7 +652,7 @@ def test_daily_rollup_fills_the_days_with_no_charging(conn):
     _charge(conn, 23, 8, [0.0, 4.0])
     conn.commit()
     sessions = electricityapp.easee_sessions(conn, _flat_opts(), "DK2", "EH1", days=30, now_local=_now())
-    daily = electricityapp.easee_daily_charging(sessions)
+    daily = electricityapp.easee_daily_charging(sessions, today=date(2026, 8, 23))
     assert [d["day"] for d in daily] == ["2026-08-20", "2026-08-21", "2026-08-22", "2026-08-23"]
     assert [d["kwh"] for d in daily] == [6.0, 0.0, 0.0, 4.0]
     assert [d["sessions"] for d in daily] == [1, 0, 0, 1]
@@ -664,7 +664,7 @@ def test_daily_rollup_sums_two_charges_on_one_day(conn):
     _charge(conn, 20, 14, [0.0, 5.0])
     conn.commit()
     sessions = electricityapp.easee_sessions(conn, _flat_opts(), "DK2", "EH1", days=30, now_local=_now())
-    daily = electricityapp.easee_daily_charging(sessions)
+    daily = electricityapp.easee_daily_charging(sessions, today=date(2026, 8, 20))
     assert len(daily) == 1
     assert daily[0]["kwh"] == 8.0
     assert daily[0]["sessions"] == 2
@@ -852,3 +852,48 @@ def test_a_frozen_run_contributes_no_energy_to_the_history(conn):
     sessions = electricityapp.easee_sessions(conn, _flat_opts(), "DK2", "EH1", days=30,
                                              now_local=_now())
     assert sessions == []
+
+
+def test_the_daily_series_runs_to_today_not_to_the_last_charge(conn):
+    """Stopping at the last charge put that session's peak hard against the
+    right edge of the plot, where the curve rose to it and was cut off — so the
+    most recent charge, the one most worth seeing, was the one you could not
+    see. It also read as if the record ended there rather than as "nothing
+    since Thursday"."""
+    _seed_flat_month(conn)
+    _charge(conn, 20, 8, [0.0, 6.0])
+    conn.commit()
+    sessions = electricityapp.easee_sessions(conn, _flat_opts(), "DK2", "EH1",
+                                             days=30, now_local=_now())
+
+    daily = electricityapp.easee_daily_charging(sessions, today=date(2026, 8, 24))
+    assert daily[-1]["day"] == "2026-08-24"
+    assert daily[-1]["kwh"] == 0.0
+    assert daily[-1]["sessions"] == 0
+    # And the charge itself is no longer the final point.
+    assert daily[0]["kwh"] == 6.0 and len(daily) == 5
+
+
+def test_a_charge_today_is_still_the_last_point(conn):
+    """The trailing days are whatever is between the last charge and now. When
+    that is nothing, the series ends on the charge — and the padding is what
+    keeps its peak inside the plot."""
+    _seed_flat_month(conn)
+    _charge(conn, 20, 8, [0.0, 6.0])
+    conn.commit()
+    sessions = electricityapp.easee_sessions(conn, _flat_opts(), "DK2", "EH1",
+                                             days=30, now_local=_now())
+    daily = electricityapp.easee_daily_charging(sessions, today=date(2026, 8, 20))
+    assert len(daily) == 1 and daily[0]["kwh"] == 6.0
+
+
+def test_the_plot_leaves_room_for_a_point_on_the_edge():
+    """At padRight 3 the shoulder of a curve rising to the final day fell
+    outside the viewBox and its peak was cut away."""
+    import os
+    import re
+    path = os.path.join(os.path.dirname(__file__), "..", "static", "app.js")
+    with open(path, encoding="utf-8") as handle:
+        js = handle.read()
+    match = re.search(r"padRight = (\d+)", js)
+    assert match and int(match.group(1)) >= 8

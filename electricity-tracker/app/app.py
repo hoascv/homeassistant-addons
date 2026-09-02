@@ -22,7 +22,7 @@ import eloverblik
 import saveeye
 import easee
 
-APP_VERSION = "1.19.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.19.1"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("ELECTRICITY_DB_PATH", "/data/electricity.db")
 OPTIONS_PATH = os.environ.get("ELECTRICITY_OPTIONS_PATH", "/data/options.json")
@@ -2114,10 +2114,18 @@ def easee_monthly_charging(sessions, today=None):
     return {"months": months, "average": average}
 
 
-def easee_daily_charging(sessions):
+def easee_daily_charging(sessions, today=None):
     """Per-day totals for the history chart, oldest first and with the empty
     days present — a gap in a time series has to be a zero, not a missing
-    point, or the line implies charging on a day nothing was plugged in."""
+    point, or the line implies charging on a day nothing was plugged in.
+
+    The series runs to **today**, not to the last charge. Stopping at the last
+    charge put that session's peak hard against the right edge of the plot,
+    where the line rose to it and was cut off — so the most recent charge, the
+    one most worth seeing, was the one you could not see. It also read as if
+    the record ended there rather than as "nothing since Thursday", which is
+    the actual state of affairs and worth showing.
+    """
     if not sessions:
         return []
     by_day = {}
@@ -2134,7 +2142,8 @@ def easee_daily_charging(sessions):
 
     days = sorted(by_day)
     cursor = date.fromisoformat(days[0])
-    last = date.fromisoformat(days[-1])
+    last = max(date.fromisoformat(days[-1]),
+               today or datetime.now(LOCAL_TZ).date())
     out = []
     while cursor <= last:
         key = cursor.isoformat()

@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.19.1
+
+- **Fixed: the most recent charging peak was cut off.** The daily series ran
+  from the first charge to the last one, so the newest session sat hard against
+  the right edge of the plot — the line rose to it and left the chart with its
+  peak outside the viewBox. The one charge you most want to see was the one you
+  could not.
+- The series now runs to **today**. Beyond fixing the clipping, that is the
+  truthful shape: the chart said the record ended at the last charge, where it
+  actually means "nothing since Thursday".
+- Plot padding widened from 3px to 8px, so a charge falling on the last day of
+  the range still has room for its shoulders.
+
 ## 1.19.0
 
 - **Proper hover tooltips on the charts.** These were the browser's own

@@ -303,7 +303,11 @@ function renderSmoothChart(host, rows, opts) {
 
   // Expanded renders pass their own box; the default is the in-card size.
   const W = opts.width || 600, H = opts.height || 160;
-  const padTop = 14, padBottom = 20, padRight = 3;
+  // padRight is 8, not 3: a point on the last day sits at the right edge, and
+  // at 3 the curve's shoulder and half its stroke fell outside the viewBox —
+  // so a charge on the final day of the range was drawn as a line rising off
+  // the chart with its peak cut away.
+  const padTop = 14, padBottom = 20, padRight = 8;
   const values = [];
   rows.forEach((r) => series.forEach((s) => {
     const v = s.valueOf(r);
