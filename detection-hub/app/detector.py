@@ -142,6 +142,77 @@ def decode(raw, size=INPUT_SIZE):
 # --- the motion gate ----------------------------------------------------------
 
 
+def motion_regions(previous, current, width=320, blur=21, delta_threshold=25,
+                   min_area=0.002, merge_gap=24):
+    """Where the frame changed, as boxes in the original image's coordinates.
+
+    The same difference `motion_score` already computes, kept instead of
+    counted. It exists because a custom object class needs somewhere to look:
+    YOLOX proposes boxes only for things it recognises, so an object outside
+    the 80 COCO classes gets either no box or the whole frame — measured, on a
+    cargo bike, as exactly those two failures. On a camera bolted to a wall,
+    "what changed" is a proposal method that owes nothing to what the object is.
+
+    Boxes closer than `merge_gap` are merged: a person walking produces a torso
+    and two legs, and three crops of one person are three chances to be wrong
+    about it.
+    """
+    if previous is None or current is None:
+        return []
+    scale = width / current.shape[1]
+    size = (width, max(1, int(current.shape[0] * scale)))
+
+    def prepare(frame):
+        small = cv2.resize(frame, size, interpolation=cv2.INTER_AREA)
+        grey = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+        return cv2.GaussianBlur(grey, (blur, blur), 0)
+
+    diff = cv2.absdiff(prepare(previous), prepare(current))
+    mask = cv2.threshold(diff, delta_threshold, 255, cv2.THRESH_BINARY)[1]
+    # Dilated before contouring so a single object broken up by the blur comes
+    # back as one region rather than a constellation.
+    mask = cv2.dilate(mask, np.ones((5, 5), np.uint8), iterations=2)
+
+    contours = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[0]
+    frame_area = mask.shape[0] * mask.shape[1]
+    boxes = []
+    for contour in contours:
+        x, y, w, h = cv2.boundingRect(contour)
+        if w * h < min_area * frame_area:
+            continue
+        boxes.append([x, y, x + w, y + h])
+
+    boxes = _merge_boxes(boxes, merge_gap)
+    # Back to the full-resolution frame the crops will be taken from.
+    return [
+        [int(x1 / scale), int(y1 / scale), int((x2 - x1) / scale), int((y2 - y1) / scale)]
+        for x1, y1, x2, y2 in boxes
+    ]
+
+
+def _merge_boxes(boxes, gap):
+    """Repeatedly union boxes that touch or nearly touch."""
+    merged = True
+    while merged and len(boxes) > 1:
+        merged = False
+        out = []
+        while boxes:
+            x1, y1, x2, y2 = boxes.pop()
+            rest = []
+            for other in boxes:
+                if (x1 - gap < other[2] and other[0] - gap < x2
+                        and y1 - gap < other[3] and other[1] - gap < y2):
+                    x1, y1 = min(x1, other[0]), min(y1, other[1])
+                    x2, y2 = max(x2, other[2]), max(y2, other[3])
+                    merged = True
+                else:
+                    rest.append(other)
+            boxes = rest
+            out.append([x1, y1, x2, y2])
+        boxes = out
+    return boxes
+
+
 def motion_score(previous, current, width=320, blur=21, delta_threshold=25):
     """Fraction of the frame that changed, 0.0 to 1.0.
 
