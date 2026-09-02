@@ -109,12 +109,20 @@ jobs:
         run: pip install -r requirements-dev.txt
 
       - name: Run tests
-        # Reported, not enforced. The Spark tests are what exercise most of
-        # jobs/, and they only run where there is a JVM — so the honest floor
-        # for this add-on is whatever this step first prints on CI, not a
-        # number guessed from a laptop that skips them. Add --cov-fail-under
-        # here once that figure is known.
-        run: pytest --cov --cov-report=term-missing
+        # 55, from the 57% this step actually printed on CI with 35 tests and
+        # nothing skipped — the setup-java step above means the Spark tests do
+        # run here, so that figure is real rather than an artefact of a missing
+        # JVM, which is what the note here used to assume.
+        #
+        # A wider buffer than the other add-ons get, because jobs/ is only 195
+        # statements: one percentage point is two lines, so the usual single
+        # point of headroom would trip on a trivial refactor.
+        #
+        # It is a low number and honestly so. jobs/example_job.py is at 0% and
+        # jobs/lakehouse.py at 29%; both are real shipped code — example_job.py
+        # is baked into the Spark image and spark-submitted by the example DAG,
+        # not a fixture — so neither should be omitted to flatter the total.
+        run: pytest --cov --cov-report=term-missing --cov-fail-under=55
 
   # A real browser opening a real page. Every other front-end test in this repo
   # reads app.js as text and asserts a substring is present, which proves a line
