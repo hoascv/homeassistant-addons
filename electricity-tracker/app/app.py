@@ -22,7 +22,7 @@ import eloverblik
 import saveeye
 import easee
 
-APP_VERSION = "1.17.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.18.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("ELECTRICITY_DB_PATH", "/data/electricity.db")
 OPTIONS_PATH = os.environ.get("ELECTRICITY_OPTIONS_PATH", "/data/options.json")
@@ -356,6 +356,26 @@ def init_db():
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS ev_trips (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            -- Local calendar days, not instants. A trip is "the weekend we
+            -- drove to Aarhus", and pinning it to a timestamp would invite a
+            -- precision the keeper does not have and does not need.
+            started_on TEXT NOT NULL,
+            ended_on TEXT NOT NULL,
+            label TEXT NOT NULL,
+            -- Optional. Without it the trip still explains a spike in the
+            -- chart, which is most of the point; with it the charging can be
+            -- put against the distance.
+            distance_km REAL,
+            notes TEXT,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_ev_trips ON ev_trips(started_on, ended_on)")
     _migrate_columns(conn)
     conn.commit()
     conn.close()
@@ -1935,6 +1955,69 @@ def _spread_cost(start, end, energy, price_at_hour):
     return round(cost, 2), round(covered, 3)
 
 
+def trips_with_charging(trips, sessions):
+    """Each trip with the charging that happened during it.
+
+    **What this counts is charging within the trip's dates, not the energy the
+    trip consumed.** They are not the same thing and the difference is not
+    small: you arrive home empty and plug in that evening, so the charge that
+    paid for the last 200 km falls on the day you got back. Ending a trip on
+    the day you plugged in rather than the day you arrived is what makes the
+    figure mean what you want it to — and that is a decision only the keeper
+    can make, so the app does not guess it.
+
+    `kwh_per_100km` inherits the same caveat and is offered because it is the
+    number an EV owner actually compares between trips, not because it is a
+    measurement of consumption.
+    """
+    out = []
+    for trip in trips:
+        during = [
+            session for session in sessions
+            if trip["started_on"] <= session["day"] <= trip["ended_on"]
+        ]
+        energy = round(sum(session["energy_kwh"] or 0 for session in during), 2)
+        # One unpriced session makes the whole total unknown rather than low —
+        # the same rule the monthly roll-up uses, for the same reason: a
+        # partial figure sitting next to complete ones invites comparison.
+        costs = [session["cost_dkk"] for session in during]
+        cost = round(sum(costs), 2) if costs and all(c is not None for c in costs) else None
+        distance = trip.get("distance_km")
+        out.append({
+            **trip,
+            "sessions": len(during),
+            "energy_kwh": energy,
+            "cost_dkk": cost,
+            "kwh_per_100km": (round(energy / distance * 100, 1)
+                              if distance and energy else None),
+            "dkk_per_100km": (round(cost / distance * 100, 2)
+                              if distance and cost is not None else None),
+        })
+    return out
+
+
+def trip_days(trips):
+    """Every calendar day any trip covers, for marking the chart."""
+    days = {}
+    for trip in trips:
+        start = _parse_day(trip["started_on"])
+        end = _parse_day(trip["ended_on"])
+        if start is None or end is None:
+            continue
+        current = start
+        while current <= end:
+            days.setdefault(current.isoformat(), trip["label"])
+            current += timedelta(days=1)
+    return days
+
+
+def _parse_day(value):
+    try:
+        return datetime.strptime(str(value)[:10], "%Y-%m-%d").date()
+    except (TypeError, ValueError):
+        return None
+
+
 def easee_charging_totals(sessions):
     """Roll a list of sessions up into the figures the history card shows.
 
@@ -2638,8 +2721,79 @@ def api_easee_history():
             "daily": easee_daily_charging(sessions),
             "monthly": easee_monthly_charging(sessions),
             "totals": easee_charging_totals(sessions),
+            "trip_days": trip_days(_read_trips(db)),
         }
     )
+
+
+def _read_trips(db):
+    return [dict(row) for row in db.execute(
+        "SELECT * FROM ev_trips ORDER BY started_on DESC, id DESC")]
+
+
+@app.route("/api/trips")
+def api_trips():
+    """Long trips, each with the charging that happened during it."""
+    db = get_db()
+    options = _read_options()
+    opts = get_price_options(options)
+    cfg = get_easee_config(options)
+    charger_id = cfg["charger_id"] or _easee_token_cache["charger_id"]
+
+    sessions = []
+    if cfg["enabled"] and charger_id:
+        days = min(730, max(1, request.args.get("days", default=365, type=int) or 365))
+        sessions = easee_sessions_reconciled(db, opts, opts["price_area"],
+                                             charger_id, days=days)
+    return jsonify({"trips": trips_with_charging(_read_trips(db), sessions)})
+
+
+@app.route("/api/trips", methods=["POST"])
+def api_add_trip():
+    data = request.get_json(force=True, silent=True) or {}
+    label = (data.get("label") or "").strip()
+    if not label:
+        return jsonify({"error": "a trip needs a label"}), 400
+
+    started = _parse_day(data.get("started_on"))
+    if started is None:
+        return jsonify({"error": "started_on must be a date, YYYY-MM-DD"}), 400
+    # A one-day trip is the common case, so the end defaults to the start
+    # rather than being a second thing to fill in every time.
+    ended = _parse_day(data.get("ended_on")) or started
+    if ended < started:
+        return jsonify({"error": "the trip cannot end before it starts"}), 400
+
+    distance = data.get("distance_km")
+    if distance not in (None, ""):
+        try:
+            distance = float(distance)
+        except (TypeError, ValueError):
+            return jsonify({"error": "distance_km must be a number"}), 400
+        if distance <= 0:
+            return jsonify({"error": "distance_km must be positive"}), 400
+    else:
+        distance = None
+
+    db = get_db()
+    db.execute(
+        "INSERT INTO ev_trips (started_on, ended_on, label, distance_km, notes, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (started.isoformat(), ended.isoformat(), label[:120], distance,
+         (data.get("notes") or "").strip()[:500] or None, _now_iso()),
+    )
+    db.commit()
+    return jsonify({"trips": trips_with_charging(_read_trips(db), [])}), 201
+
+
+@app.route("/api/trips/<int:trip_id>", methods=["DELETE"])
+def api_delete_trip(trip_id):
+    db = get_db()
+    if db.execute("SELECT id FROM ev_trips WHERE id = ?", (trip_id,)).fetchone() is None:
+        return jsonify({"error": "no such trip"}), 404
+    db.execute("DELETE FROM ev_trips WHERE id = ?", (trip_id,))
+    db.commit()
+    return jsonify({"deleted": trip_id})
 
 
 @app.route("/api/easee/diagnose")
@@ -2693,7 +2847,7 @@ def api_health():
 
 
 TRACKED_TABLES = ("prices", "consumption", "saveeye_samples", "easee_samples",
-                  "easee_cloud_sessions")
+                  "easee_cloud_sessions", "ev_trips")
 
 
 @app.route("/api/stats")

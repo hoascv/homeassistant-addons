@@ -225,6 +225,11 @@ code {
 .chart-axis-label { font-size: 8px; fill: var(--text-muted); }
 /* Value gridlines sit behind the curve and should stay there: a hairline you
    read a level off, not a second set of lines competing with the data. */
+/* A trip, shaded behind the charging line. Faint on purpose: it is context for
+   a spike, not a thing to look at — if it competes with the data it has stopped
+   doing its job. */
+.chart-trip-band { fill: var(--accent); opacity: 0.10; }
+
 .chart-grid-line { stroke: var(--grid); stroke-width: 1; }
 .chart-axis-value { font-variant-numeric: tabular-nums; }
 
@@ -304,3 +309,31 @@ code {
 .month-table .month-average td { border-top: 2px solid var(--border); border-bottom: none;
   font-weight: 700; padding-top: 0.45rem; }
 
+
+
+/* --- long trips ------------------------------------------------------------
+   Collapsed by default. The card's usual question is "what did I charge"; a
+   trip answers "why was that week different", which you only ask after seeing
+   the spike. */
+.trips { margin-top: 0.9rem; border-top: 1px solid var(--border); padding-top: 0.7rem; }
+.trips summary { cursor: pointer; font-size: 0.86rem; font-weight: 600; }
+.trip-count { opacity: 0.6; font-variant-numeric: tabular-nums; font-weight: 400; }
+.trip-form { display: grid; gap: 0.5rem; margin: 0.6rem 0 0.8rem; }
+.trip-row {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 0.6rem; padding: 0.45rem 0; border-top: 1px solid var(--border);
+}
+.trip-row:first-child { border-top: none; }
+.trip-main { display: flex; flex-direction: column; gap: 0.1rem; min-width: 0; }
+.trip-sub { font-size: 0.76rem; color: var(--text-muted); }
+/* First compact button in this stylesheet — the trips list is the first thing
+   here that wanted one. */
+.btn-small {
+  font: inherit; font-size: 0.76rem; line-height: 1; padding: 0.3rem 0.5rem;
+  cursor: pointer; border-radius: 999px; border: 1px solid var(--border);
+  background: var(--surface-2); color: inherit; flex-shrink: 0;
+}
+.btn-danger { color: var(--danger); border-color: var(--danger); }
+.form-error { color: var(--danger); font-size: 0.8rem; margin: 0; }
+.field-hint { font-style: normal; font-weight: 400; font-size: 0.76rem;
+  color: var(--text-muted); }

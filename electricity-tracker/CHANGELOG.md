@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.18.0
+
+- **Log a long trip.** A date or date range, a label, and optionally a
+  distance. The days are shaded behind the charging chart and named in the
+  tooltip, so a spike in charging has its reason beside it instead of being
+  something you come back to the chart wondering about.
+- With a distance, each trip reports **kWh/100 km** and **kr/100 km** — what
+  you would actually compare between trips.
+- **It counts charging during those dates, not the energy the trip used**, and
+  the difference is not small: you arrive home empty and plug in that evening,
+  so the charge that paid for the last 200 km falls on the day you got back.
+  Ending a trip on the day you plugged in is what makes the figure mean what
+  you want, and that is a decision the add-on leaves to you rather than
+  guessing.
+- A trip with no charging in its window is normal — you filled up before
+  leaving — and still explains the shape of the week.
+- One unpriced session in the window makes the trip's cost unknown rather than
+  low, the same rule the per-month table uses.
+- The shading is a band across the days rather than a pin, because a trip is a
+  stretch of days and one mark would say the driving happened at a moment. It
+  is drawn behind the line, not over it.
+- New `ev_trips` table, in the export and the change feed. Deleting a trip
+  removes the annotation only; the charging is untouched.
+
 ## 1.17.0
 
 - **Dates are dd/mm/yy.** The charging session list, both chart axes and every

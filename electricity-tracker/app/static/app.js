@@ -333,6 +333,32 @@ function renderSmoothChart(host, rows, opts) {
     );
   }).join("");
 
+  // Days a trip covers, shaded behind the line. A band rather than a pin,
+  // because a trip is a stretch of days and one mark would say the driving
+  // happened at a single moment. Built here with the gridlines: this is the
+  // layer that goes behind the data, and putting it in `extras` (composed
+  // after the lines) would paint it over the chart instead.
+  let bands = "";
+  if (opts.bandAt) {
+    let run = null;
+    const runs = [];
+    rows.forEach((r, i) => {
+      const label = opts.bandAt(r);
+      if (label && run && run.label === label) { run.to = i; return; }
+      if (run) runs.push(run);
+      run = label ? { label, from: i, to: i } : null;
+    });
+    if (run) runs.push(run);
+    // Half a step of overhang at each end, so a one-day trip is a visible
+    // band rather than a zero-width line nobody can hit with a finger.
+    const half = (stepX || 8) / 2;
+    bands = runs.map((b) =>
+      `<rect class="chart-trip-band" x="${(padLeft + b.from * stepX - half).toFixed(2)}"`
+      + ` y="${padTop}" width="${((b.to - b.from) * stepX + half * 2).toFixed(2)}"`
+      + ` height="${(baselineY - padTop).toFixed(2)}">`
+      + `<title>${escapeHtml(b.label)}</title></rect>`).join("");
+  }
+
   let defs = "";
   let areas = "";
   let lines = "";
@@ -420,7 +446,7 @@ function renderSmoothChart(host, rows, opts) {
 
   host.innerHTML = (
     `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="${escapeHtml(opts.ariaLabel)}">` +
-    `<defs>${defs}</defs>` + grid + areas + lines + extras + hitTargets + labels +
+    `<defs>${defs}</defs>` + grid + bands + areas + lines + extras + hitTargets + labels +
     `</svg>`
   );
   return { seriesPoints };
@@ -813,6 +839,81 @@ function renderChargingMonths(monthly) {
 }
 
 
+// --- long trips ---------------------------------------------------------------
+//
+// A trip is context for the charging chart. "Why did we use 60 kWh that week"
+// is a question the numbers alone cannot answer, and the answer is usually that
+// somebody drove to Jutland.
+
+async function loadTrips() {
+  const data = await fetchJSON("api/trips");
+  const host = el("trip-list");
+  const count = el("trip-count");
+  count.hidden = data.trips.length === 0;
+  count.textContent = ` ${data.trips.length}`;
+
+  if (!data.trips.length) {
+    host.innerHTML = '<p class="muted">No trips logged.</p>';
+    return;
+  }
+  host.innerHTML = data.trips.map((trip) => {
+    const when = trip.started_on === trip.ended_on
+      ? fmtDate(trip.started_on)
+      : `${fmtDate(trip.started_on)} – ${fmtDate(trip.ended_on)}`;
+    const figures = [
+      trip.sessions ? `${trip.energy_kwh.toFixed(1)} kWh charged` : "no charging logged",
+      trip.cost_dkk == null ? null : `${trip.cost_dkk.toFixed(2)} kr`,
+      trip.distance_km ? `${Math.round(trip.distance_km)} km` : null,
+      // Offered because it is what an EV owner compares between trips, and
+      // labelled "charged" because that is what it measures.
+      trip.kwh_per_100km ? `${trip.kwh_per_100km} kWh/100 km charged` : null,
+    ].filter(Boolean).join(" · ");
+    return `
+      <div class="trip-row">
+        <span class="trip-main">
+          <strong>${escapeHtml(trip.label)}</strong>
+          <span class="trip-sub">${escapeHtml(when)} · ${escapeHtml(figures)}</span>
+        </span>
+        <button type="button" class="btn-small btn-danger" data-trip-delete="${trip.id}"
+          aria-label="Delete trip">✕</button>
+      </div>`;
+  }).join("");
+}
+
+el("trip-add").addEventListener("click", async () => {
+  const error = el("trip-error");
+  error.hidden = true;
+  const response = await fetch("api/trips", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      started_on: el("trip-from").value,
+      ended_on: el("trip-to").value || null,
+      label: el("trip-label").value,
+      distance_km: el("trip-km").value || null,
+    }),
+  });
+  const body = await response.json();
+  if (!response.ok) {
+    // Shown in the form rather than an alert: the field that needs fixing is
+    // right there, and a dialog makes you dismiss it before you can look.
+    error.textContent = body.error || "Could not log that trip.";
+    error.hidden = false;
+    return;
+  }
+  for (const id of ["trip-from", "trip-to", "trip-label", "trip-km"]) el(id).value = "";
+  await loadTrips();
+  await loadChargingHistory();
+});
+
+el("trip-list").addEventListener("click", async (event) => {
+  const button = event.target.closest("[data-trip-delete]");
+  if (!button) return;
+  if (!confirm("Delete this trip? The charging itself is not touched.")) return;
+  await fetch(`api/trips/${button.dataset.tripDelete}`, { method: "DELETE" });
+  await loadTrips();
+  await loadChargingHistory();
+});
+
 function renderChargingHistory(data) {
   const card = document.getElementById("charging-history-card");
   if (!data.enabled) {
@@ -844,11 +945,16 @@ function renderChargingHistory(data) {
 
   renderSmoothChart(chart, data.daily, {
     series: [{ valueOf: (d) => d.kwh, area: true, gradientId: "charging-area-gradient" }],
+    bandAt: (d) => (data.trip_days || {})[d.day] || null,
     tooltipOf: (d) => {
       const cost = d.cost_known ? `${d.cost.toFixed(2)} kr` : "cost n/a";
-      return d.sessions
+      const trip = (data.trip_days || {})[d.day];
+      const base = d.sessions
         ? `${fmtDate(d.day)} — ${d.kwh.toFixed(2)} kWh, ${cost} (${d.sessions} session${d.sessions > 1 ? "s" : ""})`
         : `${fmtDate(d.day)} — no charging`;
+      // The whole point of logging a trip: a spike with no explanation beside
+      // it is the thing you come back to the chart wondering about.
+      return trip ? `${base} · ${trip}` : base;
     },
     axisLabelOf: (d, i, expanded) => {
       const step = Math.max(1, Math.ceil(data.daily.length / (expanded ? 16 : 8)));
@@ -1414,6 +1520,7 @@ function init() {
   loadSummary();
   loadConsumptionChart();
   loadChargingHistory();
+  loadTrips();
   setInterval(loadSummary, 60000);
   setInterval(loadConsumptionChart, 300000);
   setInterval(loadChargingHistory, 300000);

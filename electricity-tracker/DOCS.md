@@ -441,6 +441,32 @@ want a copy in your own hands, or to move to another install.
   covers, not the full session — a partially observed charge would otherwise
   report a rate it never paid. Sessions in that state are counted under the
   card, so a total missing some of its cost says so.
+### Long trips
+
+"Why did we use 60 kWh that week" is a question the numbers alone cannot
+answer, and the answer is usually that somebody drove to Jutland.
+
+**Long trips** under the charging history takes a date (or a date range), a
+label, and optionally a distance in km. The days it covers are shaded behind the
+charging chart and named in the tooltip, so a spike has its reason beside it.
+Give a distance and each trip also reports **kWh/100 km** and **kr/100 km** —
+the numbers you would compare between trips.
+
+> **What it counts is charging *during* those dates, not the energy the trip
+> used.** Those are not close. You arrive home empty and plug in that evening,
+> so the charge that paid for the last 200 km lands on the day you got back.
+
+Which dates a trip covers is therefore your decision and the add-on does not
+guess it: **end the trip on the day you plugged in**, not the day you arrived,
+if you want that charge counted. A trip with no charging in its window is
+perfectly normal — you filled up before leaving — and still earns its place,
+because it explains the shape of the week.
+
+One session in the window with no price makes the trip's cost **unknown rather
+than low**, the same rule the per-month table uses and for the same reason.
+
+Deleting a trip removes the annotation only. The charging itself is untouched.
+
 - The **EV charging** card and the charging history read the same corrected
   figures, so the number on the card always matches the row for that session in
   the list below it. A charge that is still running is the exception: it stays

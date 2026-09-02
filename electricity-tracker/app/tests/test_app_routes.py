@@ -46,7 +46,8 @@ def test_stats_empty_db(client):
     res = client.get("/api/stats")
     data = res.get_json()
     assert data["counts"] == {"prices": 0, "consumption": 0, "saveeye_samples": 0,
-                              "easee_samples": 0, "easee_cloud_sessions": 0}
+                              "easee_samples": 0, "easee_cloud_sessions": 0,
+                              "ev_trips": 0}
     assert data["total"] == 0
 
 
@@ -88,4 +89,5 @@ def test_consumption_empty_without_metering_point(client):
 def test_export_shape(client):
     data = client.get("/api/export").get_json()
     assert set(data["tables"].keys()) == {
-        "prices", "consumption", "saveeye_samples", "easee_samples", "easee_cloud_sessions"}
+        "prices", "consumption", "saveeye_samples", "easee_samples",
+        "easee_cloud_sessions", "ev_trips"}

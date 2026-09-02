@@ -147,6 +147,38 @@
     <div id="charging-monthly" hidden></div>
     <div id="charging-sessions"></div>
     <p class="muted" id="charging-note"></p>
+
+    <!-- Long trips. Below the sessions rather than above: the usual question of
+         this card is "what did I charge", and a trip is the answer to "why was
+         that week different" — which you only ask after seeing the spike. -->
+    <details class="trips" id="trips">
+      <summary>Long trips<span class="trip-count" id="trip-count" hidden></span></summary>
+      <p class="muted">
+        Mark the days you were away and the chart shades them, so a spike in
+        charging has its reason next to it.
+      </p>
+      <div class="trip-form">
+        <label class="field">
+          <span>From</span>
+          <input type="date" id="trip-from">
+        </label>
+        <label class="field">
+          <span>To <em class="field-hint">same day if blank</em></span>
+          <input type="date" id="trip-to">
+        </label>
+        <label class="field">
+          <span>What was it</span>
+          <input type="text" id="trip-label" placeholder="Aarhus and back" maxlength="120">
+        </label>
+        <label class="field">
+          <span>Distance <em class="field-hint">km, optional</em></span>
+          <input type="number" id="trip-km" min="1" step="1" placeholder="480">
+        </label>
+        <button type="button" class="btn-secondary" id="trip-add">Log this trip</button>
+        <p class="form-error" id="trip-error" hidden></p>
+      </div>
+      <div id="trip-list"></div>
+    </details>
     <p class="empty-state" id="charging-empty" hidden>No charging sessions recorded yet in this range.</p>
   </section>
 
