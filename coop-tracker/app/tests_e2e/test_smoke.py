@@ -143,3 +143,28 @@ def test_the_tooltip_goes_away(page, app_server, page_errors):
     page.wait_for_timeout(200)
     assert page.locator(".chart-tip").is_hidden()
     assert page_errors == []
+
+
+def test_clicking_a_chart_point_opens_its_entries(page, app_server, page_errors):
+    """The drill-down, driven for real. The figure on this chart is an
+    attributed rate, so the answer to "what is this" often names a different
+    day from the one clicked — which is exactly why a tooltip was not enough."""
+    page.goto(app_server)
+    page.wait_for_load_state("networkidle")
+    page.click('.tabbar-btn[data-page="page-trends"]')
+    page.wait_for_timeout(800)
+
+    hits = page.locator("#daily-eggs-chart-wrap .chart-hit[data-day]")
+    assert hits.count(), "no drillable points on the daily chart"
+    box = hits.last.bounding_box()
+    page.mouse.click(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+    page.wait_for_timeout(400)
+
+    backdrop = page.locator("#day-backdrop")
+    assert "open" in (backdrop.get_attribute("class") or ""), "the sheet did not open"
+    expect(page.locator("#day-body")).to_contain_text("Logged on this day")
+
+    page.click("#day-close")
+    page.wait_for_timeout(200)
+    assert "open" not in (page.locator("#day-backdrop").get_attribute("class") or "")
+    assert page_errors == []

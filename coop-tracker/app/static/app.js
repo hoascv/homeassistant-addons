@@ -1817,15 +1817,21 @@ function chartYAxis(maxVal, unit, { topPad, chartH }) {
 // what the browser turns into a tooltip — the same mechanism Electricity
 // Tracker uses, so the two add-ons behave alike. Without them these charts had
 // no way at all to read an exact date or value off a line.
-function hitTargets(points, labelOf) {
+function hitTargets(points, labelOf, dayOf) {
   return points.map((p, i) => {
     if (!p) return "";
     const text = labelOf(i);
     if (!text) return "";
+    // Only points that can answer a drill-down carry a day, and the cursor
+    // follows: a month's figure averages thirty collections and there is no
+    // single set of entries behind it to show.
+    const day = dayOf ? dayOf(i) : null;
     // data-tip, not <title>: the browser draws its own tooltip from a <title>
     // after about a second, so keeping both means two tooltips, one of them
     // late and ugly. aria-label keeps the value available to a screen reader.
-    return `<circle class="chart-hit" cx="${p.x.toFixed(2)}" cy="${p.y.toFixed(2)}" r="8"`
+    return `<circle class="chart-hit${day ? " is-drillable" : ""}"`
+      + ` cx="${p.x.toFixed(2)}" cy="${p.y.toFixed(2)}" r="8"`
+      + (day ? ` data-day="${escapeHtml(day)}"` : "")
       + ` data-tip="${escapeHtml(text)}" aria-label="${escapeHtml(text)}"></circle>`;
   }).join("");
 }
@@ -2144,10 +2150,12 @@ function buildDailyEggsSvg(data) {
     (i) => {
       const rate = values[i];
       const base = `${dayLabel(data.days[i])} — ${rate.toFixed(2)} eggs/day`;
-      return impossible.has(i)
-        ? `${base}\nAbove ${birds} hens — some of these were laid earlier and found late.`
-        : base;
-    });
+      const tail = impossible.has(i)
+        ? `\nAbove ${birds} hens — some of these were laid earlier and found late.`
+        : "";
+      return `${base}${tail}\nTap to see what this rests on.`;
+    },
+    (i) => data.days[i]);
 
   return `<svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet">${content}</svg>`;
 }
@@ -3237,3 +3245,97 @@ document.addEventListener("pointermove", handleChartPointer);
 document.addEventListener("pointerdown", handleChartPointer);
 document.addEventListener("pointerleave", () => chartTip.hide());
 window.addEventListener("scroll", () => chartTip.hide(), { passive: true });
+
+
+// --- drilling into a day ------------------------------------------------------
+//
+// Clicking a point on the eggs chart asks what produced it. Worth having
+// because the figure is an attributed rate rather than a count: the eggs
+// credited to a day usually arrive in a collection made later and spread back
+// over the days since the previous visit. That is exactly what lets a rate
+// exceed the flock size, so the question "how can five hens have laid six" has
+// an answer, and it is here rather than in the number.
+
+const dayBackdrop = document.getElementById("day-backdrop");
+
+function closeDaySheet() { dayBackdrop.classList.remove("open"); }
+document.getElementById("day-close").addEventListener("click", closeDaySheet);
+dayBackdrop.addEventListener("click", (event) => {
+  if (event.target === dayBackdrop) closeDaySheet();
+});
+
+function entryLine(entry) {
+  const time = new Date(entry.ts).toLocaleTimeString([], {
+    hour: "2-digit", minute: "2-digit" });
+  const what = entry.count != null ? `${entry.count} ` : "";
+  return `<li><span class="day-entry-what">${escapeHtml(what)}${escapeHtml(entry.type)}</span>`
+    + `<span class="day-entry-when">${escapeHtml(time)}</span>`
+    + (entry.notes ? `<span class="day-entry-note">${escapeHtml(entry.notes)}</span>` : "")
+    + "</li>";
+}
+
+async function openDaySheet(isoDay) {
+  let data;
+  try {
+    data = await fetch(`api/trends/day?date=${encodeURIComponent(isoDay)}`)
+      .then((r) => r.json());
+  } catch (err) {
+    return;
+  }
+  document.getElementById("day-title").textContent = dayLabel(data.day);
+
+  const parts = [];
+  if (!data.covered) {
+    // A break in the line, not a day of no eggs. Saying which is the
+    // difference between "the hens stopped" and "nobody has been out yet".
+    parts.push('<p class="muted">No collection covers this day, so the chart '
+      + "shows a gap rather than a zero. Either it is before the first log, or "
+      + "after the most recent one and those eggs are still in the nest.</p>");
+  } else {
+    const src = data.source;
+    parts.push(`<p class="day-rate"><strong>${data.rate.toFixed(2)}</strong> eggs/day</p>`);
+
+    const sameDay = src.collected_on === data.day;
+    parts.push('<p class="muted">'
+      + (sameDay
+        ? `${src.collected} collected on this day`
+        : `From ${src.collected} collected on ${escapeHtml(dayLabel(src.collected_on))}`)
+      + (src.span_days > 1
+        ? `, spread over the ${src.span_days} days since the previous collection.`
+        : ", the day after the previous collection.")
+      + "</p>");
+
+    if (data.impossible) {
+      parts.push('<p class="day-warn">That is more than '
+        + `${data.birds} hens can lay in a day. The spreading assumes each visit `
+        + "empties the nest, so eggs missed on one visit and found on the next "
+        + "are all credited to the shorter gap. The count is right; the day it "
+        + "lands on is not.</p>");
+    }
+    if (src.capped) {
+      parts.push('<p class="muted">The gap before this collection was longer '
+        + `than ${src.span_days} days, so the spread was capped there.</p>`);
+    }
+    if (src.entries && src.entries.length) {
+      parts.push("<h3>Logged on " + escapeHtml(dayLabel(src.collected_on)) + "</h3>"
+        + `<ul class="day-entries">${src.entries.map(entryLine).join("")}</ul>`);
+    }
+  }
+
+  parts.push("<h3>Logged on this day</h3>");
+  parts.push(data.entries.length
+    ? `<ul class="day-entries">${data.entries.map(entryLine).join("")}</ul>`
+    : '<p class="muted">Nothing logged on this day.</p>');
+
+  document.getElementById("day-body").innerHTML = parts.join("");
+  dayBackdrop.classList.add("open");
+}
+
+// Delegated, like the tooltip, so it covers charts that re-render on a timer.
+// Only the day-resolution chart drills down: a month's point is an average of
+// thirty collections and there is no single entry behind it to show.
+document.addEventListener("click", (event) => {
+  const hit = event.target.closest(".chart-hit[data-day]");
+  if (!hit) return;
+  openDaySheet(hit.dataset.day);
+});

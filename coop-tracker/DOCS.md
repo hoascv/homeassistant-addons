@@ -253,6 +253,25 @@ collections say and what is wrong is a fact about the collecting. If you see a
 ring, the usual cause is a nest box checked in a hurry. Nothing needs fixing in
 the app.
 
+**Click any point on the day chart** to see what it rests on. Because the
+figure is an attributed rate rather than a count, the answer usually names a
+different day from the one you clicked:
+
+> **20 Aug** — 6.00 eggs/day
+> 6 collected on this day, the day after the previous collection.
+> *That is more than 5 hens can lay in a day…*
+> **Logged on this day:** 6 egg · 17:00
+
+Where the eggs arrived in a later basket it shows that basket and its date, so
+"the 17th" and "the collection on the 19th that paid for it" are both in front
+of you. A day nothing covers says which kind of gap it is — before your first
+log, or after the most recent one with the eggs still in the nest — rather than
+opening an empty sheet.
+
+Only the day chart drills down. A point on a monthly chart is an average of
+thirty collections, so there is no single set of entries behind it to show, and
+those points are deliberately not clickable.
+
 ### The tab
 
 Fermented feed has its own tab, **🪣 Ferment**, between Home and Trends. The tab

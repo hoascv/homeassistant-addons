@@ -68,7 +68,7 @@ except ImportError as e:
     SKLEARN_AVAILABLE = False
     SKLEARN_ERROR = str(e)
 
-APP_VERSION = "1.53.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.54.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("COOP_DB_PATH", "/data/coop.db")
 OPTIONS_PATH = os.environ.get("COOP_OPTIONS_PATH", "/data/options.json")
@@ -1563,6 +1563,16 @@ def _attributed_eggs_by_day(conn):
     gap past the cap), which callers must keep distinct from a day that
     genuinely yielded nothing.
     """
+    return {day: detail["per_day"] for day, detail in _attribution_detail(conn).items()}
+
+
+def _attribution_detail(conn):
+    """The same spreading, keeping the collection each day's figure came from.
+
+    One implementation rather than two, because the rate and the explanation of
+    the rate must agree: a drill-down that computed the number a second way
+    would eventually contradict the chart it was opened from.
+    """
     rows = conn.execute(
         """
         SELECT date(ts) AS day, COALESCE(SUM(count), 0) AS total
@@ -1579,14 +1589,22 @@ def _attributed_eggs_by_day(conn):
         day = date.fromisoformat(row["day"])
         # The first-ever collection has nothing to measure back to, so it
         # covers only its own day.
-        span = 1 if previous_day is None else (day - previous_day).days
+        raw_span = 1 if previous_day is None else (day - previous_day).days
         previous_day = day
-        span = max(1, min(span, EGGS_PER_DAY_MAX_SPREAD_DAYS))
+        span = max(1, min(raw_span, EGGS_PER_DAY_MAX_SPREAD_DAYS))
         per_day = row["total"] / span
         # Spans can't overlap — each covers (previous_day, day] — so a
         # plain assignment can't clobber an earlier collection's days.
         for offset in range(span):
-            attributed[day - timedelta(days=offset)] = per_day
+            attributed[day - timedelta(days=offset)] = {
+                "per_day": per_day,
+                "collected_on": day.isoformat(),
+                "collected": row["total"],
+                "span_days": span,
+                # A gap longer than the cap is truncated, and a drill-down that
+                # did not say so would show a figure nothing on screen explains.
+                "capped": raw_span > span,
+            }
     return attributed
 
 
@@ -1962,6 +1980,60 @@ def _compute_advanced_forecast(conn, now):
 @app.route("/api/trends/advanced")
 def api_trends_advanced():
     return jsonify(_compute_advanced_forecast(get_db(), datetime.now()))
+
+
+@app.route("/api/trends/day")
+def api_trends_day():
+    """Everything behind one point on the eggs-per-day chart.
+
+    The figure is an attributed rate, not a count, so "what happened on the
+    20th" has two answers and the useful one is not the obvious one: the eggs
+    credited to a day usually arrive in a collection made later, spread back
+    over the days since the previous visit. That is precisely what makes a rate
+    above the flock size possible, so a drill-down that showed only the logs
+    dated that day would explain nothing about the day worth asking about.
+    """
+    try:
+        day = date.fromisoformat((request.args.get("date") or "")[:10])
+    except ValueError:
+        return jsonify({"error": "date must be YYYY-MM-DD"}), 400
+
+    conn = get_db()
+    detail = _attribution_detail(conn).get(day)
+    birds = sum(get_flock_counts().values())
+
+    entries = [dict(row) for row in conn.execute(
+        "SELECT id, type, count, notes, ts FROM logs "
+        "WHERE date(ts) = ? ORDER BY ts", (day.isoformat(),))]
+
+    body = {
+        "day": day.isoformat(),
+        "birds": birds,
+        "entries": entries,
+        # No collection speaks for this day: before the first log, after the
+        # most recent, or inside a gap past the cap. The chart draws a break
+        # there and this says why rather than showing an empty sheet.
+        "covered": detail is not None,
+        "rate": None,
+        "impossible": False,
+        "source": None,
+    }
+    if detail:
+        rate = round(detail["per_day"], 2)
+        body["rate"] = rate
+        body["impossible"] = bool(birds and rate > birds + 0.001)
+        body["source"] = {
+            "collected_on": detail["collected_on"],
+            "collected": detail["collected"],
+            "span_days": detail["span_days"],
+            "capped": detail["capped"],
+        }
+        if detail["collected_on"] != day.isoformat():
+            body["source"]["entries"] = [dict(row) for row in conn.execute(
+                "SELECT id, type, count, notes, ts FROM logs "
+                "WHERE date(ts) = ? AND type = 'egg' ORDER BY ts",
+                (detail["collected_on"],))]
+    return jsonify(body)
 
 
 @app.route("/api/trends/daily")

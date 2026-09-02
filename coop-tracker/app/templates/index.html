@@ -515,6 +515,19 @@
   </div>
 </div>
 
+<!-- What is behind one point on the eggs chart. Its own sheet rather than a
+     bigger tooltip: the answer is several lines and usually names a different
+     day from the one you clicked, which is the whole point of opening it. -->
+<div class="sheet-backdrop" id="day-backdrop">
+  <div class="sheet">
+    <h2 id="day-title">Day</h2>
+    <div id="day-body"></div>
+    <div class="sheet-actions">
+      <button type="button" class="btn-secondary" id="day-close">Close</button>
+    </div>
+  </div>
+</div>
+
 <div class="sheet-backdrop" id="flock-backdrop">
   <div class="sheet">
     <h2>My Flock</h2>

@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.54.0
+
+- **Click a point on the eggs-per-day chart to see what it rests on.** The
+  figure there is an attributed rate rather than a count, so the answer usually
+  names a different day from the one you clicked: the eggs credited to Monday
+  often arrive in a basket found on Wednesday and spread back.
+- That is also what makes a rate above the flock size possible, so the sheet
+  spells it out — the count is right, the day it lands on is not — instead of
+  leaving you with a red ring and no explanation.
+- Where the eggs came from a later collection, that collection and its date are
+  shown alongside whatever was logged on the day itself. They are different
+  things and a day can have both.
+- A day nothing covers says which kind of gap it is: before the first log, or
+  after the most recent one with the eggs still in the nest. Better than an
+  empty sheet, and it is the distinction between "the hens stopped" and
+  "nobody has been out yet".
+- Only the day chart drills down. A monthly point averages thirty collections,
+  so there is nothing single to show, and those points are not clickable.
+- The rate and the explanation of the rate come from one implementation, with a
+  test walking every day of a range to prove the two cannot disagree.
+
 ## 1.53.0
 
 - **Proper hover tooltips on the charts.** 1.52.0 leaned on the browser's own

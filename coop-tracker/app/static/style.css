@@ -1263,8 +1263,28 @@ img.chicken-avatar {
 
 /* The point being read. The hit circle is transparent and much larger than the
    marker, so this rings the spot rather than filling it. */
+/* Only the points that answer a drill-down invite the click. */
+.chart-hit.is-drillable { cursor: pointer; }
+
 .chart-hit.is-on {
   stroke: var(--text-muted);
   stroke-width: 1;
   fill: rgba(128, 128, 128, 0.18);
 }
+
+/* --- one day's entries ------------------------------------------------------ */
+.day-rate { font-size: 1.4rem; margin: 0 0 0.2rem; }
+.day-warn {
+  font-size: 0.82rem; line-height: 1.5;
+  color: var(--warn-ink); background: var(--warn-wash);
+  border-radius: 8px; padding: 0.5rem 0.6rem; margin: 0.6rem 0;
+}
+.day-entries { list-style: none; margin: 0.3rem 0 0.8rem; padding: 0; }
+.day-entries li {
+  display: flex; align-items: baseline; gap: 0.5rem; flex-wrap: wrap;
+  padding: 0.35rem 0; border-top: 1px solid var(--border); font-size: 0.86rem;
+}
+.day-entries li:first-child { border-top: none; }
+.day-entry-what { font-weight: 600; }
+.day-entry-when { color: var(--text-muted); font-size: 0.78rem; }
+.day-entry-note { flex-basis: 100%; color: var(--text-muted); font-size: 0.78rem; }
