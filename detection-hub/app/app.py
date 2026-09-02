@@ -20,11 +20,12 @@ from flask import Flask, Response, g, jsonify, render_template, request, send_fi
 import capture
 import detector
 import faces
+import objects
 import hass
 import store
 import zones
 
-APP_VERSION = "1.18.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.19.0"  # keep in sync with the "version" field in config.yaml
 
 OPTIONS_PATH = os.environ.get("DETECTION_HUB_OPTIONS_PATH", "/data/options.json")
 
@@ -47,6 +48,8 @@ _detector = None
 _detector_lock = threading.Lock()
 _face_identifier = None
 _face_identifier_lock = threading.Lock()
+_object_embedder = None
+_object_embedder_lock = threading.Lock()
 _capture = None
 
 # Per-camera online/offline memory, so a notification fires on the *transition*
@@ -313,6 +316,71 @@ def close_db(exception=None):
     db = g.pop("db", None)
     if db is not None:
         db.close()
+
+
+def get_object_embedder():
+    """The crop embedder, loaded once. Cheap enough to run on every motion
+    region, which is the whole reason it is SqueezeNet and not something
+    better."""
+    global _object_embedder
+    if _object_embedder is None:
+        with _object_embedder_lock:
+            if _object_embedder is None:
+                _object_embedder = objects.ObjectEmbedder()
+    return _object_embedder
+
+
+def identify_object(conn, crop):
+    """Name a crop against the enrolled classes, or return no match.
+
+    The mean is recomputed per call rather than cached. It is a mean over a few
+    hundred 1000-d vectors — microseconds — and caching it would mean a class
+    enrolled a moment ago being compared against a centre that predates it,
+    which is the sort of staleness that shows up as an unreproducible wrong
+    answer weeks later.
+    """
+    embedder = get_object_embedder()
+    vector = embedder.embed(crop)
+    if vector is None:
+        return {"object_id": None, "score": None, "runner_up": None, "name": None}
+
+    prints = store.object_prints(conn, model=OBJECT_EMBED_MODEL)
+    if not prints:
+        return {"object_id": None, "score": None, "runner_up": None,
+                "name": None, "untrained": True}
+
+    result = objects.identify(
+        vector, prints,
+        threshold=get_object_threshold(), margin=get_object_margin())
+    result["name"] = None
+    if result["object_id"]:
+        row = conn.execute("SELECT name FROM object_classes WHERE id = ?",
+                           (result["object_id"],)).fetchone()
+        result["name"] = row["name"] if row else None
+    return result
+
+
+OBJECT_EMBED_MODEL = "squeezenet1.1"
+
+
+def get_object_threshold():
+    """How close a crop must be to something enrolled before it is named.
+
+    Configurable because the right number is a property of a camera and a
+    scene, not of this code — and it is reported on every answer so it can be
+    set from what a real camera produces rather than guessed.
+    """
+    try:
+        return float(_read_options().get("object_threshold", objects.DEFAULT_THRESHOLD))
+    except (TypeError, ValueError):
+        return objects.DEFAULT_THRESHOLD
+
+
+def get_object_margin():
+    try:
+        return float(_read_options().get("object_margin", objects.DEFAULT_MARGIN))
+    except (TypeError, ValueError):
+        return objects.DEFAULT_MARGIN
 
 
 def get_detector():
@@ -627,6 +695,68 @@ def _on_face_candidate(camera, detection_id, found, final):
         conn.close()
 
 
+# How many unlabelled crops may wait. A queue is a thing somebody works
+# through; twenty thousand of them is a thing they abandon, and the frames worth
+# labelling are spread across the day rather than crowded into one dusk.
+OBJECT_QUEUE_MAX = 240
+# And no more than one enrolment candidate a camera per this many seconds. A
+# car passing produces motion on forty consecutive frames, all of the same car.
+OBJECT_QUEUE_INTERVAL_SECONDS = 90
+_object_queue_last = {}
+
+
+def _on_camera_regions(camera_id, frame, regions):
+    """Name what changed, and keep a crop of what it could not name.
+
+    Two jobs, and the second is the one that makes the first possible: a class
+    can only be recognised after somebody labelled examples of it, and the
+    examples worth having are the ones this camera produced — at dusk, in rain,
+    at 3am — not ones photographed by hand on a sunny afternoon.
+    """
+    # Its own connection, like _on_camera_detections above and for the same
+    # reason: this runs on a camera thread and sqlite connections have thread
+    # affinity.
+    conn = store.connect(actor="camera")
+    try:
+        trained = bool(store.object_prints(conn, model=OBJECT_EMBED_MODEL))
+        named = []
+        for box in regions[:6]:  # a frame with more than six changed regions is
+            # weather, not objects, and cropping all of it helps nobody
+            crop = objects.crop_region(frame, box)
+            if crop is None:
+                continue
+            result = identify_object(conn, crop) if trained else None
+            if result and result["object_id"]:
+                named.append({"label": result["name"], "confidence": result["score"],
+                              "box": list(box)})
+                continue
+            _maybe_enqueue(conn, camera_id, crop, box)
+
+        if named:
+            store.record_detections(conn, camera_id, named)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _maybe_enqueue(conn, camera_id, crop, box):
+    """Keep this crop for review, if the queue can stand another one."""
+    now = time.time()
+    if now - _object_queue_last.get(camera_id, 0) < OBJECT_QUEUE_INTERVAL_SECONDS:
+        return
+    if store.object_review_pending(conn) >= OBJECT_QUEUE_MAX:
+        return
+    # detector.encode_jpeg rather than cv2 directly: app.py holds no OpenCV
+    # import, and the guard for its absence lives in detector.
+    jpeg = detector.encode_jpeg(crop)
+    if not jpeg:
+        return
+    height, width = crop.shape[:2]
+    if store.save_object_sample(conn, jpeg, width, height,
+                                camera=camera_id, box=list(box)):
+        _object_queue_last[camera_id] = now
+
+
 def get_capture():
     global _capture
     if _capture is None:
@@ -637,8 +767,15 @@ def get_capture():
             get_detector(), _on_camera_detections, log=_log,
             identifier=get_face_identifier() if enabled else None,
             on_identity=_on_face_candidate if enabled else None,
+            # Only when somebody has asked for custom classes, so a household
+            # that has not taught it anything pays nothing for the machinery.
+            on_regions=_on_camera_regions if get_object_learning_enabled() else None,
         )
     return _capture
+
+
+def get_object_learning_enabled():
+    return bool(_read_options().get("object_learning", False))
 
 
 # --- the change feed ----------------------------------------------------------
@@ -927,6 +1064,112 @@ def _zone_view(row):
         # showing it as though it were.
         "usable": parsed is not None,
     }
+
+
+# --- classes the household taught it ------------------------------------------
+
+
+@app.route("/api/objects")
+def api_object_classes():
+    conn = get_db()
+    return jsonify({
+        "classes": store.object_classes(conn),
+        "pending_review": store.object_review_pending(conn),
+        "threshold": get_object_threshold(),
+        "margin": get_object_margin(),
+        "embedder": get_object_embedder().status(),
+    })
+
+
+@app.route("/api/objects", methods=["POST"])
+def api_create_object_class():
+    data = request.get_json(silent=True) or {}
+    conn = get_db()
+    try:
+        class_id = store.create_object_class(conn, data.get("name"))
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    conn.commit()
+    return jsonify({"id": class_id, "classes": store.object_classes(conn)}), 201
+
+
+@app.route("/api/objects/<int:class_id>", methods=["DELETE"])
+def api_delete_object_class(class_id):
+    """Remove a class and everything taught to it.
+
+    `?archive=1` keeps it instead, so detections that already carry the label
+    stay readable — the same choice `people` offers, for the same reason.
+    """
+    conn = get_db()
+    if request.args.get("archive"):
+        store.archive_object_class(conn, class_id)
+    else:
+        store.delete_object_class(conn, class_id)
+    conn.commit()
+    return jsonify({"classes": store.object_classes(conn)})
+
+
+@app.route("/api/objects/<int:class_id>/samples")
+def api_object_class_samples(class_id):
+    return jsonify(store.object_samples_for(get_db(), class_id))
+
+
+@app.route("/api/objects/review")
+def api_object_review():
+    """Crops waiting to be labelled.
+
+    Auto-captured rather than photographed by hand, because the frames that
+    matter are the ones this camera produces at dusk and at 3am — and nobody
+    goes outside at 3am to take them.
+    """
+    conn = get_db()
+    return jsonify({
+        "queue": store.object_review_queue(conn),
+        "pending": store.object_review_pending(conn),
+        "classes": store.object_classes(conn),
+    })
+
+
+@app.route("/api/objects/review/<int:sample_id>", methods=["POST"])
+def api_label_object_sample(sample_id):
+    """Assign a crop to a class, or mark it as nothing worth teaching."""
+    data = request.get_json(silent=True) or {}
+    conn = get_db()
+
+    class_id = data.get("class_id")
+    name = (data.get("name") or "").strip()
+    ignore = bool(data.get("ignore"))
+    if name and not class_id and not ignore:
+        # Labelling a crop with a name nobody has used yet creates the class.
+        # The alternative is making somebody leave the queue, create it, and
+        # find their place again.
+        class_id = store.create_object_class(conn, name)
+
+    try:
+        store.label_object_sample(conn, sample_id, class_id=class_id, ignore=ignore)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 404
+    conn.commit()
+    return jsonify({"pending": store.object_review_pending(conn),
+                    "classes": store.object_classes(conn)})
+
+
+@app.route("/api/objects/samples/<int:sample_id>")
+def api_object_sample_image(sample_id):
+    """The stored crop, read from disk. Its own directory, not the snapshot
+    one: snapshots are pruned after a week and training material is not."""
+    path = store.object_sample_path(sample_id, store.object_sample_dir_for(get_db()))
+    if not os.path.exists(path):
+        return jsonify({"error": "no such sample"}), 404
+    return send_file(path, mimetype="image/jpeg")
+
+
+@app.route("/api/objects/samples/<int:sample_id>", methods=["DELETE"])
+def api_delete_object_sample(sample_id):
+    conn = get_db()
+    store.delete_object_sample(conn, sample_id)
+    conn.commit()
+    return jsonify({"pending": store.object_review_pending(conn)})
 
 
 @app.route("/api/zones")

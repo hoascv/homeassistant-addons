@@ -39,6 +39,10 @@ TRACKED_TABLES = {
     "cameras": "id",
     # Names, so `detections.person_id` is not a dangling integer downstream.
     "people": "id",
+    # Same reason: a custom label in the feed is an id until this says what it
+    # is. The samples behind it are not tracked — they are training material and
+    # images, which is the face_prints argument again.
+    "object_classes": "id",
 }
 
 # `face_prints` is deliberately NOT tracked, and the reason is worth stating
@@ -301,6 +305,67 @@ def init_db(path=None):
     )
     _migrate_camera_zones(conn)
 
+    # Object classes the household taught it, alongside the 80 the detector
+    # already knows. Named rows rather than a config list because samples,
+    # detections and the review queue all point at them.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS object_classes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT,
+            -- Archived rather than deleted while detections still reference it,
+            -- so history stays legible after a class is retired.
+            archived INTEGER NOT NULL DEFAULT 0
+        )
+        """
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_object_classes_name ON object_classes(name)")
+
+    # Crops, labelled and not. The review queue is this table with a null
+    # class_id: one place for a crop to live, whether it is waiting to be
+    # labelled, enrolled as training, or marked as nothing of interest.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS object_samples (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            -- Null means unreviewed. See `ignored` for the other kind of
+            -- "not a class", which is a decision rather than an absence.
+            class_id INTEGER,
+            -- Which camera it came from. Load-bearing when a camera is
+            -- replaced: samples from the old one can be seen, and dropped, as
+            -- a group rather than one at a time.
+            camera TEXT,
+            box TEXT,
+            -- The image is kept, not only its vector. Replacing a camera means
+            -- retraining, and retraining from crops already collected beats
+            -- collecting them again — and it survives a change of embedder,
+            -- which a stored vector does not.
+            width INTEGER,
+            height INTEGER,
+            bytes INTEGER,
+            embedding BLOB,
+            dims INTEGER,
+            -- A vector from one backbone means nothing to another, and
+            -- comparing across them would not error, it would quietly score
+            -- strangers as matches.
+            model TEXT,
+            -- Reviewed and deliberately not a class: a wheelie bin somebody
+            -- looked at and decided not to teach. Distinct from unreviewed,
+            -- because otherwise the queue offers it again forever.
+            ignored INTEGER NOT NULL DEFAULT 0,
+            taken_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_object_samples_class ON object_samples(class_id)")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_object_samples_queue "
+        "ON object_samples(class_id, ignored, taken_at)")
+
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS change_log (
@@ -484,6 +549,175 @@ def save_snapshot(conn, jpeg, width, height, directory=None):
         "UPDATE snapshots SET bytes = ? WHERE id = ?", (len(jpeg), snapshot_id)
     )
     return snapshot_id
+
+
+# --- object classes the household taught it -----------------------------------
+#
+# Their own directory, not the snapshot one: snapshots are pruned after a week
+# and these are training material. A classifier that quietly forgot what it was
+# taught every Sunday would be worse than one that was never trained.
+
+
+def object_sample_dir(db_path=None):
+    return os.path.join(os.path.dirname(snapshot_dir(db_path)), "objects")
+
+
+def object_sample_dir_for(conn):
+    return object_sample_dir(getattr(conn, "db_path", None))
+
+
+def object_sample_path(sample_id, directory=None):
+    return os.path.join(directory or object_sample_dir(), f"{sample_id}.jpg")
+
+
+def create_object_class(conn, name):
+    """Add a class, or return the existing one with that name."""
+    name = " ".join(str(name or "").split())
+    if not name:
+        raise ValueError("a class needs a name")
+    row = conn.execute(
+        "SELECT id FROM object_classes WHERE name = ?", (name,)).fetchone()
+    if row:
+        conn.execute("UPDATE object_classes SET archived = 0, updated_at = ? WHERE id = ?",
+                     (now(), row["id"]))
+        return row["id"]
+    return conn.execute(
+        "INSERT INTO object_classes (name, created_at) VALUES (?, ?)",
+        (name[:80], now()),
+    ).lastrowid
+
+
+def object_classes(conn, include_archived=False):
+    """Every class with how much it has been taught.
+
+    The counts are the point: a class with four samples all from one afternoon
+    is going to fail at dusk, and the only way anybody learns that before it
+    happens is by seeing the number.
+    """
+    sql = """
+        SELECT c.id, c.name, c.created_at, c.archived,
+               COUNT(s.id) AS samples,
+               COUNT(DISTINCT s.camera) AS cameras
+        FROM object_classes c
+        LEFT JOIN object_samples s ON s.class_id = c.id AND s.ignored = 0
+    """
+    if not include_archived:
+        sql += " WHERE c.archived = 0"
+    sql += " GROUP BY c.id ORDER BY c.name"
+    return [dict(row) for row in conn.execute(sql)]
+
+
+def archive_object_class(conn, class_id):
+    """Retire a class without losing the detections that reference it."""
+    conn.execute("UPDATE object_classes SET archived = 1, updated_at = ? WHERE id = ?",
+                 (now(), class_id))
+
+
+def delete_object_class(conn, class_id, directory=None):
+    """Remove a class and everything taught to it, images included."""
+    directory = directory or object_sample_dir_for(conn)
+    for row in conn.execute(
+            "SELECT id FROM object_samples WHERE class_id = ?", (class_id,)):
+        _remove_object_sample_file(row["id"], directory)
+    conn.execute("DELETE FROM object_samples WHERE class_id = ?", (class_id,))
+    conn.execute("DELETE FROM object_classes WHERE id = ?", (class_id,))
+
+
+def _remove_object_sample_file(sample_id, directory):
+    try:
+        os.remove(object_sample_path(sample_id, directory))
+    except OSError:
+        pass
+
+
+def save_object_sample(conn, jpeg, width, height, camera=None, box=None,
+                       embedding=None, dims=None, model=None, class_id=None,
+                       directory=None, at=None):
+    """Store a crop. Returns the id, or None if the image could not be written.
+
+    Row first, because its id names the file — the same order `save_snapshot`
+    uses, and for the same reason: a row whose write failed is removed rather
+    than left pointing at nothing.
+    """
+    directory = directory or object_sample_dir_for(conn)
+    cur = conn.execute(
+        "INSERT INTO object_samples (class_id, camera, box, width, height, "
+        "embedding, dims, model, taken_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (class_id, camera, json.dumps(box) if box else None, width, height,
+         embedding, dims, model, at or now()),
+    )
+    sample_id = cur.lastrowid
+    try:
+        os.makedirs(directory, exist_ok=True)
+        with open(object_sample_path(sample_id, directory), "wb") as handle:
+            handle.write(jpeg)
+    except OSError:
+        conn.execute("DELETE FROM object_samples WHERE id = ?", (sample_id,))
+        return None
+    conn.execute("UPDATE object_samples SET bytes = ? WHERE id = ?",
+                 (len(jpeg), sample_id))
+    return sample_id
+
+
+def label_object_sample(conn, sample_id, class_id=None, ignore=False):
+    """Assign a crop to a class, or mark it as nothing worth teaching.
+
+    Ignoring is a decision and is recorded as one, distinct from being
+    unreviewed — otherwise the queue offers the same wheelie bin forever.
+    """
+    if conn.execute("SELECT id FROM object_samples WHERE id = ?",
+                    (sample_id,)).fetchone() is None:
+        raise ValueError("no such sample")
+    conn.execute(
+        "UPDATE object_samples SET class_id = ?, ignored = ? WHERE id = ?",
+        (None if ignore else class_id, 1 if ignore else 0, sample_id),
+    )
+
+
+def delete_object_sample(conn, sample_id, directory=None):
+    _remove_object_sample_file(sample_id, directory or object_sample_dir_for(conn))
+    conn.execute("DELETE FROM object_samples WHERE id = ?", (sample_id,))
+
+
+def object_review_queue(conn, limit=60):
+    """Crops nobody has looked at yet, oldest first.
+
+    Oldest first so a queue that has run long enough to span dusk is worked
+    through in the order the light changed, rather than showing the last hour
+    of one afternoon over and over.
+    """
+    return [dict(row) for row in conn.execute(
+        "SELECT id, camera, box, width, height, taken_at FROM object_samples "
+        "WHERE class_id IS NULL AND ignored = 0 ORDER BY taken_at LIMIT ?",
+        (limit,))]
+
+
+def object_review_pending(conn):
+    return conn.execute(
+        "SELECT COUNT(*) AS n FROM object_samples "
+        "WHERE class_id IS NULL AND ignored = 0").fetchone()["n"]
+
+
+def object_prints(conn, model=None):
+    """(class_id, embedding) for everything enrolled, for the matcher.
+
+    Filtered by model when given: a vector from one backbone means nothing to
+    another, and mixing them would not error — it would score strangers as
+    matches.
+    """
+    sql = ("SELECT class_id, embedding FROM object_samples "
+           "WHERE class_id IS NOT NULL AND ignored = 0 AND embedding IS NOT NULL")
+    params = []
+    if model:
+        sql += " AND model = ?"
+        params.append(model)
+    return [(row["class_id"], row["embedding"]) for row in conn.execute(sql, params)]
+
+
+def object_samples_for(conn, class_id, limit=200):
+    return [dict(row) for row in conn.execute(
+        "SELECT id, camera, box, width, height, taken_at FROM object_samples "
+        "WHERE class_id = ? ORDER BY taken_at DESC LIMIT ?", (class_id, limit))]
 
 
 def record_detections(conn, camera, detections, snapshot_id=None, at=None):

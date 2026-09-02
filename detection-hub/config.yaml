@@ -1,5 +1,5 @@
 name: "Detection Hub"
-version: "1.18.0"
+version: "1.19.0"
 slug: "detection-hub"
 description: "Object detection for Home Assistant — an image in, what's in it out"
 url: "https://github.com/hoascv/homeassistant-addons/tree/main/detection-hub"
@@ -112,6 +112,20 @@ options:
   # this is the budget for the frames after it. Spent once per visit, not per
   # frame, and it stops as soon as a face is found.
   face_attempts: 5
+  # Learn object classes of your own, alongside the 80 the detector ships with.
+  # Off by default: it costs contour work on every motion frame and fills a
+  # review queue, neither of which is worth anything to a household that has
+  # not taught it a class.
+  object_learning: false
+  # How close a crop must be to something you enrolled before it is named.
+  # Reported on every answer so it can be set from what your cameras actually
+  # produce — the right number is a property of a scene, not of this code.
+  object_threshold: 0.5
+  # And how far ahead of the runner-up. Two classes a hair apart is a coin
+  # flip, and a coin flip that prints a name is worse than "unrecognised" —
+  # which is the whole reason an untrained object gets no label rather than the
+  # nearest one.
+  object_margin: 0.12
   # Push a notification when one of these is detected. Empty means no detection
   # alerts at all — the events and sensors still fire regardless, this is only
   # about a phone buzzing. Needs notify_service set to go anywhere.
@@ -161,6 +175,9 @@ schema:
   face_match_threshold: "float(0.20,0.90)"
   face_margin: "float(0.0,0.50)"
   face_attempts: "int(1,60)"
+  object_learning: "bool"
+  object_threshold: "float(0.0,1.0)"
+  object_margin: "float(0.0,0.5)"
   alert_labels: "str?"
   alert_cooldown_seconds: "int(0,86400)"
   ha_sensors_enabled: "bool"

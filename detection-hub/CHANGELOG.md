@@ -1,5 +1,37 @@
 # Changelog
 
+## 1.19.0
+
+- **Teach it object classes of your own**, alongside the 80 the detector ships
+  with. Off by default; turn on `object_learning`.
+- **Motion proposes the boxes, your training names them.** The detector cannot
+  do the first job for a class it has never seen: asked to find a cargo bike it
+  returned one box covering 91% of the frame labelled "tv", and a bigger model
+  was merely more confident about it. On a camera bolted to a wall, "what
+  changed" is a proposal method that owes nothing to what the object is.
+- **An unrecognised thing gets no name, not the nearest one.** A match needs to
+  be both close to something enrolled and decisively closer to it than to
+  anything else — the rule `faces.best_match` already applies to people, reused
+  rather than rewritten. The score is reported either way, because that number
+  is what says whether the threshold is wrong or the object is genuinely new.
+- **The review queue collects its own training material.** Crops it could not
+  name are kept for you to label, so the examples come from the camera that
+  will be judged, at dusk and at 3am, rather than from a phone on a sunny
+  afternoon. Rate-limited to one a camera every 90 seconds and capped at 240:
+  a car passing produces motion on forty consecutive frames and all of them are
+  the same car.
+- Labelling a crop with a name nobody has used yet creates the class, so
+  working the queue does not mean leaving it.
+- **The crop image is kept, not only its vector.** Replacing a camera means
+  retraining, and retraining from images already collected beats collecting
+  them again — and it survives a change of embedder, which a stored vector does
+  not. Samples carry the camera they came from, so an old camera's can be seen
+  and dropped as a group.
+- Class names join the change feed and the lakehouse schema, so a custom label
+  downstream is readable rather than an id. The crops and vectors do not: they
+  are training material and images, which is the argument that already keeps
+  face prints out.
+
 ## 1.18.0
 
 - **Push notifications when a configured object is detected.** Set

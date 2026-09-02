@@ -85,6 +85,14 @@ SCHEMAS = {
             "id long, name string, created_at string, updated_at string, "
             "archived long"
         ),
+        # Object classes a household taught the add-on, alongside the 80 the
+        # detector ships with. Names again, so a custom label on a detection is
+        # readable rather than an id. The crops and vectors behind them are not
+        # in the feed, for the face_prints reason: training material and images.
+        "object_classes": (
+            "id long, name string, created_at string, updated_at string, "
+            "archived long"
+        ),
     },
     "gym_tracker": {
         "workout_logs": (

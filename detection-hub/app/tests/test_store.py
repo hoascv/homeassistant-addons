@@ -151,7 +151,8 @@ def test_export_names_the_key_column_per_table(db):
     """trackers_merge.py needs this to know what identifies a row; guessing the
     first JSON key collapses a table."""
     payload = store.export(db)
-    assert payload["keys"] == {"detections": "id", "cameras": "id", "people": "id"}
+    assert payload["keys"] == {"detections": "id", "cameras": "id", "people": "id",
+                               "object_classes": "id"}
 
 
 def test_export_carries_every_tracked_table_and_the_watermark(db):
@@ -163,7 +164,8 @@ def test_export_carries_every_tracked_table_and_the_watermark(db):
     # Pinned deliberately: a table added to the feed without the lakehouse
     # schema being widened to match is data silently dropped downstream, so the
     # set changing should have to be a decision somebody wrote down.
-    assert set(payload["tables"]) == {"detections", "cameras", "people"}
+    assert set(payload["tables"]) == {"detections", "cameras", "people",
+                                      "object_classes"}
     assert len(payload["tables"]["detections"]) == 1
     assert payload["max_seq"] == store.max_seq(db)
 
@@ -463,3 +465,14 @@ def test_recording_detections_returns_the_ids_it_wrote(db):
     db.commit()
     assert ids == [1, 2]
     assert store.record_detections(db, "drive", []) == []
+
+
+def test_object_samples_never_appear_in_the_feed(db):
+    """The crops and their vectors are training material and images — the same
+    argument that keeps face_prints out. The class *names* are in the feed so a
+    custom label on a detection is readable; what taught it is not."""
+    store.create_object_class(db, "cargo bike")
+    db.commit()
+    payload = store.export(db)
+    assert "object_classes" in payload["tables"]
+    assert "object_samples" not in payload["tables"]

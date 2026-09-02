@@ -22,6 +22,11 @@ def _reset_module_state(monkeypatch):
     monkeypatch.setattr(hub, "SUPERVISOR_TOKEN", None)
     monkeypatch.setattr(hub, "_detector", None)
     monkeypatch.setattr(hub, "_face_identifier", None)
+    monkeypatch.setattr(hub, "_object_embedder", None)
+    # When each camera last kept a crop for review. Left standing, one test's
+    # enqueue silences the next one's for ninety seconds — which reads as the
+    # rate limit being broken rather than as state leaking.
+    monkeypatch.setattr(hub, "_object_queue_last", {})
 
 
 @pytest.fixture

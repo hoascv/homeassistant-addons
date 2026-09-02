@@ -255,6 +255,7 @@ class CameraWorker(threading.Thread):
         log=print,
         identifier=None,
         on_identity=None,
+        on_regions=None,
         face_attempts=5,
         face_min_pixels=60,
         zone=None,
@@ -266,6 +267,10 @@ class CameraWorker(threading.Thread):
         self.url = url
         self.detector = det
         self.on_detections = on_detections
+        # Called with the boxes of whatever changed, for classes the detector
+        # was never trained on. None means nobody has taught it any, and the
+        # contour work is skipped entirely.
+        self.on_regions = on_regions
         # 0 means "consider every frame": no sampling throttle. Useful on a
         # low-rate source (a doorbell snapshot feed) where every frame is
         # already meaningful, and it is what the gate tests need to isolate the
@@ -382,10 +387,26 @@ class CameraWorker(threading.Thread):
             self._consider(frame)
 
     def _consider(self, frame):
-        score = detector.motion_score(self._previous, frame)
+        previous = self._previous
+        score = detector.motion_score(previous, frame)
         self._previous = frame
         if score < self.motion_threshold:
             return
+
+        # Where the frame changed, for classes the detector does not know.
+        # Computed from the same pair the score came from, which is why
+        # `previous` is held above rather than read back after the assignment.
+        # Only when somebody is listening: it is contour work on every motion
+        # frame, and a household with no custom classes should not pay for it.
+        if self.on_regions is not None:
+            try:
+                regions = detector.motion_regions(previous, frame)
+                if regions:
+                    self.on_regions(self.camera_id, frame, regions)
+            except Exception as exc:  # noqa: BLE001 - a naming failure must not
+                # end the camera thread, exactly as an identification failure
+                # must not below.
+                self.log(f"camera {self.camera_id}: could not name regions: {exc}")
 
         detections, error = self.detector.detect(
             frame, confidence=self.confidence, labels=self.labels
@@ -532,9 +553,11 @@ class CaptureManager:
     implementation would be more code for a case that barely arises.
     """
 
-    def __init__(self, det, on_detections, log=print, identifier=None, on_identity=None):
+    def __init__(self, det, on_detections, log=print, identifier=None,
+                 on_identity=None, on_regions=None):
         self.detector = det
         self.on_detections = on_detections
+        self.on_regions = on_regions
         self.log = log
         # The face models and the callback that decides who somebody is. Both
         # None means identification is off, which is the default.
@@ -571,6 +594,7 @@ class CaptureManager:
                     log=self.log,
                     identifier=self.identifier,
                     on_identity=self.on_identity,
+                    on_regions=self.on_regions,
                     zone=camera_zones.get(camera["id"]),
                     **options,
                 )
