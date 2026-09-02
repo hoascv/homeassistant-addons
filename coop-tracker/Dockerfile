@@ -22,6 +22,17 @@ RUN pip3 install --no-cache-dir -r requirements.txt
 # Both skipped on other architectures rather than failing the whole build;
 # the app detects each one's absence via its own import guard (app.py) and
 # reports that feature unavailable instead, independently of the other.
+# Tesseract, for reading a photographed receipt (§21). Danish language data as
+# well as English: a Netto receipt says "I ALT" and "Byttepenge", and the
+# English-only model reads those as noise. Gated with the same arches as the
+# wheels below — on armv7 there is no OpenCV either, and an image carrying an
+# OCR engine it cannot pair with a camera pipeline is 50MB of nothing.
+RUN if [ "$TARGETARCH" = "amd64" ] || [ "$TARGETARCH" = "arm64" ]; then \
+      apt-get update \
+      && apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-dan \
+      && rm -rf /var/lib/apt/lists/*; \
+    fi
+
 COPY app/requirements-advanced.txt .
 RUN if [ "$TARGETARCH" = "amd64" ] || [ "$TARGETARCH" = "arm64" ]; then \
       pip3 install --no-cache-dir -r requirements-advanced.txt; \

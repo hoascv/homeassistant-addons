@@ -21,6 +21,7 @@ from datetime import date, datetime, time as dtime, timedelta
 from flask import Flask, Response, g, jsonify, render_template, request, send_file
 
 import ferment
+import receipts
 import tonics
 
 try:
@@ -52,6 +53,19 @@ except ImportError as e:
     OPENCV_ERROR = str(e)
 
 try:
+    import pytesseract
+
+    TESSERACT_AVAILABLE = True
+    TESSERACT_ERROR = None
+except ImportError as e:
+    # Its own guard, like the others: the Python package and the tesseract
+    # binary it shells out to are installed separately, and either can be
+    # missing on its own. Whether the binary is actually there is checked at
+    # call time, since an import cannot tell.
+    TESSERACT_AVAILABLE = False
+    TESSERACT_ERROR = str(e)
+
+try:
     import pickle
 
     from sklearn.linear_model import LogisticRegression
@@ -68,7 +82,7 @@ except ImportError as e:
     SKLEARN_AVAILABLE = False
     SKLEARN_ERROR = str(e)
 
-APP_VERSION = "1.54.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.55.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("COOP_DB_PATH", "/data/coop.db")
 OPTIONS_PATH = os.environ.get("COOP_OPTIONS_PATH", "/data/options.json")
@@ -1487,6 +1501,74 @@ def api_delete_tonic(routine_id):
     tonics.delete_routine(conn, routine_id)
     conn.commit()
     return jsonify(_tonic_payload(conn))
+
+
+MAX_RECEIPT_PHOTO_BYTES = 8 * 1024 * 1024
+
+
+def _ocr_receipt(photo_bytes):
+    """Photo bytes to text, or (None, why not).
+
+    Danish first with English behind it: `dan+eng` lets Tesseract fall back
+    per-word, which matters on a receipt that says "I ALT" on one line and
+    "Layers pellets" on the next.
+    """
+    if not (TESSERACT_AVAILABLE and OPENCV_AVAILABLE):
+        return None, "receipt scanning is not available on this architecture"
+    try:
+        image = cv2.imdecode(np.frombuffer(photo_bytes, np.uint8), cv2.IMREAD_GRAYSCALE)
+    except Exception:  # noqa: BLE001 - any decode failure is the same answer
+        image = None
+    if image is None:
+        return None, "could not read that image"
+
+    # Upscale small photos and threshold: thermal receipts are low-contrast grey
+    # on grey by the time a phone camera has been through them, and Tesseract
+    # reads a clean black-on-white far better than it reads the original.
+    height, width = image.shape[:2]
+    if max(height, width) < 1400:
+        scale = 1400 / max(height, width)
+        image = cv2.resize(image, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+    image = cv2.adaptiveThreshold(
+        image, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 31, 15)
+
+    try:
+        text = pytesseract.image_to_string(image, lang="dan+eng")
+    except pytesseract.TesseractNotFoundError:
+        return None, "the tesseract binary is not installed"
+    except Exception as exc:  # noqa: BLE001 - report rather than 500
+        return None, f"could not read that receipt: {exc}"
+    return text, None
+
+
+@app.route("/api/expenses/scan", methods=["POST"])
+def api_scan_receipt():
+    """Read a photographed receipt and offer what it found.
+
+    Offers, never records. A photographed till receipt is creased, thermal and
+    half in shadow, and OCR on one is wrong often enough that logging its guess
+    unattended would put bad numbers in the books faster than typing them by
+    hand ever would. Everything here lands in the expense form for a human to
+    confirm.
+    """
+    data = request.get_json(force=True, silent=True) or {}
+    photo_bytes, error = _decode_photo_data_uri(
+        data.get("photo") or "", max_bytes=MAX_RECEIPT_PHOTO_BYTES)
+    if error:
+        return jsonify({"error": error}), 400
+
+    text, error = _ocr_receipt(photo_bytes)
+    if error:
+        return jsonify({"error": error}), 503 if "not available" in error else 400
+
+    found = receipts.read(text)
+    return jsonify({
+        **found,
+        # Trimmed: the raw text is shown so somebody can see what was read when
+        # the guess is wrong, and a whole receipt of it would bury the form.
+        "text": found["text"][:2000],
+        "found_anything": found["amount"] is not None,
+    })
 
 
 @app.route("/api/summary")
@@ -3779,6 +3861,8 @@ def api_debug():
             "advanced_forecast_enabled": get_advanced_forecast_config()["enabled"],
             "opencv_available": OPENCV_AVAILABLE,
             "opencv_error": OPENCV_ERROR,
+            "tesseract_available": TESSERACT_AVAILABLE,
+            "tesseract_error": TESSERACT_ERROR,
             "sklearn_available": SKLEARN_AVAILABLE,
             "sklearn_error": SKLEARN_ERROR,
             "box_embedder_available": OPENCV_AVAILABLE and _box_embedder_status()["available"],

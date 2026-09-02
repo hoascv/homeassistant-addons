@@ -1,5 +1,30 @@
 # Changelog
 
+## 1.55.0
+
+- **Scan a receipt when logging an expense.** Photograph the till receipt and
+  the amount, date and shop name go into the form. Tesseract runs inside the
+  add-on, so nothing leaves the machine.
+- **It fills the form in and never saves.** OCR on a creased thermal receipt is
+  wrong often enough that logging its guess unattended would put bad numbers in
+  the books faster than typing them by hand would.
+- Reads what a Danish till actually prints: `1.234,56` as twelve hundred and
+  thirty-four kroner, **I ALT** and **At betale** as the total — and **Moms**,
+  **Kontant**, **Byttepenge**, **Subtotal** and **Rabat** as never the total.
+  That last group is why a naive reading fails: VAT sits near the bottom at a
+  plausible fraction of the real figure, and the cash tendered is larger than
+  what was paid.
+- Dates and times are stripped before the scan rather than filtered after, or
+  the year reads as a four-figure sum and the timestamp as two more.
+- Other prices found are offered as chips beside the amount, because the first
+  guess is wrong often enough to want the runner-up one tap away.
+- The button appears only where the engine is installed (amd64 and arm64). On
+  armv7 there is no OpenCV either, and a button that could only ever apologise
+  is worse than none.
+- New `receipts.py`: text in, candidates out, so the hard part — which of the
+  eleven numbers on a receipt you actually paid — is tested against real
+  receipt shapes without a photograph or a Tesseract install.
+
 ## 1.54.0
 
 - **Click a point on the eggs-per-day chart to see what it rests on.** The

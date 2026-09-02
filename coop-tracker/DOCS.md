@@ -143,6 +143,37 @@ it — independent of the 3/6/12-month range used for the egg chart above
 it, since a meaningful refill average usually needs longer than that to
 build up.
 
+## Scanning a receipt
+
+**Log Expense → 📷 Scan a receipt.** Photograph the till receipt and the amount,
+date and shop name are read off it and put into the form.
+
+> **It fills the form in. It never saves anything.** A photographed till
+> receipt is creased, thermal and half in shadow, and OCR on one is wrong often
+> enough that logging its guess unattended would put bad numbers in your books
+> faster than typing them by hand would. Check the figure before you save.
+
+Under the amount, any other prices it found appear as chips — the first guess
+is wrong often enough to want the runner-up one tap away rather than a retaken
+photograph.
+
+It reads Danish and English, and knows the shapes a Danish till prints:
+`1.234,56` is twelve hundred and thirty-four kroner, **I ALT** and **At betale**
+mean the total, and **Moms**, **Kontant** and **Byttepenge** never do. That last
+group is the reason a naive reading gets it wrong: VAT sits near the bottom in a
+line of its own at a plausible fraction of the real figure, and the cash you
+handed over is larger than what you paid.
+
+Nothing leaves the machine — Tesseract runs inside the add-on, like the egg
+photo analysis.
+
+The button only appears where the OCR engine is installed, which is amd64 and
+arm64. On armv7 there is no OpenCV either, so the whole photo pipeline is
+absent and a button that could only apologise is not shown.
+
+If it comes up empty, a straighter photo in better light usually fixes it —
+and the amount box is still there to type into.
+
 ## Flock tonics
 
 Off by default; turn on `tonic_enabled`. Shares the **🪣 Feed** tab with the

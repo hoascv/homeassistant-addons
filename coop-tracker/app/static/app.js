@@ -432,6 +432,15 @@ function openSheet(type, entry = null) {
     });
   } else if (type === "expense") {
     sheetFields.innerHTML = `
+      <!-- Above the fields, because it fills them in. Hidden where the OCR
+           engine is not installed rather than offered and then apologised for. -->
+      <div class="field receipt-scan" id="receipt-scan" hidden>
+        <button type="button" class="btn-secondary full" id="receipt-btn">
+          📷 Scan a receipt</button>
+        <input type="file" id="receipt-file" accept="image/*" capture="environment" hidden>
+        <p class="receipt-note" id="receipt-note" hidden></p>
+        <div class="receipt-choices" id="receipt-choices" hidden></div>
+      </div>
       <div class="field">
         <label>Category</label>
         <input type="text" name="category" placeholder="e.g. Food, Bedding, Medical" value="${entry ? entry.category ?? "" : ""}" list="expense-categories">
@@ -452,6 +461,9 @@ function openSheet(type, entry = null) {
         <textarea name="notes">${entry ? entry.notes ?? "" : ""}</textarea>
       </div>
     `;
+    // Asked once and remembered: the answer cannot change while the page is
+    // open, and the sheet should not wait on a request to draw itself.
+    revealReceiptScan();
   } else if (type === "used") {
     const initialCount = entry ? entry.count ?? 1 : 1;
     sheetFields.innerHTML = `
@@ -3339,3 +3351,133 @@ document.addEventListener("click", (event) => {
   if (!hit) return;
   openDaySheet(hit.dataset.day);
 });
+
+
+// --- scanning a receipt -------------------------------------------------------
+//
+// Offers, never records. A photographed till receipt is creased, thermal and
+// half in shadow; the reading goes into the form for a human to confirm, and
+// the alternatives it also found sit underneath as chips, because the first
+// guess is wrong often enough to want the second one a tap away rather than a
+// retaken photograph.
+
+let receiptScanSupported = null;
+
+async function receiptScanningAvailable() {
+  if (receiptScanSupported !== null) return receiptScanSupported;
+  try {
+    const debug = await fetch("api/debug").then((r) => r.json());
+    receiptScanSupported = Boolean(debug.tesseract_available && debug.opencv_available);
+  } catch (err) {
+    receiptScanSupported = false;
+  }
+  return receiptScanSupported;
+}
+
+async function revealReceiptScan() {
+  const block = document.getElementById("receipt-scan");
+  if (!block) return;
+  // Hidden rather than shown-and-apologised-for where the engine is absent:
+  // armv7 gets no OpenCV and no Tesseract, and a button that can only ever
+  // return "not available on this architecture" is worse than no button.
+  block.hidden = !(await receiptScanningAvailable());
+}
+
+function receiptNote(text, kind) {
+  const note = document.getElementById("receipt-note");
+  if (!note) return;
+  note.textContent = text;
+  note.className = `receipt-note${kind ? ` receipt-${kind}` : ""}`;
+  note.hidden = !text;
+}
+
+function applyReceipt(found) {
+  const form = document.getElementById("sheet-form");
+  if (found.amount != null) form.elements.cost.value = found.amount;
+  if (found.vendor && !form.elements.notes.value) {
+    form.elements.notes.value = found.vendor;
+  }
+  // The date field is a datetime-local; the receipt only knows the day, so the
+  // time of the original entry is left alone rather than reset to midnight.
+  if (found.date && form.elements.ts) {
+    const current = form.elements.ts.value;
+    const time = current.includes("T") ? current.split("T")[1] : "12:00";
+    form.elements.ts.value = `${found.date}T${time}`;
+  }
+
+  const choices = document.getElementById("receipt-choices");
+  const others = (found.amounts || []).filter((a) => a !== found.amount);
+  choices.hidden = others.length === 0;
+  choices.innerHTML = others.length
+    ? `<span class="receipt-choices-label">Or:</span>` + others
+        .map((a) => `<button type="button" class="chip" data-amount="${a}">${a.toFixed(2)}</button>`)
+        .join("")
+    : "";
+}
+
+document.addEventListener("click", (event) => {
+  const chip = event.target.closest("#receipt-choices [data-amount]");
+  if (!chip) return;
+  document.getElementById("sheet-form").elements.cost.value = chip.dataset.amount;
+  receiptNote("Using the amount you picked.", "ok");
+});
+
+document.addEventListener("click", (event) => {
+  if (!event.target.closest("#receipt-btn")) return;
+  document.getElementById("receipt-file").click();
+});
+
+document.addEventListener("change", async (event) => {
+  if (event.target.id !== "receipt-file") return;
+  const file = event.target.files && event.target.files[0];
+  if (!file) return;
+  receiptNote("Reading…");
+
+  // Resized before upload, like the egg photos: a modern phone's 12MP JPEG is
+  // several megabytes of detail Tesseract does not use, and the upload is over
+  // somebody's home wifi.
+  const dataUri = await shrinkImage(file, 1600);
+  event.target.value = "";
+  let body;
+  try {
+    const response = await fetch("api/expenses/scan", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ photo: dataUri }),
+    });
+    body = await response.json();
+    if (!response.ok) { receiptNote(body.error || "Could not read that.", "warn"); return; }
+  } catch (err) {
+    receiptNote("Could not read that.", "warn");
+    return;
+  }
+
+  if (!body.found_anything) {
+    receiptNote("No amount found. Try a straighter photo in better light, "
+                + "or just type it in.", "warn");
+    return;
+  }
+  applyReceipt(body);
+  receiptNote("Filled in from the photo — check it before saving.", "ok");
+});
+
+// Canvas resize, returning a data URI. Long edge capped; aspect kept.
+function shrinkImage(file, maxEdge) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        const scale = Math.min(1, maxEdge / Math.max(img.width, img.height));
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.round(img.width * scale);
+        canvas.height = Math.round(img.height * scale);
+        canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+        resolve(canvas.toDataURL("image/jpeg", 0.9));
+      };
+      img.onerror = reject;
+      img.src = reader.result;
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}

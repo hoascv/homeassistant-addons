@@ -1,3 +1,4 @@
 statsmodels
 opencv-python-headless
 scikit-learn
+pytesseract
