@@ -12,7 +12,10 @@ import pytest
 import app as gymapp
 
 
-def _logs(points, start="2026-07-03"):
+LOG_START = "2026-07-03"
+
+
+def _logs(points, start=LOG_START):
     """points: [(day_offset, weight, bf)] -> log rows as the app stores them."""
     d0 = datetime.date.fromisoformat(start)
     return [
@@ -66,13 +69,23 @@ def test_a_trend_landing_past_the_target_reads_ahead():
 
 
 def test_a_trend_landing_on_the_target_reads_on_track():
-    """Within the band either side, which is what 'on track' means."""
-    days = (datetime.date.fromisoformat(_goal()["target_date"])
-            - datetime.date.today()).days
-    # Fall from 30 to exactly 15 over the whole window.
-    per_day = 15.0 / (56 + days)
+    """Within the band either side, which is what 'on track' means.
+
+    The span is measured from the first *log* to the target, not from today.
+    `_logs` anchors to a fixed date while `_goal` is relative to today, so those
+    two drift apart by a day for every day that passes — and this test, written
+    with `56 + days_from_today`, started reading "ahead" once the gap reached
+    six days. A test that depends on when it is run is a test that will fail on
+    a Tuesday for no reason anybody can see.
+    """
+    first_log = datetime.date.fromisoformat(LOG_START)
+    target = datetime.date.fromisoformat(_goal()["target_date"])
+    # Fall from 30 to exactly 15 across the whole span the line is fitted over
+    # and projected across.
+    per_day = 15.0 / (target - first_log).days
     fc = _forecast([(0, 100, 30.0), (28, 100, 30 - 28 * per_day), (56, 100, 30 - 56 * per_day)])
     assert fc["bf_status"] == "on_track"
+    assert fc["bf_projected_pct"] == pytest.approx(15.0, abs=0.05)
 
 
 # --- the band -----------------------------------------------------------------
@@ -261,3 +274,46 @@ def test_the_card_blames_the_projection_rather_than_the_person():
         js = handle.read()
     assert "implied_lean_implausible" in js
     assert "over-reading" in js
+
+
+# --- the projection has to fit in the panel it is drawn in --------------------
+
+
+def _static(name):
+    import os
+    with open(os.path.join(os.path.dirname(__file__), "..", "static", name),
+              encoding="utf-8") as handle:
+        return handle.read()
+
+
+def test_the_panel_scales_to_include_its_projection():
+    """It did not, and the line vanished. The y-range came from the logged
+    points and the target alone, so a trend overshooting the target — or running
+    away from it — was scaled off the panel and clipped to a stub by the panel's
+    own clip-path. Measured on a +0.6 kg/wk fit against a 105 kg target: the far
+    end landed at y = -161 in a panel spanning 12 to 148."""
+    js = _static("app.js")
+    block = js[js.index("function drawPanel(p) {"):]
+    block = block[:block.index("const pad = Math.max")]
+    assert "p.trend" in block and "p.band" in block, "the projection is not in the range"
+
+
+def test_the_projection_cannot_flatten_the_readings():
+    """A wild extrapolation would otherwise compress every actual reading into a
+    smear. The room it may claim is capped at the span of the real data, so the
+    readings always keep at least half the panel."""
+    js = _static("app.js")
+    block = js[js.index("function drawPanel(p) {"):]
+    block = block[:block.index("const pad = Math.max")]
+    assert "const span = Math.max(hi - lo, 0.5);" in block
+    assert "lo - span" in block and "hi + span" in block
+
+
+def test_a_panel_with_no_trend_says_so_where_the_line_would_be():
+    """The card explains it three lines below the chart. A weight panel with no
+    projection beside a body-fat panel that has one reads as something broken,
+    and the explanation is not where anybody looks first."""
+    js = _static("app.js")
+    assert "chart-no-trend" in js
+    assert 'fc.available && fc.trend_unclear ? "no trend yet" : null' in js
+    assert ".chart-no-trend" in _static("style.css")

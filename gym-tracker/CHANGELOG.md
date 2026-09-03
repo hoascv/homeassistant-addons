@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.47.0
+
+- **Fixed: a projection that overshot the target was clipped off the chart.**
+  The panel's y-range came from the logged readings and the target alone, so a
+  trend heading past the target — or away from it — was scaled outside the
+  panel and cut to a stub by its own clip-path. Measured on a +0.6 kg/wk fit
+  against a 105 kg target, the far end of the line landed at y = -161 in a
+  panel spanning 12 to 148.
+- The range now includes the projection and its band, but only by up to the
+  span of the real data: a wild extrapolation would otherwise compress every
+  actual reading into a flat smear, and the readings keep at least half the
+  panel.
+- **A panel with no projection now says why, in the panel.** The card explains
+  it three lines below the chart, which is not where anybody looks — a weight
+  panel with no line beside a body-fat panel that has one reads as something
+  broken rather than as a judgement. It now carries a quiet "no trend yet"
+  where the line would have started.
+- Fixed a test that had drifted into failing: it anchored its logs to a fixed
+  date while the goal was relative to today, so the two moved apart by a day
+  for every day that passed and the projection eventually landed past the
+  target. A test that fails on a Tuesday for no visible reason is worse than no
+  test.
+
 ## 1.46.0
 
 - **The weight and body-fat projections now state what they jointly imply**, in

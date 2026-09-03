@@ -641,6 +641,27 @@ function renderWeightChart(logs, goal, forecast, opts) {
   function drawPanel(p) {
     const vals = p.points.map((q) => q.y).concat(p.target != null ? [p.target] : []);
     let lo = Math.min(...vals), hi = Math.max(...vals);
+
+    // The projection has to be in the range it is drawn against. Without this
+    // a trend that overshoots the target — or runs away from it — is scaled off
+    // the panel and clipped to a stub, which reads as the line being missing
+    // rather than as the projection being dramatic. Measured on a +0.6 kg/wk
+    // fit against a 105 kg target: the far end landed at y = -161 in a panel
+    // spanning 12 to 148.
+    //
+    // Bounded, though. A wild extrapolation would otherwise compress every
+    // actual reading into a flat smear: the room the projection may claim is
+    // capped at the span of the real data, so the readings always keep at least
+    // half the panel.
+    const span = Math.max(hi - lo, 0.5);
+    const projected = [];
+    if (p.trend) for (const q of p.trend) projected.push(q.y);
+    if (p.band) for (const q of p.band) { projected.push(q.lo); projected.push(q.hi); }
+    if (projected.length) {
+      lo = Math.min(lo, Math.max(Math.min(...projected), lo - span));
+      hi = Math.max(hi, Math.min(Math.max(...projected), hi + span));
+    }
+
     const pad = Math.max(0.5, (hi - lo) * 0.15);
     lo -= pad; hi += pad;
     const sy = (v) => p.top + (1 - (v - lo) / (hi - lo)) * p.height;
@@ -684,6 +705,19 @@ function renderWeightChart(logs, goal, forecast, opts) {
         points: top.concat(bottom).join(" "),
         "clip-path": `url(#${clipId})`,
       }, p.bandClass);
+    }
+
+    // Said in the panel, not only in the card underneath. A weight panel with
+    // no projection sitting beside a body-fat panel that has one reads as
+    // something broken; the card's explanation is three lines further down and
+    // is not where anybody looks first.
+    if (!p.trend && p.noTrendNote) {
+      const last = p.points[p.points.length - 1];
+      if (last) {
+        label(clamp(sx(last.t) + 10, padL, W - padR - 4),
+              clamp(sy(last.y) - 8, p.top + 10, p.top + p.height - 4),
+              "start", "chart-no-trend", p.noTrendNote);
+      }
     }
 
     // Projected trend line (dashed) — drawn under the actual line.
@@ -780,6 +814,9 @@ function renderWeightChart(logs, goal, forecast, opts) {
         ? fc.trend.map((q) => ({ t: new Date(q.ts).getTime(), y: q.weight_kg }))
         : null,
     trendLabel: "Projected",
+    // Only for the "too early" case. A goal with no target date has no
+    // projection to be missing, and saying so there would be noise.
+    noTrendNote: fc.available && fc.trend_unclear ? "no trend yet" : null,
     band:
       fc.available && !fc.trend_unclear && fc.trend_band
         ? fc.trend_band.map((q) => ({ t: new Date(q.ts).getTime(), lo: q.lo, hi: q.hi }))

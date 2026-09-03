@@ -722,3 +722,10 @@ p.tpl-meta { margin: 0 0 0.6rem; white-space: normal; }
 .chart-band { fill: var(--accent); opacity: 0.10; stroke: none; }
 .chart-band-bf { fill: var(--success); opacity: 0.10; stroke: none; }
 
+/* Why a panel has no projection, said where the projection would have been.
+   Quiet: it is an explanation, not a warning. */
+.chart-no-trend {
+  font-size: 9px;
+  fill: var(--text-muted);
+  font-style: italic;
+}
