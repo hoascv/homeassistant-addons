@@ -25,7 +25,7 @@ import hass
 import store
 import zones
 
-APP_VERSION = "1.19.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.19.1"  # keep in sync with the "version" field in config.yaml
 
 OPTIONS_PATH = os.environ.get("DETECTION_HUB_OPTIONS_PATH", "/data/options.json")
 
@@ -347,7 +347,7 @@ def identify_object(conn, crop):
     prints = store.object_prints(conn, model=OBJECT_EMBED_MODEL)
     if not prints:
         return {"object_id": None, "score": None, "runner_up": None,
-                "name": None, "untrained": True}
+                "nearest_id": None, "name": None, "untrained": True}
 
     result = objects.identify(
         vector, prints,
@@ -730,7 +730,11 @@ def _on_camera_regions(camera_id, frame, regions):
                 named.append({"label": result["name"], "confidence": result["score"],
                               "box": list(box)})
                 continue
-            _maybe_enqueue(conn, camera_id, crop, box)
+            # The score it *did* get travels with the crop. A keeper looking at
+            # a queue of near misses can then see whether the threshold is a
+            # fraction too high or the thing is genuinely new, which is the
+            # only way that number gets set from evidence.
+            _maybe_enqueue(conn, camera_id, crop, box, result)
 
         if named:
             store.record_detections(conn, camera_id, named)
@@ -739,7 +743,7 @@ def _on_camera_regions(camera_id, frame, regions):
         conn.close()
 
 
-def _maybe_enqueue(conn, camera_id, crop, box):
+def _maybe_enqueue(conn, camera_id, crop, box, result=None):
     """Keep this crop for review, if the queue can stand another one."""
     now = time.time()
     if now - _object_queue_last.get(camera_id, 0) < OBJECT_QUEUE_INTERVAL_SECONDS:
@@ -753,7 +757,9 @@ def _maybe_enqueue(conn, camera_id, crop, box):
         return
     height, width = crop.shape[:2]
     if store.save_object_sample(conn, jpeg, width, height,
-                                camera=camera_id, box=list(box)):
+                                camera=camera_id, box=list(box),
+                                best_score=(result or {}).get("score"),
+                                best_class_id=(result or {}).get("nearest_id")):
         _object_queue_last[camera_id] = now
 
 

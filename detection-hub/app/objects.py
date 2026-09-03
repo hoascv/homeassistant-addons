@@ -48,12 +48,21 @@ STD = (0.229, 0.224, 0.225)
 # bike is here" while a van sits in its place is the failure this module exists
 # to avoid.
 #
-# These suit *centred* vectors — see `centre`. Measured on one real camera
-# frame, crops of the same object scored 0.68-0.77 against each other and
-# -0.54 to -0.77 against other parts of the scene, so 0.5 sits in a wide gap.
-# One frame is not a calibration; the scores are surfaced precisely so these can
-# be set from what a real camera produces.
-DEFAULT_THRESHOLD = 0.5
+# These suit *centred* vectors — see `centre`.
+#
+# 0.35, and the number is provisional by design. Measured on a real CCTV frame
+# of the object this was built for, three crops of it scored +0.20 to +0.64
+# against each other and -0.68 to +0.11 against the paving, wall and grass
+# around it. The usable gap is that narrow — and two views of one object can be
+# less alike (+0.20, front against rear) than a bike and a wall (+0.11). An
+# earlier default of 0.5 sat outside that band entirely and would have refused
+# a genuine view of the thing it was trained on.
+#
+# It is survivable because the camera does not move: every crop comes from one
+# angle, where the same measurement gave +0.64. But that is an argument for
+# calibrating against a fixed camera's own output, not for trusting a constant
+# — which is why every queued crop records the score it actually got.
+DEFAULT_THRESHOLD = 0.35
 DEFAULT_MARGIN = 0.12
 
 
@@ -173,7 +182,8 @@ def identify(embedding, prints, mean=None,
 
     query = centre(embedding, mean)
     if query is None:
-        return {"object_id": None, "score": None, "runner_up": None}
+        return {"object_id": None, "score": None, "runner_up": None,
+                "nearest_id": None}
 
     centred_prints = []
     for object_id, value in prints:
@@ -186,6 +196,10 @@ def identify(embedding, prints, mean=None,
         "object_id": result["person_id"],
         "score": result["score"],
         "runner_up": result["runner_up"],
+        # Which class it was closest to, accepted or not — the number a keeper
+        # needs to set the threshold from their own camera rather than from a
+        # default somebody guessed.
+        "nearest_id": result["nearest_id"],
     }
 
 

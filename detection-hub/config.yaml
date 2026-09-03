@@ -1,5 +1,5 @@
 name: "Detection Hub"
-version: "1.19.0"
+version: "1.19.1"
 slug: "detection-hub"
 description: "Object detection for Home Assistant — an image in, what's in it out"
 url: "https://github.com/hoascv/homeassistant-addons/tree/main/detection-hub"
@@ -118,9 +118,12 @@ options:
   # not taught it a class.
   object_learning: false
   # How close a crop must be to something you enrolled before it is named.
-  # Reported on every answer so it can be set from what your cameras actually
-  # produce — the right number is a property of a scene, not of this code.
-  object_threshold: 0.5
+  # Provisional: measured on one real frame, crops of the same object scored
+  # +0.20 to +0.64 against each other and up to +0.11 against the background —
+  # a narrow band, and a property of your camera rather than of this code.
+  # Every crop in the review queue shows the score it got, so this can be moved
+  # on evidence.
+  object_threshold: 0.35
   # And how far ahead of the runner-up. Two classes a hair apart is a coin
   # flip, and a coin flip that prints a name is worse than "unrecognised" —
   # which is the whole reason an untrained object gets no label rather than the

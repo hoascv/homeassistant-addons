@@ -356,6 +356,13 @@ def init_db(path=None):
             -- looked at and decided not to teach. Distinct from unreviewed,
             -- because otherwise the queue offers it again forever.
             ignored INTEGER NOT NULL DEFAULT 0,
+            -- What this crop scored against the best-matching trained class at
+            -- the moment it was queued, and which class that was. Kept because
+            -- the threshold has to be set from what a real camera produces, and
+            -- without these a keeper can see that a crop was not named but not
+            -- whether it missed by 0.02 or by 0.6.
+            best_score REAL,
+            best_class_id INTEGER,
             taken_at TEXT NOT NULL
         )
         """
@@ -632,7 +639,7 @@ def _remove_object_sample_file(sample_id, directory):
 
 def save_object_sample(conn, jpeg, width, height, camera=None, box=None,
                        embedding=None, dims=None, model=None, class_id=None,
-                       directory=None, at=None):
+                       directory=None, at=None, best_score=None, best_class_id=None):
     """Store a crop. Returns the id, or None if the image could not be written.
 
     Row first, because its id names the file — the same order `save_snapshot`
@@ -642,9 +649,10 @@ def save_object_sample(conn, jpeg, width, height, camera=None, box=None,
     directory = directory or object_sample_dir_for(conn)
     cur = conn.execute(
         "INSERT INTO object_samples (class_id, camera, box, width, height, "
-        "embedding, dims, model, taken_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "embedding, dims, model, best_score, best_class_id, taken_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (class_id, camera, json.dumps(box) if box else None, width, height,
-         embedding, dims, model, at or now()),
+         embedding, dims, model, best_score, best_class_id, at or now()),
     )
     sample_id = cur.lastrowid
     try:
@@ -687,8 +695,10 @@ def object_review_queue(conn, limit=60):
     of one afternoon over and over.
     """
     return [dict(row) for row in conn.execute(
-        "SELECT id, camera, box, width, height, taken_at FROM object_samples "
-        "WHERE class_id IS NULL AND ignored = 0 ORDER BY taken_at LIMIT ?",
+        "SELECT s.id, s.camera, s.box, s.width, s.height, s.taken_at, "
+        "s.best_score, c.name AS best_class "
+        "FROM object_samples s LEFT JOIN object_classes c ON c.id = s.best_class_id "
+        "WHERE s.class_id IS NULL AND s.ignored = 0 ORDER BY s.taken_at LIMIT ?",
         (limit,))]
 
 

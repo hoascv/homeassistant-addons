@@ -166,17 +166,26 @@ def best_match(embedding, prints, threshold, margin):
             by_person[person_id] = score
 
     if not by_person:
-        return {"person_id": None, "score": None, "runner_up": None}
+        return {"person_id": None, "score": None, "runner_up": None,
+                "nearest_id": None}
 
     ranked = sorted(by_person.items(), key=lambda item: -item[1])
     best_id, best_score = ranked[0]
     runner_up = ranked[1][1] if len(ranked) > 1 else None
 
+    # `nearest_id` is reported whether or not the match was accepted. Which
+    # one it was closest to is the other half of the score: 0.41 tells you it
+    # missed, 0.41-against-Anna tells you whether the threshold is a fraction
+    # too high or the face is a stranger. Callers that only want a decision
+    # keep reading `person_id`, which is still None when nothing cleared.
     if best_score < threshold:
-        return {"person_id": None, "score": best_score, "runner_up": runner_up}
+        return {"person_id": None, "score": best_score, "runner_up": runner_up,
+                "nearest_id": best_id}
     if runner_up is not None and best_score - runner_up < margin:
-        return {"person_id": None, "score": best_score, "runner_up": runner_up}
-    return {"person_id": best_id, "score": best_score, "runner_up": runner_up}
+        return {"person_id": None, "score": best_score, "runner_up": runner_up,
+                "nearest_id": best_id}
+    return {"person_id": best_id, "score": best_score, "runner_up": runner_up,
+            "nearest_id": best_id}
 
 
 class FaceIdentifier:

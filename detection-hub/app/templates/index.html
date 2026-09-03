@@ -686,7 +686,14 @@ async function loadReview() {
     const when = (item.taken_at || '').replace('T', ' ').slice(0, 16);
     return `<div class="review-item" data-sample="${item.id}">` +
       `<img src="api/objects/samples/${item.id}" alt="" loading="lazy">` +
-      `<div class="review-meta">${esc(item.camera || '?')} · ${esc(when)}</div>` +
+      // The score it got against the nearest trained class, when there was one
+      // to score against. This is how the threshold gets set from evidence: a
+      // queue of crops that all missed by 0.02 says the bar is too high, and
+      // one where they missed by 0.6 says they are genuinely new things.
+      `<div class="review-meta">${esc(item.camera || '?')} · ${esc(when)}` +
+      (item.best_score != null
+        ? ` · closest ${esc(item.best_class || '?')} ${item.best_score.toFixed(2)}`
+        : '') + `</div>` +
       `<div class="review-acts">${options}` +
       `<button type="button" data-ignore="1">not interesting</button>` +
       `<button type="button" class="as-new" data-new="1">new class&hellip;</button>` +

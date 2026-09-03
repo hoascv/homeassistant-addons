@@ -120,7 +120,8 @@ def test_a_person_is_scored_by_their_best_print_not_their_average():
 
 def test_an_empty_gallery_is_no_match_and_no_score():
     match = faces.best_match(_vec(1.0), [], threshold=0.45, margin=0.05)
-    assert match == {"person_id": None, "score": None, "runner_up": None}
+    assert match == {"person_id": None, "score": None, "runner_up": None,
+                     "nearest_id": None}
 
 
 def test_prints_that_cannot_be_unpacked_are_skipped_not_scored():
@@ -356,3 +357,19 @@ def test_the_status_card_says_whether_identification_is_on(client, db_path, set_
     html = client.get("/").get_data(as_text=True)
     assert "faces ready" in html
     assert "match 0.5" in html and "from 55 px" in html
+
+
+def test_the_nearest_person_is_reported_even_when_refused():
+    """The other half of the score. 0.41 says it missed; 0.41-against-Anna says
+    whether the threshold is a fraction too high or the face is a stranger, and
+    that is the difference between tuning on evidence and tuning by feel.
+
+    `person_id` is still None, so nothing that only reads the decision can
+    mistake this for a match."""
+    # Not parallel: cosine ignores magnitude, so _vec(0.99) against _vec(1.0)
+    # is exactly 1.0 and clears any threshold.
+    gallery = [(1, _vec(1.0, 0.0)), (2, _vec(-1.0, 0.0))]
+    match = faces.best_match(_vec(1.0, 0.1), gallery, threshold=0.999, margin=0.05)
+    assert match["person_id"] is None, "it must not become a match"
+    assert match["nearest_id"] == 1
+    assert match["score"] > 0.9

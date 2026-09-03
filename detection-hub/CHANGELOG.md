@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.19.1
+
+- **Corrected the default threshold, from 0.5 to 0.35.** The old figure came
+  from a synthetic test and was outside the usable band: measured on a real
+  CCTV frame of a cargo bike, crops of the object scored +0.20 to +0.64 against
+  each other and up to +0.11 against the paving, wall and grass around it. At
+  0.5 a genuine view of the thing it was trained on would have been refused.
+- **Every queued crop now records the score it got**, and against which class.
+  A queue of near misses at 0.02 says the bar is too high; one at 0.6 says they
+  are new things — and that distinction is the only way the threshold gets set
+  from a camera's own output rather than from a constant somebody guessed.
+- `faces.best_match` reports `nearest_id` whether or not it accepts the match.
+  Which one it was closest to is the other half of the score, and it was being
+  discarded exactly when it mattered. `person_id` is still None on a refusal,
+  so nothing reading the decision can mistake it for a match.
+- The measurement also shows the limit plainly: two views of one object can be
+  less alike (+0.20, front against rear) than a bike and a wall (+0.11). This
+  works because a fixed camera produces one framing; it does not generalise
+  across angles, and the code now says so where the threshold is defined.
+
 ## 1.19.0
 
 - **Teach it object classes of your own**, alongside the 80 the detector ships

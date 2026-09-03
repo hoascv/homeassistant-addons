@@ -368,3 +368,60 @@ def test_the_machinery_is_off_until_somebody_asks_for_it(set_options):
     assert hub.get_object_learning_enabled() is False
     set_options(object_learning=True)
     assert hub.get_object_learning_enabled() is True
+
+
+# --- setting the threshold from evidence --------------------------------------
+
+
+def test_a_queued_crop_records_what_it_scored(db):
+    """The number that makes the threshold tunable. Without it you can see that
+    a crop was not named and not whether it missed by 0.02 or by 0.6, which is
+    the difference between the bar being wrong and the thing being new."""
+    class_id = _class(db)
+    sample_id = store.save_object_sample(
+        db, b"\xff\xd8x", 10, 10, camera="drive",
+        best_score=0.31, best_class_id=class_id)
+    db.commit()
+
+    [queued] = store.object_review_queue(db)
+    assert queued["id"] == sample_id
+    assert queued["best_score"] == 0.31
+    assert queued["best_class"] == "cargo bike", "the name, not the id"
+
+
+def test_a_crop_with_nothing_to_score_against_has_no_score(db):
+    """Nothing is trained yet, so there is no near miss to report — as opposed
+    to a near miss of zero, which would read as a confident rejection."""
+    store.save_object_sample(db, b"\xff\xd8x", 10, 10, camera="drive")
+    db.commit()
+    [queued] = store.object_review_queue(db)
+    assert queued["best_score"] is None
+    assert queued["best_class"] is None
+
+
+def test_the_default_threshold_fits_the_measured_gap():
+    """Measured on a real CCTV frame of the object this was built for.
+
+    Two numbers bound it. Crops of the object scored up to +0.11 against the
+    paving, wall and grass around it — so the threshold has to sit above that
+    or the background matches. And two crops of it from the *same* framing
+    scored +0.64 — so it has to sit below that or a genuine sighting is
+    refused.
+
+    Same framing is the right bound because the camera does not move. Front
+    against rear scored only +0.20, and a threshold low enough to bridge that
+    would be a hair above the background — which is why this assumes a fixed
+    camera rather than pretending to generalise across angles. The earlier
+    default of 0.5 sat outside the band on the other side.
+    """
+    import objects
+    assert 0.11 < objects.DEFAULT_THRESHOLD < 0.64
+
+
+def test_the_queue_shows_the_score_it_got():
+    import os
+    with open(os.path.join(os.path.dirname(__file__), "..", "templates", "index.html"),
+              encoding="utf-8") as handle:
+        html = handle.read()
+    assert "item.best_score" in html
+    assert "closest" in html
