@@ -215,20 +215,6 @@ def test_body_fat_gets_the_same_guard():
     assert fc["bf_status"] == "unclear"
 
 
-def test_the_page_declines_to_quote_a_projection_it_cannot_support():
-    """Naming a number would give a figure about to change sign the authority
-    of a printed forecast."""
-    import os
-    static = os.path.join(os.path.dirname(__file__), "..", "static")
-    with open(os.path.join(static, "app.js")) as handle:
-        js = handle.read()
-    assert "unclear: {" in js, "no badge defined for the unclear status"
-    fn = js[js.index("function renderForecast"):]
-    fn = fn[:fn.index("\n}")]
-    guard = fn[fn.index("trend_unclear"):]
-    assert "projected_weight_kg" not in guard.split("return;")[0]
-
-
 # --- the confidence band ------------------------------------------------------
 
 
@@ -304,15 +290,6 @@ def _js():
         return h.read()
 
 
-def test_no_projection_is_drawn_when_the_trend_is_not_established():
-    """The card says 'no trend to project yet'. A confident dashed line to the
-    target date would contradict it, and the line is the more persuasive of the
-    two."""
-    js = _js()
-    assert "!fc.trend_unclear && fc.trend" in js
-    assert "!fc.bf_trend_unclear && fc.bf_trend" in js
-
-
 def test_the_band_is_drawn_behind_the_trend_line():
     """Order matters: a filled shape painted after the line would hide it."""
     js = _js()
@@ -343,3 +320,58 @@ def test_a_perfectly_collinear_series_has_a_zero_width_band():
     points = _pts(*[(d, 100.0 + (84 - d) * 0.02) for d in range(84, -1, -7)])
     band = gymapp._weight_forecast(_logs(points), _goal())["trend_band"]
     assert band and band[-1]["hi"] == band[-1]["lo"]
+
+
+# --- an unestablished trend is shown, hedged ----------------------------------
+#
+# It used to be hidden. The reasoning was that a confident line would contradict
+# a card saying "no trend to project yet", and that the line is the more
+# persuasive of the two. That was over-cautious: an empty panel beside a
+# populated one says nothing and reads as broken, which is how it was reported.
+#
+# The band is what carries the doubt now. A slope smaller than its own standard
+# error produces an enormous 95% band, and a faint line inside a band half the
+# panel high communicates uncertainty far better than an absence does.
+
+
+def _static(name):
+    import os
+    with open(os.path.join(os.path.dirname(__file__), "..", "static", name),
+              encoding="utf-8") as handle:
+        return handle.read()
+
+
+def test_the_line_is_drawn_whether_or_not_the_trend_is_established():
+    js = _static("app.js")
+    assert "fc.available && fc.trend && fc.trend.length === 2" in js
+    assert "!fc.trend_unclear && fc.trend" not in js, "the old gate is back"
+
+
+def test_an_unestablished_trend_looks_different_from_an_established_one():
+    """Drawn is not the same as endorsed. Fainter and more broken up, so it does
+    not carry the authority of a line the data supports."""
+    js = _static("app.js")
+    assert 'fc.trend_unclear ? "chart-trend chart-trend-unsure"' in js
+    assert 'fc.trend_unclear ? "chart-band chart-band-unsure"' in js
+    css = _static("style.css")
+    block = css[css.index(".chart-trend-unsure"):]
+    assert "opacity" in block[:120], "it is not visually distinguished"
+
+
+def test_it_is_labelled_as_a_condition_not_a_projection():
+    """"If this holds" and "Projected" are different claims, and only one of
+    them is supportable when the slope is smaller than the scatter."""
+    js = _static("app.js")
+    assert 'fc.trend_unclear ? "If this holds" : "Projected"' in js
+
+
+def test_the_card_and_the_chart_agree():
+    """A card saying "no trend to project" beside a chart drawing one is worse
+    than either alone — whichever the reader believes, the page has lied to
+    them once."""
+    js = _static("app.js")
+    block = js[js.index("if (forecast.trend_unclear) {"):]
+    block = block[:block.index("line.hidden = false;")]
+    assert "projected_weight_kg" in block, "the chart quotes a number the card will not"
+    assert "if it holds" in block
+    assert "band" in block, "nothing points at what carries the uncertainty"

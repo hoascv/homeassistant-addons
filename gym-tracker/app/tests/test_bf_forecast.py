@@ -309,11 +309,18 @@ def test_the_projection_cannot_flatten_the_readings():
     assert "lo - span" in block and "hi + span" in block
 
 
-def test_a_panel_with_no_trend_says_so_where_the_line_would_be():
-    """The card explains it three lines below the chart. A weight panel with no
-    projection beside a body-fat panel that has one reads as something broken,
-    and the explanation is not where anybody looks first."""
+def test_an_unestablished_trend_is_still_drawn():
+    """It used to be hidden, on the reasoning that a confident line would
+    contradict a card saying "no trend to project yet". That was over-cautious:
+    an empty panel says nothing at all and reads as broken, which is exactly how
+    it was reported.
+
+    What carries the honesty is the band. When a slope is smaller than its own
+    standard error the 95% band is enormous, and a faint line inside a band half
+    the panel high says "we do not know" far better than an absence does."""
     js = _static("app.js")
-    assert "chart-no-trend" in js
-    assert 'fc.available && fc.trend_unclear ? "no trend yet" : null' in js
-    assert ".chart-no-trend" in _static("style.css")
+    assert "chart-trend-unsure" in js and "chart-band-unsure" in js
+    assert "fc.available && fc.trend && fc.trend.length === 2" in js, \
+        "the line is gated on trend_unclear again"
+    css = _static("style.css")
+    assert ".chart-trend-unsure" in css and ".chart-band-unsure" in css

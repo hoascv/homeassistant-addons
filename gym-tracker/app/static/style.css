@@ -305,6 +305,11 @@ body {
 .chart-target-label { fill: var(--accent-2); font-size: 10px; font-weight: 600; }
 .chart-trend { stroke: var(--text-muted); stroke-width: 1.5; stroke-dasharray: 2 3; fill: none; opacity: 0.85; }
 .chart-trend-label { fill: var(--text-muted); font-size: 10px; font-weight: 600; }
+/* A trend whose slope is smaller than its own standard error. Drawn, because an
+   empty panel says nothing and reads as broken — but fainter and more broken up,
+   so it does not carry the authority of an established line. The wide band
+   behind it is what actually communicates the doubt. */
+.chart-trend-unsure { opacity: 0.45; stroke-dasharray: 1 4; }
 .chart-crosshair { stroke: var(--text-muted); stroke-width: 1; stroke-dasharray: 3 3; }
 .chart-hit { fill: transparent; }
 .chart-tooltip {
@@ -720,12 +725,11 @@ p.tpl-meta { margin: 0 0 0.6rem; white-space: normal; }
    dashed line, not a second series, and a band four months out is large enough
    that anything stronger would dominate the panel it sits in. */
 .chart-band { fill: var(--accent); opacity: 0.10; stroke: none; }
+/* Wider by definition when the trend is unclear, and given a visible edge so
+   its size is read as the answer rather than as background wash. */
+.chart-band-unsure { fill: var(--text-muted); opacity: 0.14; stroke: none; }
 .chart-band-bf { fill: var(--success); opacity: 0.10; stroke: none; }
 
 /* Why a panel has no projection, said where the projection would have been.
    Quiet: it is an explanation, not a warning. */
-.chart-no-trend {
-  font-size: 9px;
-  fill: var(--text-muted);
-  font-style: italic;
-}
+

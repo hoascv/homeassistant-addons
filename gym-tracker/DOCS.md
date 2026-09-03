@@ -723,3 +723,25 @@ sidebar. To restrict further to specific people, add their user IDs to
 "access restricted" page. Add your own ID — shown in the settings sheet —
 before restricting, so you don't lock yourself out (recoverable by clearing
 the option on the Configuration tab).
+
+
+### When the trend is not established
+
+If your weight is moving less than the readings scatter — a slope smaller than
+its own standard error — the badge reads **Too early** and the projection is
+drawn differently: a faint, finely dotted line labelled **If this holds**,
+inside a wide shaded band.
+
+**The band is the answer, not the line.** When a trend is unestablished the 95%
+band is enormous, and its size is the honest statement of how little the data
+settles. A line inside a band half the panel high says "we do not know" far
+better than an empty panel does — an empty panel says nothing at all.
+
+This is a reversal. The line used to be hidden entirely, on the reasoning that a
+confident line would contradict a card saying "no trend to project yet". That
+was over-cautious: the chart went silent about the one thing you open it to see,
+and read as broken rather than as careful.
+
+The figure narrows as you log more. If the band stays wide, the readings
+themselves are the problem — weighing at the same time under the same
+conditions is what tightens it.

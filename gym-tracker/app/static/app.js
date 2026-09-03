@@ -530,11 +530,16 @@ function renderForecast(forecast, goal) {
   const rateStr = `${rate > 0 ? "+" : ""}${rate} kg/wk`;
 
   if (forecast.trend_unclear) {
-    // No projection quoted on purpose. Naming a number here would give a
-    // figure that is about to change sign the authority of a printed forecast.
+    // The number is quoted now that the chart draws the line, because the two
+    // have to agree — a card saying "no trend" beside a chart showing one is
+    // worse than either alone. What keeps it honest is the hedge and the band:
+    // the slope is smaller than the scatter, so the figure is where the
+    // readings currently point and not a forecast.
     document.getElementById("forecast-text").textContent =
       `Weight is moving less than the scatter in the readings (${rateStr} over `
-      + `${forecast.fit_days} days). No trend to project yet — keep logging.`;
+      + `${forecast.fit_days} days), so this is where they point rather than a `
+      + `forecast — ${forecast.projected_weight_kg} kg by target if it holds. `
+      + `The shaded band is how wide that is; it narrows as you log more.`;
     line.hidden = false;
     return;
   }
@@ -707,24 +712,12 @@ function renderWeightChart(logs, goal, forecast, opts) {
       }, p.bandClass);
     }
 
-    // Said in the panel, not only in the card underneath. A weight panel with
-    // no projection sitting beside a body-fat panel that has one reads as
-    // something broken; the card's explanation is three lines further down and
-    // is not where anybody looks first.
-    if (!p.trend && p.noTrendNote) {
-      const last = p.points[p.points.length - 1];
-      if (last) {
-        label(clamp(sx(last.t) + 10, padL, W - padR - 4),
-              clamp(sy(last.y) - 8, p.top + 10, p.top + p.height - 4),
-              "start", "chart-no-trend", p.noTrendNote);
-      }
-    }
-
     // Projected trend line (dashed) — drawn under the actual line.
     if (p.trend && p.trend.length === 2) {
       const x1 = sx(p.trend[0].t), y1 = sy(p.trend[0].y);
       const x2 = sx(p.trend[1].t), y2 = sy(p.trend[1].y);
-      add("line", { x1, y1, x2, y2, "clip-path": `url(#${clipId})` }, "chart-trend");
+      add("line", { x1, y1, x2, y2, "clip-path": `url(#${clipId})` },
+          p.trendClass || "chart-trend");
       // Label at the line's midpoint (kept inside the panel), so it never
       // collides with the "Target" label pinned to the top-right. Sit it above
       // the trend, unless that lands it on the target line — where the trend
@@ -805,23 +798,27 @@ function renderWeightChart(logs, goal, forecast, opts) {
     targetLabel: `Target ${target}`,
     lineClass: "chart-line",
     markerClass: "chart-marker",
-    // No dashed line when the trend is not established. The card says "no
-    // trend to project yet"; drawing a confident line to the target date
-    // anyway would contradict it, and the line is the more persuasive of the
-    // two.
+    // The line is drawn even when the trend is not established, which is a
+    // reversal: it used to be hidden, on the reasoning that a confident line
+    // would contradict a card saying "no trend to project yet".
+    //
+    // That was over-cautious, and it left the chart silent about the one thing
+    // somebody opens it to see. The band is what carries the honesty — when a
+    // slope is smaller than its own standard error the 95% band is enormous,
+    // and a faint line inside a band half the panel high says "we do not know"
+    // far better than an empty panel does. An empty panel says nothing at all,
+    // and reads as broken.
     trend:
-      fc.available && !fc.trend_unclear && fc.trend && fc.trend.length === 2
+      fc.available && fc.trend && fc.trend.length === 2
         ? fc.trend.map((q) => ({ t: new Date(q.ts).getTime(), y: q.weight_kg }))
         : null,
-    trendLabel: "Projected",
-    // Only for the "too early" case. A goal with no target date has no
-    // projection to be missing, and saying so there would be noise.
-    noTrendNote: fc.available && fc.trend_unclear ? "no trend yet" : null,
+    trendClass: fc.trend_unclear ? "chart-trend chart-trend-unsure" : "chart-trend",
+    trendLabel: fc.trend_unclear ? "If this holds" : "Projected",
     band:
-      fc.available && !fc.trend_unclear && fc.trend_band
+      fc.available && fc.trend_band
         ? fc.trend_band.map((q) => ({ t: new Date(q.ts).getTime(), lo: q.lo, hi: q.hi }))
         : null,
-    bandClass: "chart-band",
+    bandClass: fc.trend_unclear ? "chart-band chart-band-unsure" : "chart-band",
   });
   drawSkipRug(padT, wH);
 

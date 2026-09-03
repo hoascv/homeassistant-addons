@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.48.0
+
+- **The weight projection is drawn again when the trend is not established.**
+  It used to be hidden entirely, and the chart went silent about the one thing
+  people open it to see. Reported twice as a missing line, which is the right
+  verdict: an empty panel beside a populated one reads as broken, not careful.
+- Drawn is not endorsed. The line is faint, finely dotted and labelled **If
+  this holds** rather than **Projected**, inside a wide shaded band.
+- **The band is what carries the doubt.** A slope smaller than its own standard
+  error produces an enormous 95% band, and its size is the honest statement of
+  how little the readings settle — far more informative than an absence, which
+  states nothing.
+- The card quotes the figure now too. A card saying "no trend to project"
+  beside a chart drawing one is worse than either alone: whichever the reader
+  believes, the page has lied to them once.
+
 ## 1.47.0
 
 - **Fixed: a projection that overshot the target was clipped off the chart.**
