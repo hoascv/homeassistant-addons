@@ -16,6 +16,10 @@ hands the history to the data pipeline.
 - Reports a label, a confidence and a pixel box for each thing it finds.
 - Filters to the classes you care about, so a driveway camera is not told about
   the potted plant on every frame.
+- Optionally learns **object classes of your own** — a particular cargo bike, a
+  wheelie bin — alongside the 80 above. Motion proposes the regions and your
+  training names them; anything it was never taught is left unnamed rather than
+  given the nearest label. See [Teaching it your own things](#teaching-it-your-own-things).
 - Optionally **identifies people by face** and records their name — see
   [Identifying people](#identifying-people). Off by default, and it needs a
   camera close enough to show a face tens of pixels wide.
@@ -269,6 +273,78 @@ tracks to retry against, so identification gets a single look per detection.
 - The face crops are small (~4 KB each) and **are** included in Home Assistant
   backups, unlike the detection snapshots. A household's whole enrolment is well
   under a megabyte, and losing it on a restore would mean re-enrolling everybody.
+
+## Teaching it your own things
+
+Off by default; turn on `object_learning`. Adds classes of your own alongside
+the 80 the detector ships with, so a particular cargo bike appears in the
+history like `person` or `car`.
+
+### Why it works this way
+
+The detector cannot find an object it was never trained on. Measured on a real
+CCTV frame of a cargo bike, YOLOX-Nano and YOLOX-S both return nothing above
+0.25 confidence and `wine glass` at 0.10 — which is a lamp in the corner, not
+the bike. Upscaling, brightening and contrast-equalising change the wrong
+answer rather than improving it, and the bicycle end cropped away from the
+cargo box comes back `train`. Finding a novel object is the hard half of
+detection and no amount of model does it.
+
+So the two halves are split. **Motion proposes the boxes** — on a camera bolted
+to a wall, "what changed" owes nothing to what the object is — and **your
+training names them**.
+
+### What it does with something it was never taught
+
+Nothing. That is the point.
+
+A crop is named only when it is **close** to something you enrolled *and*
+**decisively closer** to that than to anything else. Failing either leaves it
+unnamed rather than labelled with the nearest guess: a van parked where your
+bike should be reads as unrecognised, not as "your bike is here". A wrong name
+on a security alert is worse than no name.
+
+### The review queue
+
+Crops it could not name are kept for you to label. They come from the camera
+that will have to recognise them — at dusk, in rain, at 3am — which a photo
+from your phone is not.
+
+Each carries the score it got: `closest cargo bike 0.41`. That number is how
+the threshold gets set from evidence. A queue of near misses at 0.02 says the
+bar is too high; one at 0.6 says they are genuinely new things.
+
+One crop per camera every 90 seconds, capped at 240. A car passing produces
+motion on forty consecutive frames and all forty are the same car.
+
+Labelling with a name nobody has used yet creates the class, so working the
+queue does not mean leaving it.
+
+### What it will not do
+
+**It does not generalise across angles.** Measured on the same frame: two crops
+of one object from different framings scored +0.20 against each other, while
+that object against the wall beside it scored +0.11. Those are almost the same
+number. This works because a fixed camera produces one framing, where the same
+measurement gave +0.64 — not because the model understands what a cargo bike
+is.
+
+So: it recognises *your* object on *your* camera. Move the camera and it needs
+retraining. The crops are kept for exactly that reason — retraining from images
+you already collected beats collecting them again — and each records which
+camera it came from, so an old one's samples can be dropped as a group.
+
+### Settings
+
+| Option | |
+|---|---|
+| `object_learning` | Collect crops and name what it can. Off by default. |
+| `object_threshold` | How close a crop must be. Default 0.35. |
+| `object_margin` | How far ahead of the runner-up. Default 0.12. |
+
+The class *names* go into the change feed so a custom label downstream is
+readable rather than an id. The crops and their vectors do not — they are
+training material and images, the same reasoning that keeps face prints out.
 
 ## Home Assistant
 
