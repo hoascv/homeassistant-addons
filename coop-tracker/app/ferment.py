@@ -380,6 +380,80 @@ def batches(conn, include_closed=False, now=None, stir_hours=DEFAULT_STIR_HOURS,
     return out
 
 
+def stir_history(conn, batch_id=None, limit=200, stir_hours=DEFAULT_STIR_HOURS):
+    """Every stir, newest first, with the gap before it.
+
+    The gap is the point. A list of times says you stirred it; the interval
+    between them says whether you kept the rhythm — and a long one is exactly
+    where a batch came closest to going in the compost. Reading that off a
+    column of timestamps is arithmetic nobody should have to do.
+
+    Computed per batch rather than across the lot: consecutive stirs in
+    different tubs are unrelated, and the interval between them would be a
+    number describing nothing.
+    """
+    sql = ("SELECT s.id, s.batch_id, s.stirred_at, b.container, b.started_at, "
+           "b.closed_at, b.outcome "
+           "FROM ferment_stirs s JOIN ferment_batches b ON b.id = s.batch_id")
+    params = []
+    if batch_id is not None:
+        sql += " WHERE s.batch_id = ?"
+        params.append(batch_id)
+    sql += " ORDER BY s.batch_id, s.stirred_at"
+
+    rows = [dict(row) for row in conn.execute(sql, params)]
+
+    out = []
+    previous_by_batch = {}
+    for row in rows:
+        stirred = _parse(row["stirred_at"])
+        previous = previous_by_batch.get(row["batch_id"])
+        gap = None
+        if stirred and previous:
+            gap = round((stirred - previous).total_seconds() / 3600.0, 1)
+        if stirred:
+            previous_by_batch[row["batch_id"]] = stirred
+
+        out.append({
+            "id": row["id"],
+            "batch_id": row["batch_id"],
+            "container": row["container"],
+            "stirred_at": row["stirred_at"],
+            # None for the first stir of a batch: that one is the mixing, and
+            # there is no earlier stir for it to be late after.
+            "hours_since_previous": gap,
+            # The stirs that were nearly a problem, which is what somebody
+            # scanning this list is looking for.
+            "late": bool(gap is not None and gap > stir_hours),
+            "first": previous is None,
+            "batch_closed": bool(row["closed_at"]),
+            "outcome": row["outcome"],
+        })
+
+    out.sort(key=lambda entry: entry["stirred_at"], reverse=True)
+    return out[:limit]
+
+
+def stir_summary(conn, batch_id=None, stir_hours=DEFAULT_STIR_HOURS):
+    """How the rhythm actually went: how many stirs, and how many were late.
+
+    Offered because the honest answer to "am I keeping up with this" is a
+    proportion, and counting rows in a list to find it is the sort of work that
+    stops people looking.
+    """
+    history = stir_history(conn, batch_id=batch_id, limit=100000,
+                           stir_hours=stir_hours)
+    measured = [entry for entry in history if entry["hours_since_previous"] is not None]
+    late = [entry for entry in measured if entry["late"]]
+    gaps = [entry["hours_since_previous"] for entry in measured]
+    return {
+        "stirs": len(history),
+        "late": len(late),
+        "longest_gap_hours": max(gaps) if gaps else None,
+        "typical_gap_hours": round(sorted(gaps)[len(gaps) // 2], 1) if gaps else None,
+    }
+
+
 def due_for_stir(conn, now=None, stir_hours=DEFAULT_STIR_HOURS):
     """Open batches that have gone too long without a stir."""
     return [b for b in batches(conn, now=now, stir_hours=stir_hours) if b["stir_due"]]

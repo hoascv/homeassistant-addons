@@ -3063,8 +3063,11 @@ function renderFerment(data) {
             ${stage}
             · stirred ${since}${b.grams ? ` · ${Math.round(b.grams)} g` : ""}`
     + `${b.generation ? ` · seeded (gen ${b.generation})` : ""}</span>
+          <div class="stir-log" id="stir-log-${b.id}" hidden></div>
         </div>
         <div class="ferment-actions">
+          ${b.stirs ? `<button type="button" class="btn-small btn-quiet"
+            data-stir-log="${b.id}" title="When it was stirred">${b.stirs}×</button>` : ""}
           ${b.spent ? "" : `<button type="button" class="btn-small" data-stir="${b.id}">Stirred</button>`}
           ${b.state === "ready"
             ? `<button type="button" class="btn-small" data-close="${b.id}" data-outcome="fed">Fed</button>`
@@ -3127,7 +3130,49 @@ function fmtDay(iso) {
     : when.toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" });
 }
 
+// The stirs themselves, on demand. Not loaded with the card: a batch stirred
+// twice a day for a week is fourteen rows nobody is looking at until they are.
+async function toggleStirLog(batchId) {
+  const host = document.getElementById(`stir-log-${batchId}`);
+  if (!host) return;
+  if (!host.hidden) { host.hidden = true; return; }
+
+  host.hidden = false;
+  host.innerHTML = '<span class="ferment-meta">Loading…</span>';
+  let data;
+  try {
+    data = await fetch(`api/ferment/stirs?batch=${batchId}`).then((r) => r.json());
+  } catch (err) {
+    host.innerHTML = '<span class="ferment-meta">Could not load the stirs.</span>';
+    return;
+  }
+
+  const s = data.summary;
+  const heading = s.stirs
+    ? `${s.stirs} stir${s.stirs === 1 ? "" : "s"}`
+      + (s.typical_gap_hours != null ? ` · usually ${s.typical_gap_hours}h apart` : "")
+      + (s.late ? ` · ${s.late} late` : "")
+    : "Not stirred yet.";
+
+  host.innerHTML = `<div class="stir-log-head">${escapeHtml(heading)}</div>`
+    + data.stirs.map((entry) => {
+      const when = new Date(entry.stirred_at);
+      const stamp = isNaN(when) ? entry.stirred_at
+        : `${fmtDay(entry.stirred_at)} ${String(when.getHours()).padStart(2, "0")}:`
+          + `${String(when.getMinutes()).padStart(2, "0")}`;
+      // The first stir of a batch is the mixing — there is no earlier stir for
+      // it to be late after, so it gets no gap rather than a zero.
+      const gap = entry.first ? "mixed"
+        : `${entry.hours_since_previous}h later`;
+      return `<div class="stir-row${entry.late ? " stir-late" : ""}">`
+        + `<span>${escapeHtml(stamp)}</span>`
+        + `<span class="stir-gap">${escapeHtml(gap)}</span></div>`;
+    }).join("");
+}
+
 document.getElementById("ferment-batches").addEventListener("click", async (event) => {
+  const log = event.target.closest("[data-stir-log]");
+  if (log) { toggleStirLog(log.dataset.stirLog); return; }
   const stir = event.target.closest("[data-stir]");
   if (stir) {
     renderFerment(await fetch(`api/ferment/batches/${stir.dataset.stir}/stir`,

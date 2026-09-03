@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.56.0
+
+- **A history of stirs.** Each batch row gains a small count button; tap it for
+  that tub's stirs, newest first, each with the gap before it.
+- **The gaps, not just the times.** A column of timestamps says you stirred it;
+  the interval between them says whether the rhythm held, and a long gap is
+  exactly where a batch came closest to the compost. Anything past
+  `ferment_stir_hours` is the only thing coloured.
+- The first entry of a batch reads **mixed** rather than showing a gap — that
+  stir is the moment you made it up, and there is nothing earlier for it to be
+  late after.
+- A summary line answers "am I keeping up" as a proportion: how many stirs, how
+  many late, the longest gap and the typical one. The typical is a median, so
+  one forgotten weekend does not make a well-kept batch look erratic.
+- Gaps are measured within a batch, never across two. Consecutive stirs in
+  different tubs are unrelated and the interval between them would describe
+  nothing.
+- Stirs outlive their batch, so a tub that was fed or binned keeps its record —
+  which is most of why it is worth having.
+- Loaded when you ask rather than with the card: a week of twice-daily stirs is
+  fourteen lines nobody is reading yet.
+
 ## 1.55.0
 
 - **Scan a receipt when logging an expense.** Photograph the till receipt and

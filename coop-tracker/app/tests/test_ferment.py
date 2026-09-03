@@ -1076,3 +1076,178 @@ def test_the_tabbar_sticks_to_the_top():
     assert not re.search(r"^\s*bottom\s*:", block, re.M), \
         "left over from when the bar was at the bottom"
     assert "border-bottom" in block, "the rule sits above the content it labels"
+
+
+# --- the stirring, as a history -----------------------------------------------
+#
+# The times alone say you stirred it. The gaps between them say whether the
+# rhythm held — and a long gap is exactly where a batch came closest to going in
+# the compost, which is what somebody scanning this list is looking for.
+
+
+def test_a_batch_reports_the_stirs_it_had(conn):
+    ferment.start_batch(conn, "Tub 1", now=NOW)
+    batch_id = ferment.batches(conn, now=NOW)[0]["id"]
+    ferment.log_stir(conn, batch_id, now=_hours(12))
+    ferment.log_stir(conn, batch_id, now=_hours(24))
+    conn.commit()
+
+    history = ferment.stir_history(conn, batch_id=batch_id)
+    assert len(history) == 3, "the mixing counts as a stir"
+    assert [entry["container"] for entry in history] == ["Tub 1"] * 3
+
+
+def test_the_history_is_newest_first(conn):
+    ferment.start_batch(conn, "Tub 1", now=NOW)
+    batch_id = ferment.batches(conn, now=NOW)[0]["id"]
+    ferment.log_stir(conn, batch_id, now=_hours(12))
+    conn.commit()
+    stamps = [entry["stirred_at"] for entry in ferment.stir_history(conn)]
+    assert stamps == sorted(stamps, reverse=True)
+
+
+def test_each_stir_carries_the_gap_before_it(conn):
+    ferment.start_batch(conn, "Tub 1", now=NOW)
+    batch_id = ferment.batches(conn, now=NOW)[0]["id"]
+    ferment.log_stir(conn, batch_id, now=_hours(11))
+    ferment.log_stir(conn, batch_id, now=_hours(24))
+    conn.commit()
+
+    newest, middle, first = ferment.stir_history(conn, batch_id=batch_id)
+    assert newest["hours_since_previous"] == 13.0
+    assert middle["hours_since_previous"] == 11.0
+    # The first stir of a batch is the mixing: there is no earlier stir for it
+    # to be late after, so it gets no gap rather than a zero.
+    assert first["hours_since_previous"] is None
+    assert first["first"] is True
+
+
+def test_a_gap_past_the_interval_is_marked_late(conn):
+    ferment.start_batch(conn, "Tub 1", now=NOW)
+    batch_id = ferment.batches(conn, now=NOW)[0]["id"]
+    ferment.log_stir(conn, batch_id, now=_hours(11))   # fine
+    ferment.log_stir(conn, batch_id, now=_hours(30))   # 19h — past 12
+    conn.commit()
+
+    late = [entry for entry in ferment.stir_history(conn, stir_hours=12) if entry["late"]]
+    assert len(late) == 1
+    assert late[0]["hours_since_previous"] == 19.0
+
+
+def test_gaps_are_measured_within_a_batch_not_across_them(conn):
+    """Consecutive stirs in different tubs are unrelated, and the interval
+    between them would be a number describing nothing."""
+    ferment.start_batch(conn, "Tub 1", now=NOW)
+    ferment.start_batch(conn, "Tub 2", now=_hours(1))
+    one, two = (b["id"] for b in sorted(ferment.batches(conn, now=NOW),
+                                        key=lambda b: b["container"]))
+    ferment.log_stir(conn, one, now=_hours(12))
+    conn.commit()
+
+    by_container = {}
+    for entry in ferment.stir_history(conn):
+        by_container.setdefault(entry["container"], []).append(entry)
+    # Tub 2 has only its mixing, so no gap — despite Tub 1 being stirred later.
+    assert by_container["Tub 2"][0]["hours_since_previous"] is None
+
+
+def test_the_history_spans_every_batch_by_default(conn):
+    """How the twice-a-day rhythm holds in general, rather than how it held for
+    one bucket."""
+    ferment.start_batch(conn, "Tub 1", now=NOW)
+    ferment.start_batch(conn, "Tub 2", now=NOW)
+    conn.commit()
+    assert len({e["container"] for e in ferment.stir_history(conn)}) == 2
+
+
+def test_a_finished_batch_keeps_its_stirs(conn):
+    """The record of how it went outlives the batch — that is most of why it is
+    worth keeping."""
+    ferment.start_batch(conn, "Tub 1", now=NOW)
+    batch_id = ferment.batches(conn, now=NOW)[0]["id"]
+    ferment.log_stir(conn, batch_id, now=_hours(12))
+    ferment.close_batch(conn, batch_id, ferment.FED, now=_hours(72))
+    conn.commit()
+
+    history = ferment.stir_history(conn)
+    assert len(history) == 2
+    assert all(entry["batch_closed"] for entry in history)
+    assert history[0]["outcome"] == "fed"
+
+
+def test_the_summary_answers_am_i_keeping_up(conn):
+    """A proportion, because counting rows in a list to find it is the sort of
+    work that stops people looking."""
+    ferment.start_batch(conn, "Tub 1", now=NOW)
+    batch_id = ferment.batches(conn, now=NOW)[0]["id"]
+    for hours in (11, 22, 41, 52):     # one 19h gap among 11s
+        ferment.log_stir(conn, batch_id, now=_hours(hours))
+    conn.commit()
+
+    summary = ferment.stir_summary(conn, stir_hours=12)
+    assert summary["stirs"] == 5
+    assert summary["late"] == 1
+    assert summary["longest_gap_hours"] == 19.0
+    assert summary["typical_gap_hours"] == 11.0
+
+
+def test_the_typical_gap_is_a_median_not_a_mean(conn):
+    """One forgotten weekend should not make a well-kept batch look erratic."""
+    ferment.start_batch(conn, "Tub 1", now=NOW)
+    batch_id = ferment.batches(conn, now=NOW)[0]["id"]
+    for hours in (12, 24, 36, 120):    # three 12s and one 84h
+        ferment.log_stir(conn, batch_id, now=_hours(hours))
+    conn.commit()
+    assert ferment.stir_summary(conn)["typical_gap_hours"] == 12.0
+
+
+def test_nothing_stirred_summarises_to_nothing(conn):
+    summary = ferment.stir_summary(conn)
+    assert summary == {"stirs": 0, "late": 0,
+                       "longest_gap_hours": None, "typical_gap_hours": None}
+
+
+# --- over HTTP ----------------------------------------------------------------
+
+
+def test_the_stirs_route_answers(client, set_options):
+    set_options(ferment_enabled=True)
+    started = client.post("/api/ferment/batches", json={"container": "Tub 1"}).get_json()
+    batch_id = started["batches"][0]["id"]
+    client.post(f"/api/ferment/batches/{batch_id}/stir")
+
+    body = client.get("/api/ferment/stirs").get_json()
+    assert body["summary"]["stirs"] == 2
+    assert body["stirs"][0]["container"] == "Tub 1"
+    assert body["stir_hours"] == ferment.DEFAULT_STIR_HOURS
+
+
+def test_the_stirs_route_narrows_to_one_batch(client, set_options):
+    set_options(ferment_enabled=True)
+    first = client.post("/api/ferment/batches", json={"container": "Tub 1"}).get_json()
+    client.post("/api/ferment/batches", json={"container": "Tub 2"})
+    batch_id = first["batches"][0]["id"]
+
+    body = client.get(f"/api/ferment/stirs?batch={batch_id}").get_json()
+    assert {entry["container"] for entry in body["stirs"]} == {"Tub 1"}
+
+
+def test_a_nonsense_batch_filter_is_a_400(client, set_options):
+    set_options(ferment_enabled=True)
+    assert client.get("/api/ferment/stirs?batch=banana").status_code == 400
+
+
+def test_the_row_opens_its_own_stirs(client=None):
+    """Loaded on demand: a week of twice-daily stirs is fourteen lines nobody
+    is reading until they ask for them."""
+    js = _static("app.js")
+    assert "data-stir-log" in js
+    fn = js[js.index("async function toggleStirLog("):]
+    fn = fn[:fn.index("\n}\n")]
+    assert "api/ferment/stirs?batch=" in fn
+    assert "host.hidden = true" in fn, "it does not close again"
+
+
+def test_a_late_gap_is_the_only_coloured_thing_in_the_log():
+    css = _static("style.css")
+    assert ".stir-late" in css

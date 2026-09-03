@@ -82,7 +82,7 @@ except ImportError as e:
     SKLEARN_AVAILABLE = False
     SKLEARN_ERROR = str(e)
 
-APP_VERSION = "1.55.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.56.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("COOP_DB_PATH", "/data/coop.db")
 OPTIONS_PATH = os.environ.get("COOP_OPTIONS_PATH", "/data/options.json")
@@ -1363,6 +1363,30 @@ def api_ferment_history():
     return jsonify(ferment.batches(get_db(), include_closed=True,
                                    stir_hours=cfg["stir_hours"],
                                    max_age_days=cfg["max_age_days"]))
+
+
+@app.route("/api/ferment/stirs")
+def api_ferment_stirs():
+    """Every stir, newest first, with the gap before each one.
+
+    `?batch=<id>` narrows it to one tub. Without it the list spans every batch,
+    which is how you see whether the twice-a-day rhythm holds in general rather
+    than whether it held for one bucket.
+    """
+    cfg = get_ferment_config()
+    conn = get_db()
+    try:
+        batch_id = int(request.args["batch"]) if request.args.get("batch") else None
+    except (TypeError, ValueError):
+        return jsonify({"error": "batch must be a number"}), 400
+
+    return jsonify({
+        "stirs": ferment.stir_history(conn, batch_id=batch_id,
+                                      stir_hours=cfg["stir_hours"]),
+        "summary": ferment.stir_summary(conn, batch_id=batch_id,
+                                        stir_hours=cfg["stir_hours"]),
+        "stir_hours": cfg["stir_hours"],
+    })
 
 
 @app.route("/api/ferment/batches", methods=["POST"])

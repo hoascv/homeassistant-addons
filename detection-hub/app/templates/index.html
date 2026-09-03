@@ -100,6 +100,21 @@
            border-radius: 10px; padding: .5rem .75rem; font-size: .85rem; }
     .row .sub { color: var(--muted); font-size: .78rem; }
     .row .acts { margin-left: auto; display: flex; gap: .7rem; }
+
+    /* The review queue. Thumbnails big enough to tell a bike from a bin at a
+       glance, which is the whole job being done here — a grid of 40px squares
+       would make somebody open every one. */
+    .review-grid { display: grid; gap: .7rem; margin-top: .7rem;
+      grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+    .review-item { border: 1px solid var(--line); border-radius: 10px;
+      overflow: hidden; background: var(--card-2, transparent); }
+    .review-item img { display: block; width: 100%; height: 110px;
+      object-fit: cover; background: #000; }
+    .review-meta { font-size: .72rem; color: var(--muted); padding: .3rem .45rem 0; }
+    .review-acts { display: flex; flex-wrap: wrap; gap: .3rem; padding: .35rem .45rem .45rem; }
+    .review-acts button { font-size: .72rem; padding: .18rem .45rem; }
+    .review-acts .as-new { flex-basis: 100%; }
+    .coverage { font-size: .72rem; color: var(--muted); }
     .row a { color: var(--accent); text-decoration: none; font-size: .8rem; }
     .row a:hover { text-decoration: underline; }
 
@@ -207,6 +222,39 @@
       Enrol a face by opening a detection below and choosing <em>Who is this?</em> —
       the snapshot is from the camera that will have to recognise them, which a
       photo from your phone is not. Deleting somebody deletes their face data.
+    </p>
+  </div>
+
+  {# Classes the household taught it. Off unless object_learning is on, because
+     a card about training material is noise to somebody who has taught it
+     nothing — and the queue behind it only fills when the option is set. #}
+  <div class="card" id="objects-card" hidden>
+    <h2>Things you taught it</h2>
+    <div class="status-row">
+      <input type="text" id="object-name" placeholder="e.g. cargo bike" maxlength="80">
+      <button type="button" id="object-add">Add a class</button>
+      <span class="meta" id="objects-note"></span>
+    </div>
+    <div id="objects-list" class="rows"></div>
+
+    <div id="review" hidden>
+      <h3 style="margin:1rem 0 .4rem; font-size:.95rem">
+        Waiting to be labelled <span class="muted" id="review-count"></span>
+      </h3>
+      <p class="meta">
+        Crops of things that changed and matched nothing you have taught it.
+        These come from the camera that will have to recognise them — at dusk,
+        in rain, at 3am — which a photo from your phone is not.
+      </p>
+      <div id="review-grid" class="review-grid"></div>
+      <p class="meta" id="review-note"></p>
+    </div>
+
+    <p class="meta" style="margin-top:.6rem">
+      A crop is named only when it is close to something you taught it
+      <em>and</em> decisively closer to that than to anything else. Anything
+      failing either test is left unnamed rather than given the nearest label.
+      <span id="objects-thresholds"></span>
     </p>
   </div>
 
@@ -575,6 +623,130 @@ function resetPersonForm() {
   personCancel.hidden = true;
 }
 
+// --- classes the household taught it ------------------------------------------
+//
+// Two halves that feed each other: the classes, and the queue of crops the
+// add-on could not name. Labelling a crop is what creates training material,
+// and the material is what lets the next one be named — so they live in one
+// card and reload together.
+
+let objectClasses = [];
+
+async function loadObjects() {
+  const card = document.getElementById('objects-card');
+  let data;
+  try {
+    data = await (await fetch('api/objects')).json();
+  } catch (err) { card.hidden = true; return; }
+
+  // Hidden entirely when the option is off. The embedder being unavailable is
+  // different and worth saying, because it means the feature is on and cannot
+  // work — an architecture where there is no OpenCV.
+  const embedder = data.embedder || {};
+  card.hidden = !data.classes.length && !data.pending_review && !embedder.available;
+  objectClasses = data.classes || [];
+
+  document.getElementById('objects-thresholds').textContent =
+    `Currently: score ≥ ${data.threshold}, and ≥ ${data.margin} ahead of the runner-up.`
+    + (embedder.available ? '' : ' The embedder is unavailable, so nothing can be named.');
+
+  document.getElementById('objects-list').innerHTML = objectClasses.map(c => {
+    // Samples and cameras, because those two numbers predict whether this will
+    // work better than any accuracy figure could: four crops from one afternoon
+    // will fail at dusk, and crops from a camera you have replaced will fail
+    // everywhere.
+    const detail = c.samples
+      ? `${c.samples} sample${c.samples === 1 ? '' : 's'}`
+        + ` from ${c.cameras} camera${c.cameras === 1 ? '' : 's'}`
+        + (c.samples < 10 ? ' — thin; label more before trusting it' : '')
+      : 'nothing taught yet — label some crops below';
+    return `<div class="row"><b>${esc(c.name)}</b>` +
+      `<span class="sub">${esc(detail)}</span>` +
+      `<span class="acts"><a href="#" data-obj-del="${c.id}">delete</a></span></div>`;
+  }).join('') || '<span class="empty">Nothing taught yet.</span>';
+
+  await loadReview();
+}
+
+async function loadReview() {
+  const wrap = document.getElementById('review');
+  let data;
+  try {
+    data = await (await fetch('api/objects/review')).json();
+  } catch (err) { wrap.hidden = true; return; }
+
+  wrap.hidden = !data.queue.length;
+  document.getElementById('review-count').textContent =
+    data.pending ? `— ${data.pending}` : '';
+
+  const options = (data.classes || []).map(c =>
+    `<button type="button" data-label="${c.id}">${esc(c.name)}</button>`).join('');
+
+  document.getElementById('review-grid').innerHTML = data.queue.map(item => {
+    const when = (item.taken_at || '').replace('T', ' ').slice(0, 16);
+    return `<div class="review-item" data-sample="${item.id}">` +
+      `<img src="api/objects/samples/${item.id}" alt="" loading="lazy">` +
+      `<div class="review-meta">${esc(item.camera || '?')} · ${esc(when)}</div>` +
+      `<div class="review-acts">${options}` +
+      `<button type="button" data-ignore="1">not interesting</button>` +
+      `<button type="button" class="as-new" data-new="1">new class&hellip;</button>` +
+      `</div></div>`;
+  }).join('');
+}
+
+document.getElementById('object-add').addEventListener('click', async () => {
+  const name = document.getElementById('object-name').value.trim();
+  const note = document.getElementById('objects-note');
+  if (!name) { note.textContent = 'a name is required'; return; }
+  const res = await fetch('api/objects', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({name}),
+  });
+  const data = await res.json();
+  if (!res.ok) { note.textContent = data.error || 'failed'; return; }
+  note.textContent = '';
+  document.getElementById('object-name').value = '';
+  loadObjects();
+});
+
+document.getElementById('objects-list').addEventListener('click', async (e) => {
+  const del = e.target.closest('[data-obj-del]');
+  if (!del) return;
+  e.preventDefault();
+  if (!confirm('Delete this class and everything taught to it? The crops go too.')) return;
+  await fetch('api/objects/' + del.dataset.objDel, {method: 'DELETE'});
+  loadObjects();
+});
+
+// One handler for the whole grid: a queue of sixty crops is sixty items with
+// three buttons each, and wiring each one would be a hundred and eighty
+// listeners rebuilt on every reload.
+document.getElementById('review-grid').addEventListener('click', async (e) => {
+  const button = e.target.closest('button');
+  if (!button) return;
+  const item = button.closest('[data-sample]');
+  if (!item) return;
+
+  const body = {};
+  if (button.dataset.label) body.class_id = Number(button.dataset.label);
+  else if (button.dataset.ignore) body.ignore = true;
+  else if (button.dataset.new) {
+    const name = prompt('What is this?');
+    if (!name || !name.trim()) return;
+    body.name = name.trim();
+  } else return;
+
+  // Removed at once rather than after the reload: labelling sixty crops is
+  // sixty round trips, and a grid that only moves when the server answers
+  // feels broken long before it is slow.
+  item.remove();
+  await fetch('api/objects/review/' + item.dataset.sample, {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(body),
+  });
+  loadObjects();
+});
+
 async function loadPeople() {
   try {
     peopleCache = (await (await fetch('api/people')).json()).people || [];
@@ -693,6 +865,7 @@ document.getElementById('lb-enrol').addEventListener('click', async () => {
 });
 
 loadPeople();
+loadObjects();
 
 // --- Where to look: named areas ---------------------------------------------
 // Points are kept relative (0..1) from the first moment, never as canvas pixels:

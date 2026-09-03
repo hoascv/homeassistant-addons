@@ -1222,6 +1222,20 @@ img.chicken-avatar {
 .tonic-caveat { font-size: 0.76rem; color: var(--text-muted); font-style: italic;
   margin: 0.7rem 0 0; padding-top: 0.6rem; border-top: 1px solid var(--border); }
 
+/* When a batch was stirred. Opened on demand under its row rather than shown
+   with the card: a week of twice-daily stirs is fourteen lines nobody is
+   reading until they ask. */
+.stir-log { margin-top: 0.4rem; padding-left: 0.2rem;
+  border-left: 2px solid var(--border); }
+.stir-log-head { font-size: 0.74rem; color: var(--text-muted);
+  padding: 0.15rem 0 0.25rem 0.5rem; }
+.stir-row { display: flex; justify-content: space-between; gap: 0.6rem;
+  font-size: 0.74rem; padding: 0.12rem 0 0.12rem 0.5rem; color: var(--text-muted); }
+.stir-gap { font-variant-numeric: tabular-nums; }
+/* The gaps that were nearly a problem — which is what somebody scanning this
+   list is actually looking for. */
+.stir-late { color: var(--warn-ink); font-weight: 600; }
+
 /* Overdue for a stir — one of the two states that needs acting on today. */
 .stir-due { background: var(--warn-wash); border-radius: 8px;
   margin: 0 -0.4rem; padding-left: 0.4rem; padding-right: 0.4rem; }

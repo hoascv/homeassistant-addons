@@ -339,6 +339,36 @@ away) and **Binned** stops being the quiet option.
 — a batch that went off before it was ever ready is a state the settings can
 express and a tub cannot be in.
 
+### When it was stirred
+
+Each batch row carries a small **5×** button — tap it for that tub's stirs,
+newest first, with the gap before each one:
+
+```
+5 stirs · usually 12h apart · 1 late
+
+  Thu, Sep 3 09:15    7h later
+  Thu, Sep 3 02:15   19h later      ← amber
+  Wed, Sep 2 07:15   12h later
+  Tue, Sep 1 19:15   11h later
+  Tue, Sep 1 08:15   mixed
+```
+
+**The gaps are the point.** A column of times says you stirred it; the interval
+between them says whether the rhythm held — and a long one is exactly where a
+batch came closest to going in the compost. Anything past `ferment_stir_hours`
+is the only thing coloured, because that is what you are scanning for.
+
+The first entry of every batch reads **mixed** rather than a gap: that stir is
+the moment you made it up, and there is no earlier one for it to be late after.
+
+The summary line answers "am I keeping up with this" as a proportion, and the
+typical gap is a median — one forgotten weekend should not make a well-kept
+batch look erratic.
+
+Stirs outlive the batch they belong to. A tub that was fed or binned keeps its
+record, which is most of why it is worth having.
+
 ### The stir reminder
 
 A push notification naming the containers:
