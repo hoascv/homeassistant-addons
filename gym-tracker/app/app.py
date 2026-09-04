@@ -20,7 +20,7 @@ from flask import Flask, Response, g, jsonify, render_template, request, send_fi
 import garmin_client
 import meals
 
-APP_VERSION = "1.48.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.49.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("GYM_DB_PATH", "/data/gym.db")
 OPTIONS_PATH = os.environ.get("GYM_OPTIONS_PATH", "/data/options.json")
@@ -52,6 +52,33 @@ STOIC_QUOTES = [
     ["While we wait for life, life passes.", "Seneca"],
     ["Don't explain your philosophy. Embody it.", "Epictetus"],
     ["The best revenge is to be unlike him who performed the injury.", "Marcus Aurelius"],
+    # Everything below is traceable to a surviving text — Meditations, Seneca's
+    # letters and dialogues, Arrian's Discourses and the Enchiridion. The
+    # popular ones that are not are left out on purpose: "luck is what happens
+    # when preparation meets opportunity" is not Seneca, and "a gem cannot be
+    # polished without friction" is not anybody. A misattributed line in a
+    # notification is a small lie repeated daily.
+    ["Confine yourself to the present.", "Marcus Aurelius"],
+    ["Very little is needed to make a happy life.", "Marcus Aurelius"],
+    ["The soul becomes dyed with the colour of its thoughts.", "Marcus Aurelius"],
+    ["Never let the future disturb you.", "Marcus Aurelius"],
+    ["How much time he gains who does not look to see what his neighbour does.", "Marcus Aurelius"],
+    ["You could leave life right now. Let that determine what you do.", "Marcus Aurelius"],
+    ["Do every act of your life as though it were the last.", "Marcus Aurelius"],
+    ["Look within. Within is the fountain of good.", "Marcus Aurelius"],
+    ["It is not that we have a short time to live, but that we waste much of it.", "Seneca"],
+    ["Begin at once to live, and count each day as a separate life.", "Seneca"],
+    ["As long as you live, keep learning how to live.", "Seneca"],
+    ["The greatest obstacle to living is expectancy, which hangs upon tomorrow and loses today.", "Seneca"],
+    ["No man was ever wise by chance.", "Seneca"],
+    ["Sometimes even to live is an act of courage.", "Seneca"],
+    ["Make the best use of what is in your power, and take the rest as it happens.", "Epictetus"],
+    ["No great thing is created suddenly.", "Epictetus"],
+    ["It is impossible to learn that which one thinks one already knows.", "Epictetus"],
+    ["Seek not that things should happen as you wish, but wish them as they are.", "Epictetus"],
+    ["If you wish to improve, be content to be thought foolish.", "Epictetus"],
+    ["One who is training must attend to both soul and body.", "Musonius Rufus"],
+    ["Well-being is realised by small steps, but is truly no small thing.", "Zeno of Citium"],
 ]
 
 # Seeded on a fresh database so the app opens onto a populated, meaningful

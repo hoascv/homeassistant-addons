@@ -283,3 +283,54 @@ def test_quote_defaults_on_at_7am(conn, set_options, fake_ha_server):
     cfg = gymapp.get_reminders_config()
     assert cfg["quote_enabled"] is True
     assert cfg["quote_time"] == "07:00"
+
+
+# --- the quote list itself ----------------------------------------------------
+#
+# It is shared by the celebration toast and the daily notification, so its
+# constraints are the tighter of the two: readable at a glance on a lock screen.
+
+
+def test_no_quote_is_repeated():
+    """A list with a duplicate in it shows that one twice as often, and on a
+    daily notification somebody notices within the fortnight."""
+    texts = [text.strip().lower() for text, _ in gymapp.STOIC_QUOTES]
+    assert len(texts) == len(set(texts))
+
+
+def test_every_quote_is_short_enough_to_glance_at():
+    """It has to survive a toast and a phone notification. Past roughly a
+    hundred characters the notification truncates and the toast wraps to three
+    lines, which is longer than the toast is on screen for."""
+    for text, _ in gymapp.STOIC_QUOTES:
+        assert len(text) <= 100, f"too long ({len(text)}): {text}"
+
+
+def test_every_quote_is_attributed():
+    for text, author in gymapp.STOIC_QUOTES:
+        assert text.strip() and author.strip(), f"unattributed: {text!r}"
+
+
+def test_the_list_is_long_enough_that_it_does_not_feel_like_a_loop():
+    """Sent daily. A dozen quotes is a fortnight before it repeats, which is
+    short enough that it reads as a gimmick rather than as a habit."""
+    assert len(gymapp.STOIC_QUOTES) >= 30
+
+
+def test_it_is_not_one_author_wearing_three_names():
+    """A mix, so the daily quote does not become a Marcus Aurelius calendar."""
+    authors = {author for _, author in gymapp.STOIC_QUOTES}
+    assert len(authors) >= 4
+    most = max(sum(1 for _, a in gymapp.STOIC_QUOTES if a == author) for author in authors)
+    assert most <= len(gymapp.STOIC_QUOTES) * 0.5
+
+
+def test_the_famous_misattributions_are_absent():
+    """Each of these is circulated as Stoic and is not. A wrong attribution in
+    a daily notification is a small lie repeated every day, and the fix after
+    somebody notices is worse than the care beforehand."""
+    joined = " ".join(text.lower() for text, _ in gymapp.STOIC_QUOTES)
+    for fake in ("preparation meets opportunity",   # not Seneca
+                 "gem cannot be polished",          # not Seneca, not Confucius
+                 "the best revenge is massive"):    # Sinatra, via the internet
+        assert fake not in joined, f"misattributed quote present: {fake}"

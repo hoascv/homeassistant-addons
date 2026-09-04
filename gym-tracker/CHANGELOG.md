@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.49.0
+
+- **Twenty-one more stoic quotes**, taking the list from 16 to 37 — enough that
+  the daily notification runs five weeks before it repeats rather than a
+  fortnight, which is the difference between a habit and a gimmick.
+- Marcus Aurelius, Seneca, Epictetus, and one each from Musonius Rufus and
+  Zeno, so it does not become a Marcus Aurelius calendar.
+- Every one traceable to a surviving text. The popular ones that are not are
+  deliberately absent: "luck is what happens when preparation meets
+  opportunity" is not Seneca, and "a gem cannot be polished without friction"
+  is not anybody. A misattributed line in a daily notification is a small lie
+  repeated every day.
+- Tests pin the properties that matter for where these appear: no duplicates,
+  short enough to survive a lock-screen notification without truncating, every
+  one attributed, no single author over half the list, and the known fakes
+  absent.
+
 ## 1.48.0
 
 - **The weight projection is drawn again when the trend is not established.**
