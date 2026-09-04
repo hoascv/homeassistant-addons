@@ -22,7 +22,7 @@ import eloverblik
 import saveeye
 import easee
 
-APP_VERSION = "1.19.1"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.20.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("ELECTRICITY_DB_PATH", "/data/electricity.db")
 OPTIONS_PATH = os.environ.get("ELECTRICITY_OPTIONS_PATH", "/data/options.json")
@@ -474,6 +474,93 @@ def quarter_prices_with_total(conn, start_local, end_local, price_area, opts):
         total, components = compute_total_price(row["spot_price_dkk_kwh"], dt, opts)
         out.append({"time_dk": row["time_dk"], "total_dkk_kwh": round(total, 4), **components})
     return out
+
+
+# What a charge is assumed to need when there is no history to measure. Two
+# hours is a typical overnight top-up on an 11 kW charger, and it is only ever
+# a fallback — the real figure comes from the sessions already logged.
+DEFAULT_CHARGE_HOURS = 2.0
+# Below this a "session" is a plug-in that drew almost nothing, and letting it
+# into the median would drag the suggested window towards useless.
+MIN_SESSION_MINUTES_FOR_TYPICAL = 20
+
+
+def cheapest_window(rows, slots, now_key=None):
+    """The cheapest run of `slots` consecutive quarter-hours, and what now costs.
+
+    Answers the question the price chart cannot: the single cheapest quarter is
+    no use when a charge needs eight of them in a row, and the cheapest quarter
+    is very often pressed against an expensive one. A run is scored by its mean,
+    which is what the charge will actually pay.
+
+    `now_key` is the row the charge would start on if started immediately — the
+    comparison is what makes the answer actionable rather than merely true.
+
+    Returns None when there are not enough rows to hold one window: a partial
+    answer here would name a window that ends after the prices do.
+    """
+    priced = [r for r in rows if r.get("total_dkk_kwh") is not None]
+    if slots <= 0 or len(priced) < slots:
+        return None
+
+    best_start = 0
+    best_total = sum(r["total_dkk_kwh"] for r in priced[:slots])
+    running = best_total
+    for i in range(1, len(priced) - slots + 1):
+        running += priced[i + slots - 1]["total_dkk_kwh"] - priced[i - 1]["total_dkk_kwh"]
+        if running < best_total:
+            best_total, best_start = running, i
+
+    window = priced[best_start:best_start + slots]
+    average = best_total / slots
+
+    # What starting now would cost, over the same length of time. None when now
+    # is not in the range, or when starting now would run off the end of the
+    # published prices — there is no honest comparison to make there.
+    now_average = None
+    if now_key:
+        index = next((i for i, r in enumerate(priced) if r["time_dk"] >= now_key), None)
+        if index is not None and index + slots <= len(priced):
+            now_average = sum(
+                r["total_dkk_kwh"] for r in priced[index:index + slots]) / slots
+
+    return {
+        "start": window[0]["time_dk"],
+        # The end of the last slot, not its start: a two-hour window beginning
+        # at 02:00 ends at 04:00, and reporting 03:45 would be a quarter short.
+        "end": _quarter_end(window[-1]["time_dk"]),
+        "slots": slots,
+        "hours": round(slots / 4.0, 2),
+        "average_dkk_kwh": round(average, 4),
+        "cheapest_dkk_kwh": round(min(r["total_dkk_kwh"] for r in window), 4),
+        "priciest_dkk_kwh": round(max(r["total_dkk_kwh"] for r in window), 4),
+        "now_average_dkk_kwh": round(now_average, 4) if now_average is not None else None,
+        # Positive means waiting is cheaper. Per kWh, so it scales to whatever
+        # the charge turns out to be.
+        "saving_dkk_kwh": (round(now_average - average, 4)
+                           if now_average is not None else None),
+    }
+
+
+def _quarter_end(time_dk):
+    return (datetime.fromisoformat(time_dk) + timedelta(minutes=15)).isoformat(
+        timespec="minutes")
+
+
+def typical_charge_minutes(sessions):
+    """How long this household's charges actually take, as a median.
+
+    Median rather than mean: one session left plugged in overnight after it
+    finished would otherwise stretch the suggested window past anything useful.
+    Short plug-ins that drew almost nothing are dropped for the same reason.
+    """
+    lengths = sorted(
+        s["duration_minutes"] for s in sessions
+        if s.get("duration_minutes") and s["duration_minutes"] >= MIN_SESSION_MINUTES_FOR_TYPICAL
+    )
+    if not lengths:
+        return None
+    return lengths[len(lengths) // 2]
 
 
 def _hourly_totals(quarter_rows):
@@ -2701,6 +2788,63 @@ def api_insights():
     db = get_db()
     days = min(365, max(1, request.args.get("days", default=30, type=int) or 30))
     return jsonify(build_insights(db, _read_options(), days=days))
+
+
+@app.route("/api/charge-window")
+def api_charge_window():
+    """When to plug in, for a charge of a given length.
+
+    The dashboard already names the cheapest hour. That is the wrong unit: a
+    charge needs several consecutive hours and the cheapest one is frequently
+    next to an expensive one, so the cheapest *run* is the answer and its mean
+    is what the charge pays.
+
+    Length comes from this household's own sessions unless `?hours=` says
+    otherwise — a suggestion built from a guess about somebody else's car is
+    worth less than one built from theirs.
+    """
+    db = get_db()
+    options = _read_options()
+    opts = get_price_options(options)
+    now_local = datetime.now(LOCAL_TZ)
+
+    minutes = None
+    source = "default"
+    if request.args.get("hours"):
+        try:
+            minutes = max(15, min(24 * 60, round(float(request.args["hours"]) * 60)))
+            source = "asked for"
+        except (TypeError, ValueError):
+            return jsonify({"error": "hours must be a number"}), 400
+
+    if minutes is None:
+        cfg = get_easee_config(options)
+        charger_id = cfg["charger_id"] or _easee_token_cache["charger_id"]
+        if cfg["enabled"] and charger_id:
+            sessions = easee_sessions_reconciled(db, opts, opts["price_area"],
+                                                 charger_id, days=90)
+            measured = typical_charge_minutes(sessions)
+            if measured:
+                minutes, source = measured, "your usual charge"
+    if minutes is None:
+        minutes = int(DEFAULT_CHARGE_HOURS * 60)
+
+    # From now to the end of whatever is published. Tomorrow's prices land
+    # around 13:00 CET, so before then this can only see tonight — which is
+    # worth saying rather than quietly answering over a shorter horizon.
+    start = now_local.replace(minute=(now_local.minute // 15) * 15, second=0, microsecond=0)
+    rows = quarter_prices_with_total(
+        db, start, start + timedelta(days=2), opts["price_area"], opts)
+
+    slots = max(1, round(minutes / 15))
+    window = cheapest_window(rows, slots, now_key=start.strftime("%Y-%m-%dT%H:%M:%S"))
+    return jsonify({
+        "window": window,
+        "minutes": minutes,
+        "minutes_source": source,
+        "priced_until": _quarter_end(rows[-1]["time_dk"]) if rows else None,
+        "now": start.isoformat(timespec="minutes"),
+    })
 
 
 @app.route("/api/easee/history")

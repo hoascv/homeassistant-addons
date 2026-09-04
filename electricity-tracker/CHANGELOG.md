@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.20.0
+
+- **When to plug in.** Under the price tiles: the cheapest *run* of hours long
+  enough to finish a charge, and what starting now would cost instead.
+- The cheapest hour was already on the card and is the wrong unit. A charge
+  needs several consecutive hours, and on a real day the cheapest quarter is
+  very often pressed against an expensive one — so a run is scored by its mean,
+  which is what the charge pays.
+- **Sized from your own sessions**, as the median of the last 90 days: a car
+  left plugged in after it finished would drag a mean somewhere useless. Two
+  hours without history, and `?hours=` overrides it.
+- Says when starting now is already cheapest. A card that only ever says
+  *wait* is one people stop believing.
+- Says when there are not enough published prices to hold a window, rather than
+  showing nothing — "no answer" and "no prices yet" look identical on a blank
+  card and only one is worth waiting out.
+- Note: with the `grid_tariff_*` bands left at 0 this ranks on spot alone,
+  which understates the Danish evening peak considerably. The docs now say so
+  where the feature is described.
+
 ## 1.19.1
 
 - **Fixed: the most recent charging peak was cut off.** The daily series ran

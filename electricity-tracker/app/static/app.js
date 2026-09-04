@@ -63,6 +63,62 @@ function priceTier(value, rows) {
   return "normal";
 }
 
+// --- when to plug in ----------------------------------------------------------
+//
+// The cheapest *hour* is already on the card above and is the wrong unit: a
+// charge needs several consecutive hours, and the cheapest one is very often
+// pressed against an expensive one. This is the cheapest run long enough to
+// finish the charge, priced by its mean, against what starting now would cost.
+
+function fmtClock(iso) {
+  const at = new Date(iso);
+  if (isNaN(at)) return "";
+  const day = new Date();
+  const sameDay = at.toDateString() === day.toDateString();
+  const hhmm = `${String(at.getHours()).padStart(2, "0")}:`
+    + `${String(at.getMinutes()).padStart(2, "0")}`;
+  return sameDay ? hhmm : `${shortDay(at.toISOString().slice(0, 10))} ${hhmm}`;
+}
+
+async function loadChargeWindow() {
+  const box = el("charge-window");
+  let data;
+  try {
+    data = await fetchJSON("api/charge-window");
+  } catch (err) { box.hidden = true; return; }
+
+  const w = data.window;
+  if (!w) {
+    // Not enough published prices to hold one window. Says so rather than
+    // showing nothing, because "no answer" and "no prices yet" look identical
+    // on a blank card and only one of them is worth waiting out.
+    box.hidden = false;
+    el("charge-window-main").textContent = "Not enough prices yet to pick a window.";
+    el("charge-window-note").textContent =
+      "Tomorrow's prices are published around 13:00.";
+    return;
+  }
+
+  box.hidden = false;
+  const hours = w.hours % 1 === 0 ? `${w.hours}h` : `${Math.round(w.hours * 60)} min`;
+  el("charge-window-main").textContent =
+    `Cheapest ${hours}: ${fmtClock(w.start)}–${fmtClock(w.end)} `
+    + `at ${w.average_dkk_kwh.toFixed(2)} kr/kWh`;
+
+  const parts = [];
+  if (w.saving_dkk_kwh != null && w.saving_dkk_kwh > 0.005) {
+    // Per kWh and for a typical charge: the rate is the honest unit, and the
+    // total is the one that decides whether it is worth waiting for.
+    parts.push(`${w.saving_dkk_kwh.toFixed(2)} kr/kWh less than starting now`);
+  } else if (w.saving_dkk_kwh != null) {
+    parts.push("no cheaper than starting now");
+  }
+  if (data.minutes_source === "your usual charge") {
+    parts.push(`sized from your usual ${Math.round(data.minutes)} min charge`);
+  }
+  el("charge-window-note").textContent = parts.join(" · ");
+}
+
 function renderNow(data) {
   const valueEl = document.getElementById("price-now-value");
   const updatedEl = document.getElementById("now-updated");
@@ -1534,7 +1590,11 @@ function init() {
   loadSummary();
   loadConsumptionChart();
   loadChargingHistory();
+  loadChargeWindow();
   loadTrips();
+  // Refreshed on the slow tick: prices change hourly at most, and tomorrow's
+  // arrive once a day around 13:00.
+  setInterval(loadChargeWindow, 300000);
   setInterval(loadSummary, 60000);
   setInterval(loadConsumptionChart, 300000);
   setInterval(loadChargingHistory, 300000);

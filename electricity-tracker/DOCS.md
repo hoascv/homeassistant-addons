@@ -441,6 +441,34 @@ want a copy in your own hands, or to move to another install.
   covers, not the full session — a partially observed charge would otherwise
   report a rate it never paid. Sessions in that state are counted under the
   card, so a total missing some of its cost says so.
+### When to plug in
+
+Under the price tiles: **Cheapest 2h: 02:00–04:00 at 0.61 kr/kWh**, and what
+starting now would cost instead.
+
+The dashboard already names the cheapest *hour*, and that is the wrong unit. A
+charge needs several consecutive hours, and on a real day the cheapest quarter
+is very often pressed against an expensive one — so this finds the cheapest
+**run** long enough to finish, scored by its mean, which is what the charge
+actually pays.
+
+The length comes from your own sessions: the median of the last 90 days, so a
+car left plugged in overnight after it finished does not stretch it. Without
+history it assumes two hours. `?hours=` on `/api/charge-window` overrides it.
+
+> **Fill in your grid tariffs or this answer is half a picture.** In Denmark the
+> time-of-day grid tariff is what makes evenings expensive, not the spot price —
+> most companies charge around three times more between 17:00 and 21:00 in
+> winter. With `grid_tariff_low`, `grid_tariff_normal` and `grid_tariff_high`
+> left at 0, the ranking is spot-only and understates both how bad the evening
+> peak is and how good the small hours are.
+
+Tomorrow's prices are published around 13:00 CET, so before then this can only
+see tonight. It says so rather than quietly answering over a shorter horizon.
+
+If starting now is already the cheapest option, it says that too. A card that
+only ever says *wait* is one people stop believing.
+
 ### Long trips
 
 "Why did we use 60 kWh that week" is a question the numbers alone cannot

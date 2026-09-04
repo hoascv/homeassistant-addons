@@ -399,3 +399,14 @@ code {
   stroke-width: 1;
   fill: rgba(128, 128, 128, 0.18);
 }
+
+/* --- when to plug in --------------------------------------------------------
+   Under the price tiles, because that is where somebody is already looking
+   when the question occurs to them. */
+.charge-window {
+  display: flex; flex-direction: column; gap: 0.15rem;
+  margin-top: 0.8rem; padding-top: 0.7rem;
+  border-top: 1px solid var(--border);
+}
+.charge-window-main { font-size: 0.92rem; font-weight: 600; }
+.charge-window-note { font-size: 0.78rem; }
