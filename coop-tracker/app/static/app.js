@@ -86,6 +86,17 @@ async function loadSummary() {
   document.getElementById("stat-savings-month").textContent = fmtMoney(data.savings_month);
   document.getElementById("stat-savings-total").textContent = fmtMoney(data.savings_total);
 
+  // Coloured on its own sign, not on the plain net's: the whole point of the
+  // tile is that a flock in the red on sales alone can still be ahead once the
+  // eggs you ate are counted, and it has to be able to say so.
+  for (const [id, value] of [["stat-net-savings-month", data.net_with_savings_month],
+                             ["stat-net-savings-total", data.net_with_savings_total]]) {
+    const el = document.getElementById(id);
+    el.textContent = fmtMoney(value);
+    el.classList.toggle("stat-positive", value >= 0);
+    el.classList.toggle("stat-negative", value < 0);
+  }
+
   document.getElementById("finance-month-label").textContent =
     `${MONTH_NAMES[financeMonth - 1]} ${financeYear}`;
 

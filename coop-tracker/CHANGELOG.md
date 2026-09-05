@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.58.0
+
+- **Net incl. savings.** A fifth figure on the Finances card: net plus the
+  estimated value of the eggs you ate. Its own tile rather than a replacement
+  for Net, because they answer different questions and both are true — Net is
+  money that actually moved, and a keeper who never sells an egg has one that
+  only ever falls, which is accurate about the bank account and wrong about the
+  household.
+- It is coloured on its own sign, so a flock in the red on sales alone shows
+  green once the kitchen is counted. That is the entire point of the tile.
+- **Finances has moved to the Trends tab.** It is something you look at rather
+  than something you do, and the home page is for the six logging buttons you
+  came to press.
+- Five money tiles do not fit across a phone, so the row wraps rather than
+  squeezing a figure into a column too narrow to read.
+
 ## 1.57.0
 
 - **A tonic row folds once it is done.** Due, and it is open with its dose and

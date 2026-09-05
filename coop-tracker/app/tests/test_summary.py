@@ -138,3 +138,46 @@ def test_summary_savings_given_away_false_counts_normally(client):
     client.post("/api/log", json={"type": "used", "count": 6, "given_away": False})
     body = client.get("/api/summary").get_json()
     assert body["savings_total"] == 6 * 2.5
+
+
+# --- net once the eggs you ate count as money not spent ------------------------
+
+
+def test_net_with_savings_adds_the_estimate_to_the_net(client):
+    """A keeper who never sells an egg has a net that only ever falls, which
+    says the flock is a pure cost — true of the bank account and false about
+    the household."""
+    now = datetime.now()
+    client.post("/api/log", json={"type": "expense", "cost": 100, "ts": now.isoformat()})
+    client.post("/api/log", json={"type": "used", "count": 20, "ts": now.isoformat()})
+    body = client.get("/api/summary").get_json()
+
+    assert body["net_month"] == -100, "the money that actually moved is unchanged"
+    assert body["savings_month"] == 50  # 20 eggs at the default 2.5
+    assert body["net_with_savings_month"] == -50
+    assert body["net_with_savings_total"] == -50
+
+
+def test_net_with_savings_can_be_positive_while_the_plain_net_is_not(client):
+    """The whole reason for the tile: sales alone say one thing, the household
+    another, and both are true."""
+    now = datetime.now()
+    client.post("/api/log", json={"type": "expense", "cost": 40, "ts": now.isoformat()})
+    client.post("/api/log", json={"type": "used", "count": 20, "ts": now.isoformat()})
+    body = client.get("/api/summary").get_json()
+    assert body["net_month"] < 0 < body["net_with_savings_month"]
+
+
+def test_net_with_savings_is_just_the_net_when_no_eggs_were_eaten(client):
+    now = datetime.now()
+    client.post("/api/log", json={"type": "sale", "count": 6, "price": 12, "ts": now.isoformat()})
+    body = client.get("/api/summary").get_json()
+    assert body["net_with_savings_month"] == body["net_month"] == 12
+
+
+def test_net_with_savings_is_scoped_to_the_month_like_the_rest(client):
+    client.post("/api/log", json={"type": "used", "count": 4, "ts": "2026-06-15T10:00:00"})
+    client.post("/api/log", json={"type": "used", "count": 6, "ts": "2021-03-01T10:00:00"})
+    body = client.get("/api/summary?month=2026-06").get_json()
+    assert body["net_with_savings_month"] == 4 * 2.5
+    assert body["net_with_savings_total"] == 10 * 2.5

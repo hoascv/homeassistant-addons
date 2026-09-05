@@ -144,7 +144,14 @@ main {
 
 .summary-secondary {
   margin-bottom: 1.25rem;
+  /* Five money tiles do not fit across a phone. Wrapping puts them on two
+     rows rather than squeezing "1187.00 kr" into a column too narrow to hold
+     it — the figures are the point, and a figure broken across three lines is
+     not one you can read at a glance. */
+  flex-wrap: wrap;
 }
+
+.summary-secondary .stat-small { min-width: 6.5rem; }
 
 .stat-small {
   flex: 1;

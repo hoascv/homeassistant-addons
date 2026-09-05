@@ -58,59 +58,6 @@
     </div>
   </section>
 
-  <section class="finances">
-    <div class="finances-header">
-      <h2>Finances</h2>
-      <div class="month-nav">
-        <button type="button" class="month-nav-btn" id="finance-prev-month" aria-label="Previous month">‹</button>
-        <span class="month-nav-label" id="finance-month-label">–</span>
-        <button type="button" class="month-nav-btn" id="finance-next-month" aria-label="Next month">›</button>
-      </div>
-    </div>
-    <div class="summary summary-secondary">
-      <div class="stat-small">
-        <span class="stat-small-label">Revenue</span>
-        <span class="stat-small-value stat-positive" id="stat-revenue-month">–</span>
-      </div>
-      <div class="stat-small">
-        <span class="stat-small-label">Costs</span>
-        <span class="stat-small-value stat-negative" id="stat-cost-month">–</span>
-      </div>
-      <div class="stat-small">
-        <span class="stat-small-label">Net</span>
-        <span class="stat-small-value" id="stat-net-month">–</span>
-      </div>
-      <div class="stat-small">
-        <span class="stat-small-label">Est. savings</span>
-        <span class="stat-small-value stat-positive" id="stat-savings-month">–</span>
-      </div>
-    </div>
-
-    <div class="finances-total-label">All time</div>
-    <div class="summary summary-secondary">
-      <div class="stat-small">
-        <span class="stat-small-label">Revenue</span>
-        <span class="stat-small-value stat-positive" id="stat-revenue-total">–</span>
-      </div>
-      <div class="stat-small">
-        <span class="stat-small-label">Costs</span>
-        <span class="stat-small-value stat-negative" id="stat-cost-total">–</span>
-      </div>
-      <div class="stat-small">
-        <span class="stat-small-label">Net</span>
-        <span class="stat-small-value" id="stat-net-total">–</span>
-      </div>
-      <div class="stat-small">
-        <span class="stat-small-label">Est. savings</span>
-        <span class="stat-small-value stat-positive" id="stat-savings-total">–</span>
-      </div>
-    </div>
-    <p class="sheet-subtext finances-savings-note">
-      Est. savings: what your used eggs would have cost at supermarket
-      prices, had you bought them instead.
-    </p>
-  </section>
-
   <section class="quick-actions">
     <button class="action-btn action-egg" data-action="egg">
       <span class="action-icon">🥚</span>
@@ -189,6 +136,76 @@
 </main>
 
 <main id="page-trends" class="page" hidden>
+  <section class="finances">
+    <div class="finances-header">
+      <h2>Finances</h2>
+      <div class="month-nav">
+        <button type="button" class="month-nav-btn" id="finance-prev-month" aria-label="Previous month">‹</button>
+        <span class="month-nav-label" id="finance-month-label">–</span>
+        <button type="button" class="month-nav-btn" id="finance-next-month" aria-label="Next month">›</button>
+      </div>
+    </div>
+    <div class="summary summary-secondary">
+      <div class="stat-small">
+        <span class="stat-small-label">Revenue</span>
+        <span class="stat-small-value stat-positive" id="stat-revenue-month">–</span>
+      </div>
+      <div class="stat-small">
+        <span class="stat-small-label">Costs</span>
+        <span class="stat-small-value stat-negative" id="stat-cost-month">–</span>
+      </div>
+      <div class="stat-small">
+        <span class="stat-small-label">Net</span>
+        <span class="stat-small-value" id="stat-net-month">–</span>
+      </div>
+      <div class="stat-small">
+        <span class="stat-small-label">Est. savings</span>
+        <span class="stat-small-value stat-positive" id="stat-savings-month">–</span>
+      </div>
+      <!-- Net once the eggs you ate count as money not spent at the shop. Its
+           own tile rather than a replacement for Net: one is money that moved,
+           the other is money that moved plus an estimate, and a keeper who
+           never sells an egg needs both to see the flock straight. -->
+      <div class="stat-small">
+        <span class="stat-small-label">Net incl. savings</span>
+        <span class="stat-small-value" id="stat-net-savings-month">–</span>
+      </div>
+    </div>
+
+    <div class="finances-total-label">All time</div>
+    <div class="summary summary-secondary">
+      <div class="stat-small">
+        <span class="stat-small-label">Revenue</span>
+        <span class="stat-small-value stat-positive" id="stat-revenue-total">–</span>
+      </div>
+      <div class="stat-small">
+        <span class="stat-small-label">Costs</span>
+        <span class="stat-small-value stat-negative" id="stat-cost-total">–</span>
+      </div>
+      <div class="stat-small">
+        <span class="stat-small-label">Net</span>
+        <span class="stat-small-value" id="stat-net-total">–</span>
+      </div>
+      <div class="stat-small">
+        <span class="stat-small-label">Est. savings</span>
+        <span class="stat-small-value stat-positive" id="stat-savings-total">–</span>
+      </div>
+      <!-- Net once the eggs you ate count as money not spent at the shop. Its
+           own tile rather than a replacement for Net: one is money that moved,
+           the other is money that moved plus an estimate, and a keeper who
+           never sells an egg needs both to see the flock straight. -->
+      <div class="stat-small">
+        <span class="stat-small-label">Net incl. savings</span>
+        <span class="stat-small-value" id="stat-net-savings-total">–</span>
+      </div>
+    </div>
+    <p class="sheet-subtext finances-savings-note">
+      Est. savings: what your used eggs would have cost at supermarket
+      prices, had you bought them instead. Net incl. savings adds that to
+      the net, so the flock is not judged on sales alone.
+    </p>
+  </section>
+
   <section class="trends">
     <div class="finances-header">
       <h2>Trends</h2>

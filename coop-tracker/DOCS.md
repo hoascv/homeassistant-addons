@@ -14,9 +14,10 @@ your chickens, right from your phone via the Home Assistant sidebar.
   of how long a container/bag of that food typically lasts
 - Today / this-week egg counts, eggs on hand, last cleaning and feeding
   times
-- Finances section: browse any month's revenue, costs, and net, plus an
-  all-time total, plus an estimate of what you've saved by not buying
-  your used eggs at the supermarket
+- Finances section, on the **Trends** tab: browse any month's revenue,
+  costs, net and net incl. savings, plus an all-time total, and an
+  estimate of what you've saved by not buying your used eggs at the
+  supermarket
 - Trends tab: line chart (expandable to full screen) and table of eggs
   collected/sold/used over the last 3, 6, or 12 months, plus a 3-month
   egg-collection forecast based on your flock — and how that forecast
@@ -746,6 +747,20 @@ have cost me at the supermarket?" — computed as eggs you've logged as
 already show up as revenue; this is specifically the value of eggs that
 replaced a store purchase. It's shown for the current month and
 all-time, right alongside Revenue/Costs/Net.
+
+**Net incl. savings** puts the two together: net plus that estimate. It is
+its own tile rather than a replacement for Net, because they answer different
+questions and both are true. Net is money that actually moved; a keeper who
+never sells an egg has a net that only ever falls, which says the flock is a
+pure cost — accurate about the bank account and wrong about the household.
+Net incl. savings says what the flock is worth once the eggs you ate are
+counted as money you did not spend. It is coloured on its own sign, so a
+flock in the red on sales alone can still show green once the kitchen is
+counted.
+
+The Finances section lives on the **Trends** tab. It is something you look
+at rather than something you do, and the home page is for the six logging
+buttons you came to press.
 
 If you check **Given away** on a Log Used entry (for eggs you hand off
 rather than eat yourself), that egg still counts against "eggs on hand"

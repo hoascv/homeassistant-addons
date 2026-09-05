@@ -82,7 +82,7 @@ except ImportError as e:
     SKLEARN_AVAILABLE = False
     SKLEARN_ERROR = str(e)
 
-APP_VERSION = "1.57.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.58.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("COOP_DB_PATH", "/data/coop.db")
 OPTIONS_PATH = os.environ.get("COOP_OPTIONS_PATH", "/data/options.json")
@@ -1319,6 +1319,18 @@ def _compute_summary(conn, now, year=None, month=None):
         "net_total": revenue_total - cost_total,
         "savings_month": eggs_used_month_for_savings * egg_price_each,
         "savings_total": eggs_used_total_for_savings * egg_price_each,
+        # Net once the eggs you ate are counted as money not spent at the shop.
+        #
+        # Kept apart from `net_month` rather than folded into it, and computed
+        # here rather than added up in the page: net is money that actually
+        # moved, and this is net plus an estimate. A keeper who never sells an
+        # egg has a net that only ever falls, which says the flock is a pure
+        # cost — true of the bank account and false about the household. Both
+        # numbers are honest; neither says the whole thing on its own.
+        "net_with_savings_month": (revenue_month - cost_month)
+                                  + eggs_used_month_for_savings * egg_price_each,
+        "net_with_savings_total": (revenue_total - cost_total)
+                                  + eggs_used_total_for_savings * egg_price_each,
     }
 
 
