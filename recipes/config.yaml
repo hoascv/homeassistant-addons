@@ -1,5 +1,5 @@
 name: "Recipes"
-version: "1.4.0"
+version: "1.4.1"
 slug: "recipes"
 description: "A recipe and snack catalog that builds a Danish supermarket list, with recipes loaded from any LLM without the add-on ever going online"
 url: "https://github.com/hoascv/homeassistant-addons/tree/main/recipes"

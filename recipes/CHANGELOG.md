@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.4.1
+
+- **The Main ingredients box looked broken.** It was the only text input on the
+  page, and the form rule listed every other kind — search, number, select,
+  textarea — so it fell back to the browser default: a white box about twenty
+  characters wide, sitting in the middle of a dark sheet. Styled like its
+  neighbours now.
+- **Loading a reply empties the paste box.** Left sitting there, the next press
+  of **Load it** re-imported the same batch and the only sign of it was the
+  duplicate nudge afterwards. **Check it** still leaves the text alone —
+  checking is what you do before loading, and clearing it would throw away the
+  text the report is about.
+
 ## 1.4.0
 
 - **Want to try / Cooked lists, and star ratings.** Open a recipe and the bar

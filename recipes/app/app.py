@@ -20,7 +20,7 @@ import schema
 import seeding
 import store
 
-APP_VERSION = "1.4.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.4.1"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("RECIPES_DB_PATH", "/data/recipes.db")
 INGRESS_USER_ID_HEADER = "X-Remote-User-ID"

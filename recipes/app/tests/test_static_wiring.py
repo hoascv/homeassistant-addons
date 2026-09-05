@@ -87,3 +87,29 @@ def test_a_seeded_recipe_does_not_claim_you_added_it():
 def test_an_untouched_recipe_shows_one_date_not_two():
     fn = JS[JS.index("function addedLine("):JS.index("\n// --- tabs")]
     assert "updated !== added" in fn
+
+
+def test_every_kind_of_input_the_page_uses_is_styled():
+    """An input type missing from the rule falls back to the browser default:
+    a white box about twenty characters wide, which on the dark theme reads as
+    the field being broken rather than merely unstyled."""
+    block = CSS[CSS.index("/* Forms */"):CSS.index(".row {")]
+    used = set(re.findall(r'<input type="([\w-]+)"', HTML + JS))
+    for kind in sorted(used - {"checkbox", "radio"}):
+        assert f'input[type="{kind}"]' in block, f"the page uses {kind} inputs, nothing styles them"
+
+
+def test_loading_a_reply_empties_the_paste_box():
+    """Left there, the next press of Load it re-imports the same batch and the
+    only sign is the duplicate nudge afterwards."""
+    fn = JS[JS.index("async function sendImport("):JS.index('el("check-import")')]
+    assert 'el("import-text").value = ""' in fn
+
+
+def test_checking_a_reply_leaves_the_paste_box_alone():
+    """Checking is what you do before loading — clearing it would throw away
+    the very text the report is about."""
+    fn = JS[JS.index("async function sendImport("):JS.index('el("check-import")')]
+    line = next(l for l in fn.splitlines() if 'el("import-text").value = ""' in l)
+    # body.added is the field only the real import returns; the preview has none.
+    assert "body.added != null" in line, "the clear should be guarded by body.added"

@@ -564,6 +564,11 @@ async function sendImport(path) {
         ? `<div class="notice notice-warn"><strong>Notes:</strong><br>`
           + body.warnings.map(escapeHtml).join("<br>") + "</div>"
         : "");
+    // A loaded reply has been consumed, so the box is emptied — left sitting
+    // there, the next press of Load it re-imports the same batch and the only
+    // sign of it is the duplicate nudge afterwards. "Check it" leaves the text
+    // alone: checking is what you do *before* loading.
+    if (body.added != null) el("import-text").value = "";
     if (body.added) { loadRecipes(); loadSummary(); }
   } catch (err) {
     report.innerHTML = `<div class="notice notice-warn">${escapeHtml(err.message)}</div>`;
