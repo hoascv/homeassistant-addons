@@ -2953,26 +2953,40 @@ function renderTonics(data) {
     const when = r.never_given ? "never given"
       : r.due ? `due — last ${fmtDay(r.last_given_at)}`
       : `next ${fmtDay(r.next_due_at)}`;
+    // Open while it wants doing, folded once it is done. The dose and the
+    // caution are what you read as you give it, so they are on screen exactly
+    // when they are needed; four routines all up to date is otherwise a card
+    // full of instructions for things nobody has to act on. Still one tap
+    // away, because "why am I doing this" is a fair question on a quiet day.
     return `
-      <div class="ferment-row${r.overdue ? " tonic-overdue" : ""}" data-id="${r.id}">
-        <div class="ferment-main">
-          <span class="ferment-name">${escapeHtml(r.name)}</span>
-          <span class="ferment-meta">${escapeHtml(when)} · every ${r.cadence_days} d${
-            r.doses ? ` · given ${r.doses}×` : ""}</span>
+      <details class="tonic-row${r.overdue ? " tonic-overdue" : ""}"${
+        r.due ? " open" : ""} data-id="${r.id}">
+        <summary class="tonic-summary">
+          <span class="ferment-main">
+            <span class="ferment-name">${escapeHtml(r.name)}</span>
+            <span class="ferment-meta">${escapeHtml(when)} · every ${r.cadence_days} d${
+              r.doses ? ` · given ${r.doses}×` : ""}</span>
+          </span>
+          <span class="ferment-actions">
+            <button type="button" class="btn-small" data-tonic-given="${r.id}">Given</button>
+            <button type="button" class="btn-small btn-quiet" data-tonic-delete="${r.id}"
+              title="Remove this routine">✕</button>
+          </span>
+        </summary>
+        <div class="tonic-body">
           ${r.dose ? `<span class="tonic-dose">${escapeHtml(r.dose)}</span>` : ""}
           ${r.notes ? `<details class="tonic-notes"><summary>Why, and what to watch</summary>
             <p>${escapeHtml(r.notes)}</p></details>` : ""}
         </div>
-        <div class="ferment-actions">
-          <button type="button" class="btn-small" data-tonic-given="${r.id}">Given</button>
-          <button type="button" class="btn-small btn-quiet" data-tonic-delete="${r.id}"
-            title="Remove this routine">✕</button>
-        </div>
-      </div>`;
+      </details>`;
   }).join("");
 }
 
 document.getElementById("tonic-list").addEventListener("click", async (event) => {
+  // Given and ✕ sit inside the <summary>, where a click is also the gesture
+  // that folds the row. Pressing a button is not asking to collapse anything.
+  if (event.target.closest("button")) event.preventDefault();
+
   const given = event.target.closest("[data-tonic-given]");
   if (given) {
     renderTonics(await fetch(`api/tonics/${given.dataset.tonicGiven}/given`,

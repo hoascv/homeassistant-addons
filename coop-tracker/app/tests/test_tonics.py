@@ -400,3 +400,61 @@ def test_an_unreadable_dose_timestamp_does_not_break_the_card(conn, routine):
     assert item["never_given"] is True
     assert item["due"] is True
     assert item["next_due_at"] is None
+
+
+# --- folded once it is done ---------------------------------------------------
+#
+# Four routines all up to date filled the card with dose lines and cautions for
+# things nobody had to act on. A row is now a <details>: open while it wants
+# doing, folded when it does not.
+
+
+def test_a_row_is_open_exactly_while_it_wants_doing():
+    js = _static("app.js")
+    fn = js[js.index("function renderTonics("):js.index("\n}\n", js.index("function renderTonics("))]
+    assert '<details class="tonic-row' in fn, "a row should be collapsible"
+    assert 'r.due ? " open" : ""' in fn, "and open on due, not on anything else"
+
+
+def test_the_dose_and_the_caution_are_what_folds_away():
+    """They are read as you give it, so they belong on screen exactly when it
+    is due — and out of the way when it is not."""
+    js = _static("app.js")
+    body = js[js.index('<div class="tonic-body">'):js.index("</details>`;")]
+    assert "tonic-dose" in body and "tonic-notes" in body
+
+
+def test_the_name_and_when_it_is_next_due_stay_visible_folded():
+    """A folded row still has to answer "what is this and when next" — that is
+    the whole reason the card exists."""
+    js = _static("app.js")
+    summary = js[js.index('<summary class="tonic-summary">'):js.index('<div class="tonic-body">')]
+    assert "ferment-name" in summary and "ferment-meta" in summary
+
+
+def test_pressing_a_button_does_not_fold_the_row():
+    """Given and ✕ sit inside the <summary>, where a click is also the gesture
+    that toggles it. Pressing a button is not asking to collapse anything."""
+    js = _static("app.js")
+    handler = js[js.index('document.getElementById("tonic-list").addEventListener'):]
+    assert 'event.target.closest("button")' in handler[:400]
+    assert "preventDefault()" in handler[:400]
+
+
+def test_the_folded_row_is_not_styled_as_a_ferment_row():
+    """.ferment-row is shared with the ferment batches, and :first-child there
+    would match every <summary> and take the dividing line off every row."""
+    js = _static("app.js")
+    fn = js[js.index("function renderTonics("):js.index("\n}\n", js.index("function renderTonics("))]
+    assert "ferment-row" not in fn
+    css = _static("style.css")
+    for name in (".tonic-row", ".tonic-summary", ".tonic-body"):
+        assert name in css, f"{name} is emitted but nothing styles it"
+
+
+def test_the_disclosure_marker_is_drawn_by_the_stylesheet():
+    """Without suppressing the browser's own, it lands in the middle of a flex
+    row. Both spellings: WebKit still wants its own."""
+    css = _static("style.css")
+    assert "::-webkit-details-marker" in css and "::marker" in css
+    assert ".tonic-row[open]" in css, "a folded row should look different from an open one"

@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.57.0
+
+- **A tonic row folds once it is done.** Due, and it is open with its dose and
+  its caution showing — which is exactly when you read them, since that is when
+  you are about to give it. Given, and it collapses to its name and when it is
+  next due. Four routines all up to date was a card full of instructions for
+  things nobody had to act on.
+- Press **Given** and the row folds itself away, which is the feedback as much
+  as the tidying.
+- Nothing is hidden for good — tap a folded row and it opens. **Given** and
+  **✕** stay on the row folded or not, so giving one early never needs it
+  opened first, and pressing either one no longer counts as asking to fold it.
+- The rows are `<details>` rather than a class and a click handler: the
+  keyboard and screen-reader behaviour comes free, and "open" is a state the
+  browser already knows how to keep.
+
 ## 1.56.0
 
 - **A history of stirs.** Each batch row gains a small count button; tap it for

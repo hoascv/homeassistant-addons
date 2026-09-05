@@ -224,6 +224,16 @@ cadence. Only a routine more than three days late is coloured — "due" on a
 weekly rhythm is not an emergency, and spending the card's one alarm on it
 would bury the ferment row that is.
 
+**A row folds once it is done.** Due, and it is open with its dose and its
+caution showing — which is when you read them, since that is when you are
+about to give it. Given, and it collapses to its name and when it is next due,
+because four routines all up to date was a card full of instructions for
+things nobody had to act on. Press **Given** and the row folds itself away.
+
+Nothing is hidden for good: tap a folded row to open it, and the dose and the
+**Why, and what to watch** note are where they were. **Given** and **✕** stay
+on the row either way, so giving one early never needs it opened first.
+
 **Pausing** keeps the history; deleting takes it with the routine. A routine
 paused over winter comes back in spring with its record intact.
 

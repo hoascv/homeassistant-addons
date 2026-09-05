@@ -1213,7 +1213,27 @@ img.chicken-avatar {
    "due" on a weekly rhythm is not an emergency. */
 .tonic-overdue { background: var(--warn-wash); border-radius: 8px;
   margin: 0 -0.4rem; padding-left: 0.4rem; padding-right: 0.4rem; }
-.tonic-dose { font-size: 0.76rem; color: var(--text-muted); margin-top: 0.15rem; }
+/* A tonic row is a <details>: open while it wants doing, folded once it is
+   done. Not .ferment-row — that is shared with the ferment batches, and
+   :first-child there would match every <summary> and take the dividing line
+   off every row. */
+.tonic-row { border-top: 1px solid var(--border); }
+.tonic-row:first-child { border-top: none; }
+.tonic-summary { display: flex; align-items: center; justify-content: space-between;
+  gap: 0.6rem; padding: 0.5rem 0; cursor: pointer; list-style: none; }
+/* Both spellings: WebKit still wants its own, and without either the browser
+   draws a triangle in the middle of a flex row. */
+.tonic-summary::-webkit-details-marker { display: none; }
+.tonic-summary::marker { content: ""; }
+/* The keeper's own marker, on the name, so a folded row looks openable. It
+   turns rather than swapping glyph — the same row, not a different one. */
+.tonic-row .ferment-name::before { content: "▸"; display: inline-block;
+  width: 0.9em; color: var(--text-muted); font-size: 0.85em;
+  transition: transform 0.12s ease; }
+.tonic-row[open] .ferment-name::before { transform: rotate(90deg); }
+.tonic-body { padding: 0 0 0.5rem 0.9em; }
+.tonic-dose { display: block; font-size: 0.76rem; color: var(--text-muted);
+  margin-top: 0.15rem; }
 .tonic-notes { font-size: 0.74rem; color: var(--text-muted); margin-top: 0.2rem; }
 .tonic-notes summary { cursor: pointer; }
 .tonic-notes p { margin: 0.3rem 0 0; line-height: 1.45; }
