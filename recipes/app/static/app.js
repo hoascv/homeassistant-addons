@@ -226,10 +226,20 @@ async function openRecipe(id) {
       <div class="cook-actions">
         <button type="button" class="btn-small${recipe.status === "todo" ? " btn-on" : ""}"
           data-status="todo">${recipe.status === "todo" ? "✓ To try" : "Want to try"}</button>
-        <button type="button" class="btn-small" data-cooked="1">Made it</button>
+        <!-- The "+" is the whole difference between this and the toggle beside
+             it. Two identical pills side by side read as a pair of selections,
+             which is exactly how a counter that only goes up gets pressed
+             seven times for one dinner. -->
+        <button type="button" class="btn-small btn-count" data-cooked="1"
+          title="Log another time you made this">+ Made it</button>
       </div>
     </div>
-    <p class="muted cooked-line">${escapeHtml(cookedLine(recipe))}</p>
+    <p class="muted cooked-line">${escapeHtml(cookedLine(recipe))}${
+      // Undo lives on the count, not on a toast: the presses to take back are
+      // usually older than the sheet has been open.
+      recipe.times_cooked
+        ? ' <button type="button" class="link-btn link-inline" data-uncooked="1">undo</button>'
+        : ""}</p>
     <p class="muted added">${escapeHtml(addedLine(recipe))}</p>
     ${recipe.notes ? `<p class="notes">${escapeHtml(recipe.notes)}</p>` : ""}
     <h3>Ingredients</h3>
@@ -461,7 +471,8 @@ el("detail-body").addEventListener("click", async (event) => {
   const rate = event.target.closest("[data-rate]");
   const status = event.target.closest("[data-status]");
   const cooked = event.target.closest("[data-cooked]");
-  if (!rate && !status && !cooked) return;
+  const uncooked = event.target.closest("[data-uncooked]");
+  if (!rate && !status && !cooked && !uncooked) return;
 
   const id = state.openRecipeId;
   if (rate) {
@@ -477,8 +488,13 @@ el("detail-body").addEventListener("click", async (event) => {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ status: status.dataset.status }),
     });
-  } else {
+  } else if (cooked) {
     await fetchJSON(`api/recipes/${id}/cooked`, { method: "POST" });
+  } else {
+    // One press, one cooking taken back — seven presses that should have been
+    // one are seven separate mistakes, and a "clear" would make losing a real
+    // history a single tap.
+    await fetchJSON(`api/recipes/${id}/cooked`, { method: "DELETE" });
   }
   await openRecipe(id);
   await loadRecipes();

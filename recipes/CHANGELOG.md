@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.5.0
+
+- **"Made it" now says it counts, and can be undone.** It sat next to *Want to
+  try* as an identical pill, so it read as a second toggle — and a dinner made
+  once arrived as seven presses. It is now **+ Made it**, in the accent colour
+  rather than the toggle's, and the **+** is the whole point: every press adds
+  one. The docs said "both buttons are toggles", which was simply wrong; fixed.
+- **undo, at the end of the *Made 7 times* line.** Takes back the most recent
+  cooking, and can be pressed again for the one before that. One event at a
+  time rather than a reset to zero: seven presses that should have been one are
+  seven separate mistakes, and a "clear" would make losing a real history a
+  single tap. Undoing the last one leaves the recipe on neither list — a recipe
+  made zero times is not one you have made.
+- **Each cooking is now its own row.** With only a count and a single date,
+  undoing left the date of the very cooking that had just been removed sitting
+  there as "last on". `times_cooked` and `last_cooked_at` stay on the recipe as
+  a cache of that log, written by one function so the two cannot drift.
+- **Existing counts upgrade into a history that can be undone.** A database
+  from before this release knows *made 7 times, last on 5 Sep* and nothing
+  else, so it becomes six undated cookings and one carrying the date it does
+  know. Undoing past the newest then reads *Made 6 times.* with no date, rather
+  than inventing six days nobody entered.
+
 ## 1.4.1
 
 - **The Main ingredients box looked broken.** It was the only text input on the

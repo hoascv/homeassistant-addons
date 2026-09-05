@@ -199,6 +199,28 @@ def set_status(conn, recipe_id, status):
     return get_recipe(conn, recipe_id)
 
 
+def _resync_cooked(conn, recipe_id):
+    """Recompute the cached count and date on the recipe from the log.
+
+    The log is the record; recipes.times_cooked and recipes.last_cooked_at are
+    a cache of it, kept because the list view reads them once per row and a
+    correlated subquery per row is the kind of thing that is fine until a
+    catalogue gets long. One function writes them, so the two cannot drift.
+
+    MAX ignores NULLs, so a recipe whose only remaining rows are undated reads
+    "Made 3 times." with no date — which is what is actually known.
+    """
+    row = conn.execute(
+        "SELECT COUNT(*) AS times, MAX(cooked_at) AS last FROM cook_log WHERE recipe_id = ?",
+        (recipe_id,),
+    ).fetchone()
+    conn.execute(
+        "UPDATE recipes SET times_cooked = ?, last_cooked_at = ?, updated_at = ? WHERE id = ?",
+        (row["times"], row["last"], _now(), recipe_id),
+    )
+    return row["times"]
+
+
 def log_cooked(conn, recipe_id, when=None):
     """Record that it was made today. Returns the recipe, or None.
 
@@ -210,11 +232,39 @@ def log_cooked(conn, recipe_id, when=None):
     row = conn.execute("SELECT id FROM recipes WHERE id = ?", (recipe_id,)).fetchone()
     if row is None:
         return None
-    conn.execute(
-        "UPDATE recipes SET status = ?, times_cooked = times_cooked + 1, "
-        "last_cooked_at = ?, updated_at = ? WHERE id = ?",
-        (COOKED, when or _now(), _now(), recipe_id),
-    )
+    conn.execute("INSERT INTO cook_log (recipe_id, cooked_at) VALUES (?, ?)",
+                 (recipe_id, when or _now()))
+    _resync_cooked(conn, recipe_id)
+    conn.execute("UPDATE recipes SET status = ? WHERE id = ?", (COOKED, recipe_id))
+    return get_recipe(conn, recipe_id)
+
+
+def undo_cooked(conn, recipe_id):
+    """Take back the most recent cooking. Returns the recipe, or None.
+
+    Exists because the button that logs one sits next to a toggle and was read
+    as one — and a count that only goes up is a record you cannot correct. It
+    removes one event rather than resetting to zero: seven presses that should
+    have been one are seven separate mistakes, and a "clear" would also be the
+    only way to lose a genuine history to a single tap.
+
+    Undoing the last one leaves the recipe off both lists rather than on
+    "cooked", because a recipe made zero times is not one you have made. What
+    it was before — "want to try", or on neither — was not recorded, and
+    guessing "todo" would put it on a list nobody asked for.
+    """
+    row = conn.execute(
+        "SELECT id FROM cook_log WHERE recipe_id = ? ORDER BY id DESC LIMIT 1",
+        (recipe_id,),
+    ).fetchone()
+    if row is None:
+        # Nothing logged: either no such recipe, or never made. Both are a
+        # no-op, and telling them apart is what get_recipe is for.
+        return get_recipe(conn, recipe_id)
+    conn.execute("DELETE FROM cook_log WHERE id = ?", (row["id"],))
+    if _resync_cooked(conn, recipe_id) == 0:
+        conn.execute("UPDATE recipes SET status = NULL WHERE id = ? AND status = ?",
+                     (recipe_id, COOKED))
     return get_recipe(conn, recipe_id)
 
 

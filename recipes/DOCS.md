@@ -172,16 +172,28 @@ questions.
 | **★★★★☆** | how good, which having cooked it does not tell you |
 
 Open a recipe and the bar under the title has all three: five stars, a **Want to
-try** toggle and a **Made it** button. Both buttons are toggles — pressing
-**Want to try** on something already listed takes it off, and pressing the star
-a recipe already has clears the rating. A separate "remove" would be a third
-control for what the first one obviously means.
+try** toggle and a **+ Made it** button. **Want to try** and the stars are
+toggles — pressing **Want to try** on something already listed takes it off,
+and pressing the star a recipe already has clears the rating. A separate
+"remove" would be a third control for what the first one obviously means.
 
-**Made it** counts rather than flags. "We make this every other week" is the
-useful fact about a household's cooking and a boolean cannot say it, so the
-detail sheet reads *Made 6 times, last on 26 August* and the list row shows
-`made 6×` once it is more than one. Toggling the lists never touches that
-count.
+**+ Made it** is the one that is not a toggle. It counts rather than flags:
+"we make this every other week" is the useful fact about a household's cooking
+and a boolean cannot say it, so the detail sheet reads *Made 6 times, last on
+26 August* and the list row shows `made 6×` once it is more than one. Every
+press adds one, which is what the **+** is there to say. Toggling the lists
+never touches that count.
+
+Pressed by mistake? **undo** at the end of the *Made 6 times* line takes back
+the most recent one, and can be pressed again for the one before that. It
+removes a single cooking rather than resetting to zero — a "clear" would make
+losing a real history a single tap. Undoing the last one leaves the recipe on
+neither list, because a recipe made zero times is not one you have made.
+
+Dates it does not know, it does not invent. Cookings recorded before this
+release were only ever stored as a count and one date, so undoing back past
+that date reads *Made 5 times.* with no date rather than naming a day nobody
+entered.
 
 A second row of chips above the recipe list filters by **All / Want to try /
 Cooked**, with the number in each. It is a separate row from the categories on

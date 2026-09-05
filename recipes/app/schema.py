@@ -118,6 +118,25 @@ TABLES = (
     )
     """,
     """
+    CREATE TABLE IF NOT EXISTS cook_log (
+        -- One row per time it was made. recipes.times_cooked and
+        -- recipes.last_cooked_at are caches of COUNT and MAX over this table,
+        -- kept because the list view reads them on every row.
+        --
+        -- The log exists so that undoing a mis-press has something to undo:
+        -- with only a count and a date, removing the most recent cooking
+        -- leaves the date of the very thing that was removed sitting there as
+        -- "last on".
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        recipe_id INTEGER NOT NULL REFERENCES recipes(id) ON DELETE CASCADE,
+        -- Nullable, and null means "this happened, the date was not recorded".
+        -- Only backfilled rows have it: a database from before the log knew
+        -- one date for seven cookings, and inventing the other six would put
+        -- dates in the record that nobody ever entered.
+        cooked_at TEXT
+    )
+    """,
+    """
     CREATE TABLE IF NOT EXISTS app_state (
         key TEXT PRIMARY KEY,
         value TEXT
@@ -131,6 +150,7 @@ INDEXES = (
     "CREATE INDEX IF NOT EXISTS idx_recipes_source ON recipes(source)",
     "CREATE INDEX IF NOT EXISTS idx_recipes_dedupe ON recipes(dedupe_key)",
     "CREATE INDEX IF NOT EXISTS idx_recipes_status ON recipes(status, name)",
+    "CREATE INDEX IF NOT EXISTS idx_cook_log_recipe ON cook_log(recipe_id, id)",
 )
 
 
@@ -182,3 +202,30 @@ def _migrate(conn):
     ).fetchall():
         conn.execute("UPDATE recipes SET dedupe_key = ? WHERE id = ?",
                      (key_text(row[1], row[2]), row[0]))
+    _backfill_cook_log(conn)
+
+
+def _backfill_cook_log(conn):
+    """Give an existing count a history, so it can be undone one at a time.
+
+    A database from before the log knows only "made 7 times, last on 5 Sep".
+    That becomes six rows with no date and one carrying the date it does know,
+    because the six earlier dates were never recorded and inventing them would
+    put entries in the record nobody entered. Undoing back past the newest then
+    honestly reads "Made 6 times." with no date rather than naming the day the
+    cooking that was just removed happened on.
+
+    Runs on every start and only for recipes with no rows yet, the way the
+    dedupe_key backfill does: a row written by an older version while this one
+    was not running would otherwise keep a count the log cannot account for.
+    """
+    rows = conn.execute(
+        "SELECT r.id, r.times_cooked, r.last_cooked_at FROM recipes r "
+        "WHERE r.times_cooked > 0 "
+        "  AND NOT EXISTS (SELECT 1 FROM cook_log c WHERE c.recipe_id = r.id)"
+    ).fetchall()
+    for recipe_id, times, last in rows:
+        conn.executemany(
+            "INSERT INTO cook_log (recipe_id, cooked_at) VALUES (?, ?)",
+            [(recipe_id, None)] * (times - 1) + [(recipe_id, last)],
+        )

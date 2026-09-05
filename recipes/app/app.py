@@ -20,7 +20,7 @@ import schema
 import seeding
 import store
 
-APP_VERSION = "1.4.1"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.5.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("RECIPES_DB_PATH", "/data/recipes.db")
 INGRESS_USER_ID_HEADER = "X-Remote-User-ID"
@@ -167,6 +167,20 @@ def api_log_cooked(recipe_id):
     this every other week" is the useful fact and a boolean cannot say it."""
     db = get_db()
     recipe = store.log_cooked(db, recipe_id)
+    if recipe is None:
+        return jsonify({"error": "no such recipe"}), 404
+    db.commit()
+    return jsonify(recipe)
+
+
+@app.route("/api/recipes/<int:recipe_id>/cooked", methods=["DELETE"])
+def api_undo_cooked(recipe_id):
+    """Take back the most recent cooking, for a press that was not meant.
+
+    One event, not a reset: a count that only goes up is a record you cannot
+    correct, and a "clear" would make losing a real history a single tap."""
+    db = get_db()
+    recipe = store.undo_cooked(db, recipe_id)
     if recipe is None:
         return jsonify({"error": "no such recipe"}), 404
     db.commit()

@@ -113,3 +113,25 @@ def test_checking_a_reply_leaves_the_paste_box_alone():
     line = next(l for l in fn.splitlines() if 'el("import-text").value = ""' in l)
     # body.added is the field only the real import returns; the preview has none.
     assert "body.added != null" in line, "the clear should be guarded by body.added"
+
+
+def test_the_made_it_button_does_not_look_like_the_toggle_beside_it():
+    """Two identical pills side by side read as a pair of selections, which is
+    how a counter that only goes up gets pressed seven times for one dinner."""
+    bar = JS[JS.index('<div class="cook-actions">'):JS.index("cooked-line")]
+    made = bar[bar.rindex("<button", 0, bar.index("+ Made it")):]
+    assert "btn-count" in made, "it should not be styled as the toggle beside it"
+    assert "btn-on" not in made, "btn-on means selected — the wrong thing for a counter"
+
+
+def test_a_logged_cooking_can_be_taken_back():
+    """A count that only goes up is a record you cannot correct."""
+    assert "data-uncooked" in JS
+    # The second detail-body listener: the first one handles the plan buttons.
+    handler = JS[JS.index('const cooked = event.target.closest("[data-cooked]")'):]
+    assert '`api/recipes/${id}/cooked`, { method: "DELETE" }' in handler
+
+
+def test_the_undo_appears_only_once_there_is_something_to_undo():
+    line = JS[JS.index('class="muted cooked-line"'):JS.index('class="muted added"')]
+    assert "recipe.times_cooked" in line, "undo should be conditional on the count"

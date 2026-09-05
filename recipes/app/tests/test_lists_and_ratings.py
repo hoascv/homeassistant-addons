@@ -100,6 +100,69 @@ def test_cooking_a_missing_recipe_reports_nothing(db):
     assert store.log_cooked(db, 999) is None
 
 
+# --- taking one back ----------------------------------------------------------
+#
+# The button that logs a cooking sits next to a toggle and was read as one, so
+# a single dinner arrived as seven presses. A count that only goes up is a
+# record you cannot correct.
+
+
+def test_undo_removes_one_cooking_not_the_history(db, recipe_id):
+    """Seven presses that should have been one are seven separate mistakes. A
+    "clear" would also make losing a real history a single tap."""
+    for _ in range(3):
+        store.log_cooked(db, recipe_id)
+    assert store.undo_cooked(db, recipe_id)["times_cooked"] == 2
+    assert store.undo_cooked(db, recipe_id)["times_cooked"] == 1
+
+
+def test_undo_restores_the_previous_date(db, recipe_id):
+    """The whole reason each cooking is a row. With only a count and one date,
+    undoing would leave the date of the very thing that was removed."""
+    store.log_cooked(db, recipe_id, when="2026-08-01T18:00:00")
+    store.log_cooked(db, recipe_id, when="2026-09-01T18:00:00")
+    assert store.undo_cooked(db, recipe_id)["last_cooked_at"] == "2026-08-01T18:00:00"
+
+
+def test_undoing_the_last_one_leaves_it_on_neither_list(db, recipe_id):
+    """A recipe made zero times is not one you have made. It does not go to
+    "want to try" either: that was not what it was, and guessing would put it
+    on a list nobody asked for."""
+    store.log_cooked(db, recipe_id)
+    recipe = store.undo_cooked(db, recipe_id)
+    assert recipe["times_cooked"] == 0
+    assert recipe["last_cooked_at"] is None
+    assert recipe["status"] is None
+
+
+def test_undo_leaves_a_want_to_try_alone(db, recipe_id):
+    """Undoing a cooking says nothing about the other list."""
+    store.log_cooked(db, recipe_id)
+    store.undo_cooked(db, recipe_id)
+    store.set_status(db, recipe_id, store.TODO)
+    store.undo_cooked(db, recipe_id)
+    assert store.get_recipe(db, recipe_id)["status"] == "todo"
+
+
+def test_undoing_what_was_never_made_changes_nothing(db, recipe_id):
+    recipe = store.undo_cooked(db, recipe_id)
+    assert recipe["times_cooked"] == 0 and recipe["status"] is None
+
+
+def test_undoing_a_missing_recipe_reports_nothing(db):
+    assert store.undo_cooked(db, 999) is None
+
+
+def test_the_count_and_the_log_cannot_drift(db, recipe_id):
+    """times_cooked is a cache of the log, and one function writes it."""
+    for _ in range(4):
+        store.log_cooked(db, recipe_id)
+    store.undo_cooked(db, recipe_id)
+    logged = db.execute("SELECT COUNT(*) FROM cook_log WHERE recipe_id = ?",
+                        (recipe_id,)).fetchone()[0]
+    assert store.get_recipe(db, recipe_id)["times_cooked"] == logged == 3
+
+
 # --- ratings ------------------------------------------------------------------
 
 
@@ -217,6 +280,33 @@ def test_the_migration_runs_on_a_table_without_the_columns(db):
     assert store.log_cooked(db, recipe_id)["times_cooked"] == 1
 
 
+def test_an_existing_count_becomes_a_history_it_can_undo(db, recipe_id):
+    """A database from before the log knows "made 7 times, last on 5 Sep" and
+    nothing else. Without a backfill the count would be there and undo would
+    have nothing to remove."""
+    db.execute("UPDATE recipes SET times_cooked = 7, last_cooked_at = ?, status = 'cooked' "
+               "WHERE id = ?", ("2026-09-05T18:00:00", recipe_id))
+    db.execute("DELETE FROM cook_log")
+
+    schema.create(db)
+
+    assert store.get_recipe(db, recipe_id)["times_cooked"] == 7
+    recipe = store.undo_cooked(db, recipe_id)
+    assert recipe["times_cooked"] == 6
+    # The six earlier dates were never recorded, so the honest answer is that
+    # it was made six times and the last one is unknown — not a date invented
+    # here, and not the day the cooking just removed happened on.
+    assert recipe["last_cooked_at"] is None
+
+
+def test_the_backfill_leaves_a_log_it_has_already_written_alone(db, recipe_id):
+    """It runs on every start, the way the dedupe_key backfill does."""
+    store.log_cooked(db, recipe_id)
+    schema.create(db)
+    schema.create(db)
+    assert store.get_recipe(db, recipe_id)["times_cooked"] == 1
+
+
 # --- through the endpoints ----------------------------------------------------
 
 
@@ -251,6 +341,24 @@ def test_the_whole_cycle_through_the_api(client):
 
     assert client.get("/api/summary").get_json()["counts"]["cooked"] == 1
     assert len(client.get("/api/recipes?status=cooked").get_json()) == 1
+
+
+def test_undo_through_the_api(client):
+    recipe_id = _make(client)
+    for _ in range(3):
+        client.post(f"/api/recipes/{recipe_id}/cooked")
+
+    back = client.delete(f"/api/recipes/{recipe_id}/cooked").get_json()
+    assert back["times_cooked"] == 2 and back["status"] == "cooked"
+
+    for _ in range(2):
+        back = client.delete(f"/api/recipes/{recipe_id}/cooked").get_json()
+    assert back["times_cooked"] == 0 and back["status"] is None
+    assert client.get("/api/summary").get_json()["counts"]["cooked"] == 0
+
+
+def test_undoing_a_missing_recipe_is_a_404(client):
+    assert client.delete("/api/recipes/999/cooked").status_code == 404
 
 
 def test_a_bad_rating_is_a_400(client):
