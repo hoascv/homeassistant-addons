@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.21.0
+
+- **Query the database.** Settings gains a read-only SQL box against the
+  add-on's own database, for the questions the charts do not answer. The one
+  that prompted it: why a day's Saveeye estimate can sit 2.35 kWh under the
+  meter while every hour still reports as covered — which is not a chart, it is
+  a look at `saveeye_samples` for a counter reset.
+- Table chips list what there is with row counts, and clicking one writes
+  `SELECT * FROM <table> LIMIT 50` into the box rather than running it.
+  Ctrl/Cmd + Enter runs; plain Enter stays a newline.
+- **It cannot write, and that is SQLite's doing rather than this page's.** The
+  connection is opened `mode=ro`, so `UPDATE`, `DELETE` and `DROP` are refused
+  by the engine however they are spelled. `SELECT`, `WITH` and `EXPLAIN` are
+  the only statements accepted on top of that — to refuse what a read-only
+  connection still allows and this has no business doing: `ATTACH` reaching
+  another file, `PRAGMA` changing how the engine behaves.
+- Results stop at 500 rows and a runaway query is cut off, so a cross join
+  typed by accident cannot hold the request thread on a box that is also
+  serving the panel.
+- `NULL` is drawn as `NULL`, not as a blank cell. A console that prettifies its
+  output is one you cannot trust to show what is actually stored, which is the
+  whole reason to open it.
+
 ## 1.20.0
 
 - **When to plug in.** Under the price tiles: the cheapest *run* of hours long

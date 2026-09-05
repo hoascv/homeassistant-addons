@@ -1459,6 +1459,9 @@ function wireSettingsSheet() {
   document.getElementById("settings-open-btn").addEventListener("click", () => {
     backdrop.classList.add("open");
     refreshSaveeyeStatus();
+    // Fetched when the sheet opens rather than at boot: it counts every row in
+    // every table, which is not work to do on the way to showing a price.
+    loadSqlTables();
     _saveeyeStatusInterval = setInterval(refreshSaveeyeStatus, 10000);
   });
   const closeSettings = () => {
@@ -1550,6 +1553,101 @@ function wireSettingsSheet() {
       btn.disabled = false;
       btn.textContent = "Test Easee connection";
     }
+  });
+
+  wireSqlConsole();
+}
+
+
+// --- The SQL console ---------------------------------------------------------
+//
+// Read-only queries against the add-on's own database. It exists because some
+// questions are not a chart: "why is 29 August 2.35 kWh short" is a look at
+// saveeye_samples for a counter reset, and the alternative is downloading a
+// backup and opening it on a laptop.
+
+let sqlTablesLoaded = false;
+
+async function loadSqlTables() {
+  if (sqlTablesLoaded) return;
+  const host = document.getElementById("sql-tables");
+  try {
+    const data = await fetch("api/debug/tables").then((r) => r.json());
+    host.innerHTML = (data.tables || []).map((t) =>
+      `<button type="button" class="sql-table-btn" data-table="${escapeHtml(t.name)}"` +
+      ` title="${escapeHtml(t.columns.join(", "))}">${escapeHtml(t.name)}` +
+      `<span>${t.rows.toLocaleString("da-DK")}</span></button>`).join("");
+    sqlTablesLoaded = true;
+  } catch (err) {
+    host.innerHTML = "";
+  }
+}
+
+function renderSqlResult(data) {
+  const out = document.getElementById("sql-result");
+  const note = document.getElementById("sql-note");
+  if (!data.columns.length) {
+    out.innerHTML = "";
+    note.textContent = `No columns returned. ${data.ms} ms.`;
+    return;
+  }
+  const head = data.columns.map((c) => `<th>${escapeHtml(c)}</th>`).join("");
+  const body = data.rows.map((row) =>
+    "<tr>" + row.map((value) => (value === null
+      ? '<td class="sql-null">NULL</td>'
+      : `<td>${escapeHtml(String(value))}</td>`)).join("") + "</tr>").join("");
+  out.innerHTML = `<table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
+  note.textContent = `${data.rows.length} row${data.rows.length === 1 ? "" : "s"}`
+    + (data.truncated ? ` (stopped at ${data.row_limit} — add a LIMIT to see the rest)` : "")
+    + ` · ${data.ms} ms`;
+}
+
+async function runSql() {
+  const btn = document.getElementById("sql-run-btn");
+  const out = document.getElementById("sql-result");
+  const note = document.getElementById("sql-note");
+  const sql = document.getElementById("sql-input").value.trim();
+  if (!sql) return;
+  btn.disabled = true;
+  btn.textContent = "Running…";
+  note.textContent = "";
+  try {
+    const res = await fetch("api/debug/query", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sql }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      out.innerHTML = `<div class="sql-error">${escapeHtml(data.error || res.statusText)}</div>`;
+    } else {
+      renderSqlResult(data);
+    }
+  } catch (err) {
+    out.innerHTML = `<div class="sql-error">${escapeHtml(String(err))}</div>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Run";
+  }
+}
+
+function wireSqlConsole() {
+  const input = document.getElementById("sql-input");
+  document.getElementById("sql-run-btn").addEventListener("click", runSql);
+
+  // Ctrl/Cmd+Enter runs it. Plain Enter has to stay a newline — a query worth
+  // opening this box for is rarely one line.
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); runSql(); }
+  });
+
+  // A table name puts a query in the box rather than running one: the point of
+  // the chips is to save you guessing what the columns are called, and a click
+  // that silently ran something would be a click you had to undo.
+  document.getElementById("sql-tables").addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-table]");
+    if (!btn) return;
+    input.value = `SELECT * FROM ${btn.dataset.table} LIMIT 50`;
+    input.focus();
   });
 }
 

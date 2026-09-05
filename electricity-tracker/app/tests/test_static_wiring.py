@@ -263,3 +263,23 @@ def test_no_top_level_call_is_undefined():
     called_at_load = set(re.findall(r"^([a-z][A-Za-z0-9_$]*)\(", source, re.M))
     missing = sorted(called_at_load - defined)
     assert missing == [], f"called at load but never defined: {missing}"
+
+
+def test_the_sql_console_is_fully_wired():
+    for element in ("sql-input", "sql-run-btn", "sql-result", "sql-note", "sql-tables"):
+        assert f'id="{element}"' in HTML, f"the console has no {element}"
+    for name in (".sql-tables", ".sql-table-btn", ".sql-result", ".sql-null",
+                 ".sql-error", ".sr-only"):
+        assert name in CSS, f"{name} is emitted but nothing styles it"
+
+
+def test_the_console_says_on_the_page_that_it_cannot_write():
+    """The reassurance belongs where the box is, not only in the docs."""
+    panel = HTML[HTML.index("Query the database"):HTML.index('id="sql-input"')]
+    assert "Read-only" in panel
+
+
+def test_plain_enter_in_the_console_does_not_run_the_query():
+    """A query worth opening this box for is rarely one line."""
+    handler = JS[JS.index("function wireSqlConsole("):]
+    assert "e.metaKey || e.ctrlKey" in handler[:900]

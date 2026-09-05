@@ -22,7 +22,7 @@ import eloverblik
 import saveeye
 import easee
 
-APP_VERSION = "1.20.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.21.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("ELECTRICITY_DB_PATH", "/data/electricity.db")
 OPTIONS_PATH = os.environ.get("ELECTRICITY_OPTIONS_PATH", "/data/options.json")
@@ -2739,6 +2739,132 @@ def api_consumption():
             db, start, end, cfg["metering_point"], opts["price_area"], opts, saveeye_device_serial
         )
     )
+
+
+# --- Querying the database directly -------------------------------------------
+#
+# For the questions the UI does not answer. "Why is 29 August 2.35 kWh short"
+# is not a chart, it is a look at saveeye_samples for a counter reset — and
+# without this the only way to that answer is pulling a backup down and opening
+# it on a laptop.
+#
+# Read-only, and enforced by SQLite rather than by inspecting the string: the
+# connection is opened with mode=ro, so a write is refused by the engine no
+# matter how it is spelled. The statement allowlist on top of that is for the
+# things a read-only connection still permits and this has no business doing —
+# ATTACH reaching another file, PRAGMA changing how the engine behaves.
+
+SQL_MAX_ROWS = 500
+
+# How much work one query may do before it is cut off. SQLite counts virtual
+# machine instructions rather than time, so this is a rough ceiling, not a
+# stopwatch — enough for any honest question about a few hundred thousand rows,
+# short of a cross join left running against the request thread.
+SQL_MAX_STEPS = 40_000_000
+
+# WITH for common table expressions, EXPLAIN for reading a plan. Everything
+# else — including PRAGMA and ATTACH — is refused with its own message, because
+# "not allowed" and "you have a typo" are different problems.
+SQL_ALLOWED_STARTS = ("select", "with", "explain")
+
+
+def _sql_strip_leading_comments(sql):
+    """Drop comments and blank space before the first keyword.
+
+    Otherwise `-- look at the samples\nSELECT ...` reads as starting with a
+    dash and is refused for the wrong reason, which is a maddening thing to
+    debug in a text box.
+    """
+    text = sql.strip()
+    while True:
+        if text.startswith("--"):
+            _, _, text = text.partition("\n")
+            text = text.lstrip()
+            continue
+        if text.startswith("/*"):
+            _, _, text = text.partition("*/")
+            text = text.lstrip()
+            continue
+        return text
+
+
+@app.route("/api/debug/tables")
+def api_debug_tables():
+    """What there is to query. A console with no schema in front of it is a
+    console you use by guessing table names."""
+    conn = get_db()
+    tables = []
+    for row in conn.execute(
+        "SELECT name, sql FROM sqlite_master WHERE type = 'table' "
+        "AND name NOT LIKE 'sqlite_%' ORDER BY name"
+    ):
+        count = conn.execute(f'SELECT COUNT(*) AS n FROM "{row["name"]}"').fetchone()["n"]
+        tables.append({
+            "name": row["name"],
+            "rows": count,
+            "columns": [c["name"] for c in conn.execute(f'PRAGMA table_info("{row["name"]}")')],
+            "sql": row["sql"],
+        })
+    return jsonify({"tables": tables})
+
+
+@app.route("/api/debug/query", methods=["POST"])
+def api_debug_query():
+    """Run one read-only statement and return its rows."""
+    sql = (request.get_json(silent=True) or {}).get("sql") or ""
+    first = _sql_strip_leading_comments(sql).split(None, 1)
+    keyword = first[0].lower().rstrip(";") if first else ""
+    if not keyword:
+        return jsonify({"error": "Nothing to run."}), 400
+    if keyword not in SQL_ALLOWED_STARTS:
+        return jsonify({"error":
+            f"Only {', '.join(s.upper() for s in SQL_ALLOWED_STARTS)} statements run here. "
+            f"This one starts with {keyword.upper()!r}."}), 400
+
+    if not os.path.exists(DB_PATH):
+        return jsonify({"error": "There is no database yet."}), 400
+
+    # mode=ro is the actual guarantee. Everything above is there to give a
+    # better message than "attempt to write a readonly database".
+    # pathname2url escapes the parts of a path that a URI would otherwise read
+    # as syntax, so a directory with a '?' in it cannot silently drop the mode.
+    uri = "file:" + urllib.request.pathname2url(os.path.abspath(DB_PATH)) + "?mode=ro"
+    conn = sqlite3.connect(uri, uri=True)
+    conn.row_factory = sqlite3.Row
+    steps = {"n": 0}
+
+    def _watchdog():
+        steps["n"] += 1
+        return 1 if steps["n"] > SQL_MAX_STEPS / 1000 else 0
+
+    conn.set_progress_handler(_watchdog, 1000)
+    started = time.monotonic()
+    try:
+        cursor = conn.execute(sql)
+        rows = cursor.fetchmany(SQL_MAX_ROWS + 1)
+        columns = [d[0] for d in cursor.description] if cursor.description else []
+    except sqlite3.OperationalError as exc:
+        message = str(exc)
+        if "interrupted" in message.lower():
+            message = "That query was taking too long and was stopped."
+        return jsonify({"error": message}), 400
+    except sqlite3.Error as exc:
+        return jsonify({"error": str(exc)}), 400
+    finally:
+        conn.set_progress_handler(None, 0)
+        conn.close()
+
+    truncated = len(rows) > SQL_MAX_ROWS
+    return jsonify({
+        "columns": columns,
+        # Values as SQLite returned them, not reformatted. A console that
+        # prettifies its output is one you cannot trust to show you what is
+        # actually stored, which is the entire reason to open it.
+        "rows": [[row[c] for c in columns] for row in rows[:SQL_MAX_ROWS]],
+        "truncated": truncated,
+        "row_limit": SQL_MAX_ROWS,
+        "ms": round((time.monotonic() - started) * 1000, 1),
+    })
 
 
 @app.route("/api/saveeye/now")

@@ -329,6 +329,28 @@
     <h3>Easee connection</h3>
     <button type="button" class="btn-secondary full" id="easee-test-btn">Test Easee connection</button>
     <div id="easee-test-result"></div>
+
+    <!-- For the questions the charts do not answer. Read-only: the connection
+         behind it is opened mode=ro, so a write is refused by SQLite itself
+         rather than by this page being careful. -->
+    <h3>Query the database</h3>
+    <p class="muted">
+      Read-only SQL, straight against the add-on's database — for the questions
+      the charts do not answer. <code>SELECT</code>, <code>WITH</code> and
+      <code>EXPLAIN</code> only; nothing here can change or delete anything.
+    </p>
+    <div class="sql-tables" id="sql-tables"></div>
+    <label class="field">
+      <span class="sr-only">SQL</span>
+      <textarea id="sql-input" rows="4" spellcheck="false" autocapitalize="none"
+        autocomplete="off" autocorrect="off"
+        placeholder="SELECT ts_utc, cumulative_wh FROM saveeye_samples ORDER BY ts_utc DESC LIMIT 20"></textarea>
+    </label>
+    <div class="btn-row">
+      <button type="button" class="btn-secondary full" id="sql-run-btn">Run</button>
+    </div>
+    <p class="muted" id="sql-note"></p>
+    <div class="sql-result" id="sql-result"></div>
   </div>
 </div>
 

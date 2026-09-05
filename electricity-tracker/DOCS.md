@@ -431,6 +431,50 @@ the current code cannot query.
 `/data` is inside Home Assistant's own add-on backups too; this is for when you
 want a copy in your own hands, or to move to another install.
 
+## Querying the database
+
+**Settings → Query the database.** Read-only SQL against the add-on's own
+database, for the questions the charts do not answer — the one that prompted it
+being "why is 29 August 2.35 kWh short on the estimate", which is not a chart,
+it is a look at `saveeye_samples` for a counter reset.
+
+The table chips list what there is, with row counts; clicking one drops
+`SELECT * FROM <table> LIMIT 50` in the box rather than running it. Ctrl/Cmd +
+Enter runs; plain Enter is a newline, because a query worth opening this for is
+rarely one line.
+
+**It cannot write.** The connection behind it is opened `mode=ro`, so SQLite
+itself refuses `UPDATE`, `DELETE`, `DROP` and the rest — not this page being
+careful about what it lets through. On top of that only `SELECT`, `WITH` and
+`EXPLAIN` are accepted, which is there to refuse the things a read-only
+connection still permits and this has no business doing: `ATTACH` reaching
+another file, `PRAGMA` changing how the engine behaves.
+
+Results stop at 500 rows, and a query that runs too long is cut off rather than
+holding the request thread on a box that is also serving the panel. Values come
+back as SQLite returned them — `NULL` is drawn as `NULL`, not as a blank —
+because a console that prettifies its output is one you cannot trust to show
+what is actually stored.
+
+The finding it was built for, as a query:
+
+```sql
+WITH s AS (
+  SELECT ts_utc, cumulative_wh,
+         LAG(cumulative_wh) OVER (ORDER BY ts_utc) AS prev,
+         LAG(ts_utc)        OVER (ORDER BY ts_utc) AS prev_ts
+  FROM saveeye_samples
+)
+SELECT prev_ts, ts_utc, prev, cumulative_wh,
+       ROUND((julianday(ts_utc) - julianday(prev_ts)) * 1440) AS gap_min
+FROM s WHERE cumulative_wh < prev;
+```
+
+A row means the counter restarted. The consumption between the last reading
+before it and the restart is not recorded anywhere, so a wide `gap_min` is
+energy the estimate is missing — while every hour still reports, since the
+hours either side are bracketed by samples.
+
 ## Notes
 
 - Prices are stored keyed by Danish local wall-clock time; consumption is
