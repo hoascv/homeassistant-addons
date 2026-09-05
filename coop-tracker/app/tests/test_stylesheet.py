@@ -141,3 +141,30 @@ def test_no_top_level_call_is_undefined():
     called_at_load = set(re.findall(r"^([a-z][A-Za-z0-9_$]*)\(", source, re.M))
     missing = sorted(called_at_load - defined)
     assert missing == [], f"called at load but never defined: {missing}"
+
+
+def test_the_chart_series_colours_are_defined_for_both_themes():
+    """The bug this guards against has happened twice here: --positive,
+    --negative and --danger were defined only in :root, so a figure in the red
+    kept its light-theme ink on a near-black card. The finance chart's three
+    series were heading the same way — measured against the dark surface the
+    borrowed expense red came out at 2.68:1, under the 3:1 floor."""
+    css = _strip_comments(_css())
+    dark = css[css.index("@media (prefers-color-scheme: dark)"):]
+    dark = dark[:dark.index("\n}\n\n")]
+    for token in ("--chart-revenue", "--chart-costs", "--chart-net"):
+        assert f"{token}:" in css, f"{token} is never defined"
+        assert f"{token}:" in dark, f"{token} has no dark step — it will keep its light ink"
+
+
+def test_the_finance_series_do_not_borrow_the_action_colours_directly():
+    """They start from them and were stepped until the set passed contrast,
+    lightness-band and colour-blindness checks against both surfaces. Wiring
+    the raw action colours back in would quietly undo that."""
+    js = open(os.path.join(os.path.dirname(__file__), "..", "static", "app.js"),
+              encoding="utf-8").read()
+    fn = js[js.index("function buildFinanceSvg("):js.index("\n}\n", js.index("function buildFinanceSvg("))]
+    for borrowed in ("--accent-sale", "--accent-expense"):
+        assert borrowed not in fn, f"the chart is using {borrowed} again"
+    for token in ("--chart-revenue", "--chart-costs", "--chart-net"):
+        assert token in fn

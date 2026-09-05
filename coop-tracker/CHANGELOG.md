@@ -1,5 +1,33 @@
 # Changelog
 
+## 1.59.0
+
+- **Money, month by month.** A new chart under the egg trends: revenue, costs
+  and net across the months the range selector picks. It rides on the trends
+  request rather than fetching its own, so the two charts and the tiles above
+  them cannot disagree about which months they are showing.
+- **The axis goes below zero.** Net is the figure the chart is for and the only
+  one that can be negative; "is the flock paying for itself this month" is not
+  a question a chart clamped at zero can answer. The counted charts keep their
+  0-to-max axis, which is right for eggs.
+- Est. savings is not folded into the charted net. It is an estimate, and
+  mixing one into a measured line makes the line say more than it knows.
+- **All five charts now draw the way Electricity Tracker's do** — a smooth
+  monotone curve instead of straight segments between points, with a soft
+  gradient wash under the headline series. Monotone rather than a plain spline:
+  an overshooting curve dips below the axis between a zero and a spike and
+  draws quantities that cannot exist.
+- The finance series have their own colours rather than borrowing Log Sale's
+  green and Log Expense's red directly. They start from those — within ΔE 4 of
+  them — but each was stepped until the set passed contrast, lightness-band and
+  colour-blindness checks against **both** surfaces. Borrowing them unchanged
+  failed twice: the pair sat at a deuteranope separation of 6.0, and on the
+  dark card the expense red came out at 2.68:1, the same "light-theme ink on a
+  near-black card" problem `--positive` and `--negative` had.
+- Net is purple, not the app accent. The accent is an orange sitting right
+  beside the expense red, and on screen the two lines were genuinely hard to
+  tell apart.
+
 ## 1.58.0
 
 - **Net incl. savings.** A fifth figure on the Finances card: net plus the

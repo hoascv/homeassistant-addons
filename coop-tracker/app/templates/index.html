@@ -230,6 +230,31 @@
     </div>
     <p class="trends-forecast-caption" id="trends-forecast-caption"></p>
 
+    <!-- The money over the same months. Its own section rather than more lines
+         on the egg chart: eggs are counted and money is not, and one axis
+         cannot honestly carry both. -->
+    <div class="finances-header finance-chart-head">
+      <h2>Money, month by month</h2>
+    </div>
+    <div class="trends-legend">
+      <span class="trends-legend-item"><span class="trends-swatch trends-swatch-revenue"></span>Revenue</span>
+      <!-- Dashed in the swatch as well as on the line. Revenue green against
+           costs red is a deuteranopia collision, so the dash is what carries
+           the difference for a reader who cannot use the hue — and a legend
+           that showed a solid red block would not teach it. -->
+      <span class="trends-legend-item"><span class="trends-swatch trends-swatch-costs"></span>Costs</span>
+      <span class="trends-legend-item"><span class="trends-swatch trends-swatch-net"></span>Net</span>
+    </div>
+    <div class="trends-chart-wrap" id="finance-chart-wrap">
+      <button type="button" class="trends-expand-btn" id="finance-expand-btn" aria-label="Expand chart">⛶</button>
+      <p class="empty-state" id="finance-chart-empty" hidden>No money logged yet</p>
+    </div>
+    <p class="sheet-subtext">
+      Net is revenue minus costs — money that actually moved. Est. savings is
+      not in it; it is an estimate, and mixing one into a measured line would
+      make the line say more than it knows.
+    </p>
+
     <div class="eggs-per-day">
       <div class="finances-header">
         <h2>Eggs per day, recently</h2>

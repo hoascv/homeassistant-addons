@@ -738,6 +738,28 @@ many months you have and how many you need. It's only available on
 64-bit Raspberry Pi OS); on other architectures the panel explains it
 isn't available on that device rather than failing silently.
 
+### Money, month by month
+
+Under the egg chart on the **Trends** tab: revenue, costs and net over the same
+months the range selector picks, so the tiles above and the chart below cannot
+disagree about a month.
+
+**Net is the one that matters and the one that goes negative** — the axis spans
+below zero and draws the zero line, because "is the flock paying for itself
+this month" is the question, and a chart clamped at zero cannot answer it. The
+counted charts on the same tab still span 0-to-max, which is right for eggs:
+there is no such thing as a negative collection.
+
+Est. savings is deliberately *not* in the charted net. It is an estimate, and
+folding one into a measured line makes the line say more than it knows. It
+stays in the tiles, where it is labelled as an estimate.
+
+Costs are drawn dashed as well as coloured. Revenue green against costs red is
+the one pair that cannot be separated by choosing better shades — lightening
+them for the dark theme drops their colour-blind separation further, not
+further apart — so the line style carries the identity for a reader who cannot
+use the hue, and the legend swatch is dashed to teach it.
+
 ### Estimated savings
 
 The Finances section's **Est. savings** figures answer "what would this

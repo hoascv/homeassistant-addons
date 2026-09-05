@@ -14,6 +14,11 @@
   --danger: #c0453a;
   /* 3% darker than the #3f9142 it was, same hue and saturation: the original
      landed at 3.93:1 on white, under the 4.5:1 body-text line. */
+  /* Finance chart series. Validated against the light card (#fcfcfb):
+     CVD ΔE 8.5, normal ΔE 17.3, all three above 3:1 contrast. */
+  --chart-revenue: #389444;
+  --chart-costs: #9f413c;
+  --chart-net: #906aaf;
   --positive: #3a863d;
   --negative: #a4483d;
   --radius: 14px;
@@ -45,6 +50,14 @@
     --danger: #e8837a;
     --positive: #63b866;
     --negative: #e0897d;
+    /* Their own steps for the dark card, not an automatic lightening: stepped
+       until the set passed against #262220. The dark band plus the contrast
+       floor leave less room than the light theme does, so the CVD separation
+       lands at 6.2 rather than 8.5 — inside the floor band, which is why the
+       costs line is dashed rather than only coloured. */
+    --chart-revenue: #459646;
+    --chart-costs: #ab4f5a;
+    --chart-net: #856db6;
   }
 }
 
@@ -846,6 +859,36 @@ img.chicken-avatar {
   display: inline-block;
 }
 
+/* The finance chart's three series get their own tokens rather than borrowing
+   the action colours directly.
+   
+   They start from them — these are recognisably the Log Sale green and the Log
+   Expense red, within ΔE 4 of them — but each was stepped until the set passed
+   the contrast, lightness-band and colour-blindness checks against both
+   surfaces. Borrowing the action colours unchanged failed twice: the pair sat
+   at a deuteranope separation of 6.0, and on the dark card the expense red came
+   out at 2.68:1 contrast, the same "light-theme ink on a near-black card"
+   problem --positive and --negative had above.
+   
+   Net is purple rather than the app accent. The accent is an orange sitting
+   right beside the expense red — legible to most readers, and the two lines
+   were genuinely hard to tell apart on screen. */
+.trends-swatch-revenue { background: var(--chart-revenue); }
+/* Dashed, not solid. Green against red is the one pair that cannot be fixed by
+   choosing better steps — lightening them for the dark theme drops the
+   separation to ΔE 2 — so the line style carries the identity for a reader who
+   cannot use the hue, and the swatch shows the dash so the legend teaches it. */
+.trends-swatch-costs {
+  background: none;
+  border-top: 3px dashed var(--chart-costs);
+  align-self: center;
+  height: 0;
+}
+.trends-swatch-net { background: var(--chart-net); }
+/* Zero is a rule, not a gridline: on a chart that crosses it, it is the line
+   the reader is actually asking about. */
+.chart-zero-line { stroke: var(--text-muted); stroke-width: 1; stroke-opacity: 0.55; }
+.finance-chart-head { margin-top: 1.5rem; }
 .trends-swatch-collected { background: var(--accent-egg); }
 .trends-swatch-sold { background: var(--accent-sale); }
 .trends-swatch-used { background: var(--accent-used); }

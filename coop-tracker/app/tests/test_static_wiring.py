@@ -42,3 +42,43 @@ def test_the_five_money_tiles_can_wrap():
     is not one you can read at a glance."""
     rule = CSS[CSS.index(".summary-secondary {"):]
     assert "flex-wrap: wrap" in rule[:400]
+
+
+def test_the_finance_chart_is_wired_and_styled():
+    for element in ("finance-chart-wrap", "finance-chart-empty", "finance-expand-btn"):
+        assert f'id="{element}"' in HTML, f"the chart has no {element}"
+    for name in (".trends-swatch-revenue", ".trends-swatch-costs",
+                 ".trends-swatch-net", ".chart-zero-line"):
+        assert name in CSS, f"{name} is emitted but nothing styles it"
+
+
+def test_the_finance_chart_uses_a_signed_axis():
+    """A month whose costs beat its revenue has a net below the line. The
+    counted charts span 0..max, which is right for eggs and wrong for money."""
+    fn = JS[JS.index("function buildFinanceSvg("):JS.index("\n}\n", JS.index("function buildFinanceSvg("))]
+    assert "chartYAxisSigned" in fn
+    assert "Math.min(0" in fn, "the floor should follow the data below zero"
+
+
+def test_costs_are_told_apart_by_more_than_colour():
+    """Revenue green against costs red measures ΔE 6.0 for a deuteranope —
+    distinguishable to most readers and not to them, so the line style has to
+    carry the identity too."""
+    fn = JS[JS.index("function buildFinanceSvg("):JS.index("\n}\n", JS.index("function buildFinanceSvg("))]
+    assert "dashed: true" in fn
+    swatch = CSS[CSS.index(".trends-swatch-costs"):]
+    assert "dashed" in swatch[:200], "the legend swatch should teach the dash"
+
+
+def test_an_empty_ledger_is_not_drawn_as_a_flat_line():
+    """A line along the axis reads as a measured result rather than as nothing
+    logged yet."""
+    fn = JS[JS.index("function renderFinanceChart("):]
+    assert "empty.hidden = moved > 0" in fn[:700]
+
+
+def test_the_finance_chart_shares_the_trends_request():
+    """Two requests would let the two charts disagree about which months they
+    are showing."""
+    assert "renderFinanceChart(data)" in JS
+    assert 'fetch("api/finance' not in JS and "fetch(`api/finance" not in JS

@@ -160,7 +160,11 @@ def test_every_chart_has_an_expand_button():
     import re
     html = _static("index.html")
     wraps = re.findall(r'<div class="trends-chart-wrap"[^>]*id="([\w-]+)"', html)
-    assert len(wraps) == 4, f"found {wraps}"
+    # Not a fixed count: the sibling test below says a new chart should need a
+    # button and no JavaScript, and a number here would have to be edited every
+    # time one arrives — which is how the rule gets bumped instead of kept. The
+    # floor only guards against the regex silently matching nothing.
+    assert len(wraps) >= 4, f"found {wraps}"
     for wrap in wraps:
         block = html[html.index(f'id="{wrap}"'):]
         block = block[:block.index("</div>")]

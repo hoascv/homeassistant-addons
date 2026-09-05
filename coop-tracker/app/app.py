@@ -82,7 +82,7 @@ except ImportError as e:
     SKLEARN_AVAILABLE = False
     SKLEARN_ERROR = str(e)
 
-APP_VERSION = "1.58.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.59.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("COOP_DB_PATH", "/data/coop.db")
 OPTIONS_PATH = os.environ.get("COOP_OPTIONS_PATH", "/data/options.json")
@@ -1656,11 +1656,37 @@ def _compute_trends(conn, now, months):
         by_month = {row["ym"]: row["total"] for row in rows}
         return [by_month.get(label, 0) for label in labels]
 
+    def money_for(entry_type, column):
+        rows = conn.execute(
+            f"""
+            SELECT strftime('%Y-%m', ts) AS ym, COALESCE(SUM({column}), 0) AS total
+            FROM logs
+            WHERE type = ? AND ts >= ?
+            GROUP BY ym
+            """,
+            (entry_type, range_start.isoformat()),
+        ).fetchall()
+        by_month = {row["ym"]: row["total"] for row in rows}
+        return [round(float(by_month.get(label, 0)), 2) for label in labels]
+
+    # Same definitions the Finances tiles use — sale.price is revenue,
+    # expense.cost is what went out — so a month on the chart and the same
+    # month in the tiles cannot disagree.
+    revenue = money_for("sale", "price")
+    costs = money_for("expense", "cost")
+
     return {
         "months": labels,
         "collected": series_for("egg"),
         "sold": series_for("sale"),
         "used": series_for("used"),
+        "revenue": revenue,
+        "costs": costs,
+        # Derived here rather than in the page: it is the figure the chart is
+        # really for, and two places computing it is two places to disagree.
+        # It is the only one of the three that goes negative, which is the
+        # whole question — is the flock paying for itself this month.
+        "net": [round(r - c, 2) for r, c in zip(revenue, costs)],
     }
 
 

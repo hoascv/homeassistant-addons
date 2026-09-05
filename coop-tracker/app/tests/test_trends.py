@@ -168,3 +168,62 @@ def test_trends_includes_a_per_day_forecast_for_each_forecast_month(client):
     body = client.get("/api/trends").get_json()
     assert len(body["forecast_eggs_per_day"]) == len(body["forecast_months"])
     assert all(v >= 0 for v in body["forecast_eggs_per_day"])
+
+
+# --- money, month by month ----------------------------------------------------
+
+
+def test_the_trends_payload_carries_the_money_series(client):
+    """It rides on the trends payload rather than fetching its own: the two
+    answer the same question over the same months, and a second request would
+    let them disagree about which months those are."""
+    now = datetime.now()
+    client.post("/api/log", json={"type": "sale", "count": 6, "price": 30, "ts": now.isoformat()})
+    client.post("/api/log", json={"type": "expense", "cost": 12, "ts": now.isoformat()})
+    body = client.get("/api/trends?months=3").get_json()
+
+    assert len(body["revenue"]) == len(body["months"]) == 3
+    assert body["revenue"][-1] == 30
+    assert body["costs"][-1] == 12
+    assert body["net"][-1] == 18
+
+
+def test_a_month_with_no_money_is_zero_not_missing(client):
+    """A gap in the arrays would slide every later month one place left."""
+    body = client.get("/api/trends?months=6").get_json()
+    assert body["revenue"] == [0] * 6
+    assert body["costs"] == [0] * 6
+    assert body["net"] == [0] * 6
+
+
+def test_net_goes_negative_when_costs_beat_revenue(client):
+    """The crossing is the whole question — is the flock paying for itself —
+    so it must not be clamped at zero anywhere on the way to the chart."""
+    now = datetime.now()
+    client.post("/api/log", json={"type": "expense", "cost": 100, "ts": now.isoformat()})
+    body = client.get("/api/trends?months=3").get_json()
+    assert body["net"][-1] == -100
+
+
+def test_the_money_series_matches_the_finance_tiles_for_the_same_month(client):
+    """One month on the chart and the same month in the tiles cannot disagree,
+    or the tab argues with itself."""
+    now = datetime.now()
+    client.post("/api/log", json={"type": "sale", "count": 9, "price": 45, "ts": now.isoformat()})
+    client.post("/api/log", json={"type": "expense", "cost": 17, "ts": now.isoformat()})
+    trends = client.get("/api/trends?months=3").get_json()
+    summary = client.get("/api/summary").get_json()
+    assert trends["revenue"][-1] == summary["revenue_month"]
+    assert trends["costs"][-1] == summary["cost_month"]
+    assert trends["net"][-1] == summary["net_month"]
+
+
+def test_savings_is_not_folded_into_the_charted_net(client):
+    """Est. savings is an estimate. Mixing one into a measured line would make
+    the line say more than it knows — the same mistake the electricity add-on
+    just had to unpick."""
+    now = datetime.now()
+    client.post("/api/log", json={"type": "used", "count": 20, "ts": now.isoformat()})
+    trends = client.get("/api/trends?months=3").get_json()
+    assert trends["net"][-1] == 0
+    assert client.get("/api/summary").get_json()["savings_month"] > 0

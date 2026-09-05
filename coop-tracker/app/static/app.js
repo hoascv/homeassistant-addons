@@ -1836,6 +1836,53 @@ function chartYAxis(maxVal, unit, { topPad, chartH }) {
   };
 }
 
+// A y axis that can go below zero.
+//
+// chartYAxis above spans 0..max, which is right for everything counted: there
+// is no such thing as negative eggs. Money is the exception — a month whose
+// costs beat its revenue has a net below the line, and that crossing is the
+// question the finance chart exists to answer, so it cannot be clamped away.
+//
+// The step comes from the same axisTicks so the two charts label their
+// gridlines on the same kind of round number; only the span differs.
+function chartYAxisSigned(minVal, maxVal, unit, { topPad, chartH }) {
+  const span = Math.max(Math.abs(minVal), Math.abs(maxVal), 1);
+  const step = axisTicks(span, unit)[1]?.value || span;
+  const decimals = Math.max(0, Math.ceil(-Math.log10(step)));
+  const low = Math.floor(minVal / step) * step;
+  const high = Math.ceil(maxVal / step) * step;
+
+  const ticks = [];
+  for (let v = low; v <= high + step / 1000; v += step) {
+    // -0 prints as "-0", which reads as a value rather than as the origin.
+    const value = Math.abs(v) < step / 1000 ? 0 : v;
+    ticks.push({ value, label: value.toFixed(decimals) });
+  }
+  ticks[ticks.length - 1].label += ` ${unit}`;
+
+  const widest = Math.max(...ticks.map((t) => t.label.length));
+  const gutter = Math.round(widest * 4.6) + 8;
+  const range = high - low || 1;
+  const yAt = (value) => topPad + chartH - ((value - low) / range) * chartH;
+
+  return {
+    gutter,
+    yAt,
+    zeroY: yAt(0),
+    // True when the data actually crosses, so the zero rule is drawn only
+    // where it means something rather than sitting on the floor of every
+    // chart that happens to be all-positive.
+    crossesZero: low < 0,
+    render: (width) => ticks.map(({ value, label }) => {
+      const y = yAt(value).toFixed(2);
+      const cls = value === 0 && low < 0 ? "chart-zero-line" : "chart-grid-line";
+      return `<line class="${cls}" x1="${gutter}" y1="${y}" x2="${width}" y2="${y}"></line>`
+        + `<text class="chart-axis-value" x="${gutter - 5}" y="${y}" text-anchor="end"`
+        + ` dominant-baseline="middle">${escapeHtml(label)}</text>`;
+    }).join(""),
+  };
+}
+
 // Hover targets. An invisible circle per point with an SVG <title>, which is
 // what the browser turns into a tooltip — the same mechanism Electricity
 // Tracker uses, so the two add-ons behave alike. Without them these charts had
@@ -1919,11 +1966,15 @@ function buildTrendsSvg(data) {
   const yAt = (value) => topPad + chartH - (value / maxVal) * chartH;
 
   const line = (values, colorVar, { dashed = false, opacity = 1 } = {}) => {
-    const points = values.map((v, i) => `${xAt(i)},${yAt(v)}`).join(" ");
+    const points = values.map((v, i) => [xAt(i), yAt(v)]);
+    if (!points.length) return "";
+    const d = monotoneLinePath(points);
     const dash = dashed ? ' stroke-dasharray="4,3"' : "";
-    let svg = `<polyline points="${points}" fill="none" stroke="var(${colorVar})" stroke-width="2" stroke-opacity="${opacity}"${dash}></polyline>`;
-    values.forEach((v, i) => {
-      svg += `<circle cx="${xAt(i)}" cy="${yAt(v)}" r="2.5" fill="var(${colorVar})" fill-opacity="${opacity}"></circle>`;
+    let svg = `<path class="chart-line" d="${d}" fill="none" stroke="var(${colorVar})"`
+      + ` stroke-width="2" stroke-linecap="round" stroke-linejoin="round"`
+      + ` stroke-opacity="${opacity}"${dash}></path>`;
+    points.forEach(([x, y]) => {
+      svg += `<circle cx="${x.toFixed(2)}" cy="${y.toFixed(2)}" r="2.5" fill="var(${colorVar})" fill-opacity="${opacity}"></circle>`;
     });
     return svg;
   };
@@ -1973,6 +2024,126 @@ function buildTrendsSvg(data) {
   return `<svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet">${content}${divider}</svg>`;
 }
 
+// --- Curves and washes -------------------------------------------------------
+//
+// Ported from Electricity Tracker so the two add-ons draw the same picture:
+// a smooth line over a soft gradient wash, rather than the straight polylines
+// these charts used to be. Every series here has a hard floor — you cannot
+// collect negative eggs, and a month's costs cannot be less than nothing — so
+// the monotone curve is the one to use: an overshooting spline dips below the
+// axis between a zero and a spike and draws quantities that cannot exist.
+
+function smoothLinePath(points) {
+  if (points.length === 1) {
+    // A single point still needs a valid path (a bare "M" is legal SVG and
+    // draws nothing) — the area path built on top of it degrades to a
+    // harmless zero-width sliver rather than malformed "L" with no "M".
+    return `M${points[0][0].toFixed(2)},${points[0][1].toFixed(2)}`;
+  }
+  if (points.length === 0) return "";
+  if (points.length === 2) {
+    return `M${points[0][0].toFixed(2)},${points[0][1].toFixed(2)} L${points[1][0].toFixed(2)},${points[1][1].toFixed(2)}`;
+  }
+  let d = `M${points[0][0].toFixed(2)},${points[0][1].toFixed(2)}`;
+  for (let i = 0; i < points.length - 1; i++) {
+    const p0 = points[i - 1] || points[i];
+    const p1 = points[i];
+    const p2 = points[i + 1];
+    const p3 = points[i + 2] || p2;
+    const c1x = p1[0] + (p2[0] - p0[0]) / 6;
+    const c1y = p1[1] + (p2[1] - p0[1]) / 6;
+    const c2x = p2[0] - (p3[0] - p1[0]) / 6;
+    const c2y = p2[1] - (p3[1] - p1[1]) / 6;
+    d += ` C${c1x.toFixed(2)},${c1y.toFixed(2)} ${c2x.toFixed(2)},${c2y.toFixed(2)} ${p2[0].toFixed(2)},${p2[1].toFixed(2)}`;
+  }
+  return d;
+}
+
+function monotoneLinePath(points) {
+  const n = points.length;
+  if (n < 3) return smoothLinePath(points);
+
+  const dx = [];
+  const slope = [];
+  for (let i = 0; i < n - 1; i++) {
+    const h = points[i + 1][0] - points[i][0];
+    dx.push(h);
+    slope.push(h === 0 ? 0 : (points[i + 1][1] - points[i][1]) / h);
+  }
+
+  const m = new Array(n);
+  m[0] = slope[0];
+  m[n - 1] = slope[n - 2];
+  for (let i = 1; i < n - 1; i++) {
+    // A sign change means this point is a local extreme: a flat tangent there
+    // is exactly what stops the curve continuing past it.
+    m[i] = slope[i - 1] * slope[i] <= 0 ? 0 : (slope[i - 1] + slope[i]) / 2;
+  }
+  for (let i = 0; i < n - 1; i++) {
+    if (slope[i] === 0) {
+      m[i] = 0;
+      m[i + 1] = 0;
+      continue;
+    }
+    const a = m[i] / slope[i];
+    const b = m[i + 1] / slope[i];
+    const sum = a * a + b * b;
+    if (sum > 9) {
+      const t = 3 / Math.sqrt(sum);
+      m[i] = t * a * slope[i];
+      m[i + 1] = t * b * slope[i];
+    }
+  }
+
+  let d = `M${points[0][0].toFixed(2)},${points[0][1].toFixed(2)}`;
+  for (let i = 0; i < n - 1; i++) {
+    const third = dx[i] / 3;
+    d += ` C${(points[i][0] + third).toFixed(2)},${(points[i][1] + m[i] * third).toFixed(2)}` +
+         ` ${(points[i + 1][0] - third).toFixed(2)},${(points[i + 1][1] - m[i + 1] * third).toFixed(2)}` +
+         ` ${points[i + 1][0].toFixed(2)},${points[i + 1][1].toFixed(2)}`;
+  }
+  return d;
+}
+
+
+// The wash under a line. Closed down to the baseline and filled with a
+// vertical gradient that fades out, so the area reads as weight under the
+// curve rather than as a second solid shape competing with it.
+function areaUnder(linePath, points, baselineY, gradientId) {
+  if (!points.length) return "";
+  const first = points[0], last = points[points.length - 1];
+  return `<path class="chart-area" fill="url(#${gradientId})"`
+    + ` d="${linePath} L${last[0].toFixed(2)},${baselineY.toFixed(2)}`
+    + ` L${first[0].toFixed(2)},${baselineY.toFixed(2)} Z"></path>`;
+}
+
+// One gradient per series colour. Defined with the chart rather than in the
+// stylesheet because an SVG gradient is markup, and the stops carry the series
+// colour that only the caller knows.
+function areaGradient(gradientId, colorVar) {
+  return `<linearGradient id="${gradientId}" x1="0" y1="0" x2="0" y2="1">`
+    + `<stop offset="0%" stop-color="var(${colorVar})" stop-opacity="0.13"/>`
+    + `<stop offset="100%" stop-color="var(${colorVar})" stop-opacity="0"/>`
+    + `</linearGradient>`;
+}
+
+// A series drawn the way both add-ons now draw one: smooth curve, optional
+// wash, a marker per reading. `points` are already pixels.
+function curveSeries(points, colorVar, {
+  dashed = false, width = 2, area = false, gradientId = null, baselineY = 0,
+} = {}) {
+  if (!points.length) return "";
+  const d = monotoneLinePath(points);
+  const dash = dashed ? ' stroke-dasharray="5,3"' : "";
+  let svg = area && gradientId ? areaUnder(d, points, baselineY, gradientId) : "";
+  svg += `<path class="chart-line" d="${d}" fill="none" stroke="var(${colorVar})"`
+    + ` stroke-width="${width}" stroke-linecap="round" stroke-linejoin="round"${dash}></path>`;
+  for (const [x, y] of points) {
+    svg += `<circle cx="${x.toFixed(2)}" cy="${y.toFixed(2)}" r="2.5" fill="var(${colorVar})"></circle>`;
+  }
+  return svg;
+}
+
 // Splits a series into runs of contiguous non-null points, already
 // transformed to pixels, so a stretch with no data leaves a gap in the
 // line instead of one drawn straight through it. Shared by both
@@ -2003,6 +2174,69 @@ function splitRuns(values, xAt, yAt, offset = 0) {
 function isThinlyCovered(data, i) {
   const days = (data.eggs_per_day_days || [])[i];
   return days != null && days > 0 && days < (data.eggs_per_day_min_days || 0);
+}
+
+// The money, month by month. Same grammar as buildTrendsSvg — same spacing,
+// same plot height, same hover targets — with two differences it has to have.
+//
+// The axis is signed, because a month whose costs beat its revenue has a net
+// below the line and that crossing is the whole question. And costs are drawn
+// dashed rather than only coloured: revenue green against costs red is a
+// deuteranopia collision (measured ΔE 6.0), so the line style carries the
+// identity for a reader who cannot use the hue. The legend swatch is dashed to
+// match, the way the forecast swatch already is.
+function buildFinanceSvg(data) {
+  const pointSpacing = 48;
+  const chartH = 120;
+  const topPad = 10;
+  const labelH = 16;
+  const months = data.months || [];
+  const revenue = data.revenue || [];
+  const costs = data.costs || [];
+  const net = data.net || [];
+  if (!months.length) return "";
+
+  const plotW = months.length * pointSpacing;
+  const height = topPad + chartH + labelH;
+  const all = [...revenue, ...costs, ...net];
+  const maxVal = Math.max(1, ...all);
+  const minVal = Math.min(0, ...all);
+
+  const cfg = window.CURRENCY || { symbol: "$" };
+  const axis = chartYAxisSigned(minVal, maxVal, cfg.symbol, { topPad, chartH });
+  const width = axis.gutter + plotW;
+  const xAt = (i) => axis.gutter + i * pointSpacing + pointSpacing / 2;
+  const yAt = axis.yAt;
+
+  const pts = (values) => values.map((v, i) => [xAt(i), yAt(v)]);
+
+  // Washed down to zero, not to the bottom of the plot: on a chart that goes
+  // negative, a fill reaching the floor would put ink under a month that lost
+  // money and read as if it had earned it.
+  const defs = `<defs>${areaGradient("finance-net-wash", "--chart-net")}</defs>`;
+  let content = defs + axis.render(width);
+  content += curveSeries(pts(revenue), "--chart-revenue");
+  content += curveSeries(pts(costs), "--chart-costs", { dashed: true });
+  // Drawn last, a shade heavier, and the only one carrying a wash: it is the
+  // figure the chart is for and the other two are the working behind it.
+  content += curveSeries(pts(net), "--chart-net", {
+    width: 2.5, area: true, gradientId: "finance-net-wash", baselineY: axis.zeroY,
+  });
+
+  months.forEach((ym, i) => {
+    content += `<text class="trends-bar-label" x="${xAt(i)}" y="${height - 2}"`
+      + ` text-anchor="middle">${monthLabel(ym).split(" ")[0]}</text>`;
+  });
+
+  // One target per month naming all three, as the eggs chart does: three
+  // overlapping circles would only fight each other.
+  content += hitTargets(
+    months.map((_, i) => ({ x: xAt(i), y: yAt(net[i]), i })),
+    (i) => `${monthLabel(months[i])} — ${fmtMoney(revenue[i])} in, `
+           + `${fmtMoney(costs[i])} out, net ${fmtMoney(net[i])}`);
+
+  return `<svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet"`
+    + ` role="img" aria-label="Monthly revenue, costs and net">${content}</svg>`;
 }
 
 // Same visual grammar as buildTrendsSvg (same spacing, same plot height,
@@ -2041,7 +2275,9 @@ function buildEggsPerDaySvg(data) {
       .filter((points) => points.length > 1)
       .map(
         (points) =>
-          `<polyline points="${points.map((p) => `${p.x},${p.y}`).join(" ")}" fill="none" stroke="var(${colorVar})" stroke-width="2" stroke-opacity="${opacity}"${dash}></polyline>`
+          `<path class="chart-line" d="${monotoneLinePath(points.map((p) => [p.x, p.y]))}"`
+          + ` fill="none" stroke="var(${colorVar})" stroke-width="2" stroke-linecap="round"`
+          + ` stroke-linejoin="round" stroke-opacity="${opacity}"${dash}></path>`
       )
       .join("");
     // Circles last, and drawn for lone points too — a single measured
@@ -2130,7 +2366,9 @@ function buildDailyEggsSvg(data) {
     .filter((run) => run.length > 1)
     .map(
       (run) =>
-        `<polyline points="${run.map((p) => `${p.x},${p.y}`).join(" ")}" fill="none" stroke="var(--accent-egg)" stroke-width="2" stroke-linejoin="round"></polyline>`
+        `<path class="chart-line" d="${monotoneLinePath(run.map((p) => [p.x, p.y]))}"`
+        + ` fill="none" stroke="var(--accent-egg)" stroke-width="2" stroke-linecap="round"`
+        + ` stroke-linejoin="round"></path>`
     )
     .join("");
   // No per-point markers at this density — they'd merge into a smear —
@@ -2209,9 +2447,12 @@ function buildAdvancedForecastSvg(data) {
   const yAt = (value) => topPad + chartH - (value / maxVal) * chartH;
 
   const line = (values, offset, colorVar, { dashed = false } = {}) => {
-    const points = values.map((v, i) => `${xAt(offset + i)},${yAt(v)}`).join(" ");
+    const pointPairs = values.map((v, i) => [xAt(offset + i), yAt(v)]);
+    if (!pointPairs.length) return "";
     const dash = dashed ? ' stroke-dasharray="4,3"' : "";
-    let svg = `<polyline points="${points}" fill="none" stroke="var(${colorVar})" stroke-width="2"${dash}></polyline>`;
+    let svg = `<path class="chart-line" d="${monotoneLinePath(pointPairs)}" fill="none"`
+      + ` stroke="var(${colorVar})" stroke-width="2" stroke-linecap="round"`
+      + ` stroke-linejoin="round"${dash}></path>`;
     values.forEach((v, i) => {
       svg += `<circle cx="${xAt(offset + i)}" cy="${yAt(v)}" r="2.5" fill="var(${colorVar})"></circle>`;
     });
@@ -2377,6 +2618,22 @@ async function loadDailyEggs() {
   captionEl.textContent = caption;
 }
 
+// The finance chart rides on the trends payload rather than fetching its own:
+// it answers the same question over the same months, and a second request
+// would let the two disagree about which months those are.
+function renderFinanceChart(data) {
+  const wrap = document.getElementById("finance-chart-wrap");
+  const empty = document.getElementById("finance-chart-empty");
+  if (!wrap) return;
+  const moved = [...(data.revenue || []), ...(data.costs || [])]
+    .reduce((a, b) => a + Math.abs(b), 0);
+  wrap.querySelector("svg")?.remove();
+  // Nothing logged is not a chart of zeroes: a flat line on the axis reads as
+  // a measured result rather than as an empty ledger.
+  empty.hidden = moved > 0;
+  if (moved > 0) wrap.insertAdjacentHTML("beforeend", buildFinanceSvg(data));
+}
+
 async function loadTrends() {
   const months = trendsRangeSelect.value;
   const res = await fetch(`api/trends?months=${months}`);
@@ -2391,6 +2648,7 @@ async function loadTrends() {
   }
 
   renderEggsPerDay(data);
+  renderFinanceChart(data);
 
   const backtest = data.forecast_backtest || [];
   const perDay = data.eggs_per_day || [];
