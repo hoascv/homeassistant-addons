@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.22.0
+
+- **An estimate covering a gap now says so.** A day could read 24/24 hours and
+  still be 2.35 kWh short: every hour bracketed by samples gets an estimate, so
+  the hour count only says the estimate *reaches* every hour, not that anything
+  was measuring the house throughout.
+- Saveeye's counter resets every few days. Silent across a reset, the estimate
+  credits only what the counter held when it came back — the consumption before
+  that was recorded by nothing and is not recoverable. The figure now reads
+  `Saveeye 10.45 kWh (65 min unrecorded)` instead of presenting itself as a
+  clean measurement.
+- **Resets the counter ran through are not flagged.** A nine-minute silence
+  coming back holding 886 Wh is paid for. The test is whether the credited
+  energy implies a draw a lived-in house cannot go below — 38 Wh over 65
+  minutes is 35 W, and no occupied home sits there for an hour. Of five resets
+  in one fortnight, exactly one was worth mentioning; a warning on all five is
+  one you learn to ignore.
+- Shown against the estimate only, never the meter's own figure: it is a fact
+  about Saveeye's counter, and hanging it on Eloverblik would blame the wrong
+  source.
+
 ## 1.21.0
 
 - **Query the database.** Settings gains a read-only SQL box against the

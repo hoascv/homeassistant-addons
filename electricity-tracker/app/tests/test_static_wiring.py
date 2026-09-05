@@ -283,3 +283,23 @@ def test_plain_enter_in_the_console_does_not_run_the_query():
     """A query worth opening this box for is rarely one line."""
     handler = JS[JS.index("function wireSqlConsole("):]
     assert "e.metaKey || e.ctrlKey" in handler[:900]
+
+
+def test_an_unrecorded_gap_is_shown_on_the_figure_it_qualifies():
+    """A day can read 24/24 hours and still be short. The two shortfalls must
+    not read as the same one: hours missing means the estimate does not cover
+    the day, minutes unrecorded means it does — on top of a window where
+    nothing measured the house at all."""
+    assert "min unrecorded" in JS
+    daily = JS[JS.index("function renderDailyChart("):JS.index("function renderConsumptionChart(")]
+    assert "saveeyeUnrecordedMin" in daily
+    assert "/24 h" in daily, "the hour-count flag should still be there too"
+
+
+def test_the_gap_is_only_ever_shown_against_the_estimate():
+    """It is a fact about Saveeye's counter. Hanging it on the meter's own
+    figure would blame the wrong source."""
+    for fn in ("function renderDailyChart(", "function renderHourlyChart("):
+        block = JS[JS.index(fn):]
+        block = block[:block.index("axisLabelOf")]
+        assert "isMeasured" in block, f"{fn} should distinguish the two series"

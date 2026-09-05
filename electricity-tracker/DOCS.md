@@ -431,6 +431,26 @@ the current code cannot query.
 `/data` is inside Home Assistant's own add-on backups too; this is for when you
 want a copy in your own hands, or to move to another install.
 
+### When the estimate is covering a gap
+
+A day can read as fully covered and still be short. Every hour bracketed by
+Saveeye samples gets an estimate, so the `(n/24 h)` flag only says the estimate
+*reaches* every hour — not that anything was measuring the house throughout.
+
+Saveeye's counter resets every few days. If the device is silent across a reset,
+the estimate credits only what the counter had accumulated by its first reading
+back, and the consumption before that was recorded by nothing. It is not
+recoverable; no source has it.
+
+Where that happens, the figure says so: **`Saveeye 10.45 kWh (65 min
+unrecorded)`**. Observed on 29 August 2026 — 38 Wh credited across 65 minutes,
+an average of 35 W in a house whose baseline is six times that.
+
+Resets the device counted straight through are not flagged. A nine-minute
+silence that comes back holding 886 Wh is paid for, and warning about it would
+train you to ignore the warning that matters — of five resets in that fortnight,
+one was worth mentioning.
+
 ## Querying the database
 
 **Settings → Query the database.** Read-only SQL against the add-on's own

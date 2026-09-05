@@ -22,7 +22,7 @@ import eloverblik
 import saveeye
 import easee
 
-APP_VERSION = "1.21.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.22.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("ELECTRICITY_DB_PATH", "/data/electricity.db")
 OPTIONS_PATH = os.environ.get("ELECTRICITY_OPTIONS_PATH", "/data/options.json")
@@ -679,6 +679,7 @@ def combined_consumption_with_cost(
         row["source"] = "eloverblik"
         row["measured_kwh"] = row["kwh"]
         row["saveeye_kwh"] = None
+        row["saveeye_unrecorded_min"] = 0.0
 
     if not saveeye_device_serial:
         return rows
@@ -686,6 +687,10 @@ def combined_consumption_with_cost(
     by_hour = {row["time_dk"]: row for row in rows}
     covered = set(by_hour)
     estimates = saveeye_hourly_kwh(conn, start_local, end_local, saveeye_device_serial)
+    # Where the estimate is covering a window nothing recorded. Carried on the
+    # row beside the figure it qualifies, so a number built partly on a gap can
+    # say so rather than presenting itself as a clean measurement.
+    unrecorded = saveeye_unrecorded_minutes(conn, start_local, end_local, saveeye_device_serial)
     hourly_totals = _hourly_totals(quarter_prices_with_total(conn, start_local, end_local, price_area, opts))
 
     for hour_key, kwh in estimates.items():
@@ -694,6 +699,7 @@ def combined_consumption_with_cost(
             # Eloverblik owns this hour, so it stays the blended value; Saveeye's
             # own number rides along as the second series instead of being dropped.
             measured_row["saveeye_kwh"] = kwh
+            measured_row["saveeye_unrecorded_min"] = unrecorded.get(hour_key, 0.0)
             continue
         price = hourly_totals.get(hour_key)
         cost = round(kwh * price, 4) if price is not None else None
@@ -709,6 +715,7 @@ def combined_consumption_with_cost(
                 "source": "saveeye_estimate",
                 "measured_kwh": None,
                 "saveeye_kwh": kwh,
+                "saveeye_unrecorded_min": unrecorded.get(hour_key, 0.0),
             }
         )
 
@@ -1033,6 +1040,24 @@ def _interp_series(samples, target_ts):
 # than resetting to zero, and is not counted rather than guessed at.
 MAX_PLAUSIBLE_KW = 25.0
 
+# The floor a whole house cannot go below while its meter is running. A fridge
+# and the standby draw of a lived-in home is 50-150 W; nothing occupied sits
+# under this for an hour.
+#
+# It is used backwards, as a test of the *counter* rather than of the house.
+# After a reset, the first reading is credited as the energy consumed since the
+# reset — and if that reading divided by the silence before it implies a draw
+# below this floor, the counter cannot have been running for the whole silence.
+# It was down, and the consumption in that window was recorded by nothing and
+# is not recoverable. Observed: 29 August 2026, 38 Wh credited across 65
+# minutes — 35 W, in a house whose baseline is six times that.
+MIN_PLAUSIBLE_STANDBY_W = 60.0
+
+# Below this a gap is not worth mentioning even when it is unaccounted: five
+# minutes of a house at 500 W is 42 Wh, which is nothing against a daily total,
+# and a warning that fires on it is one you stop reading.
+UNRECORDED_GAP_FLOOR_MIN = 10.0
+
 
 def _is_counter_reset(previous_value, value):
     """Whether a backward step is the counter restarting, or just jitter.
@@ -1145,6 +1170,75 @@ def saveeye_hourly_kwh(conn, start_local, end_local, device_serial):
             counted = counted or seen
         if counted:
             out[hour.replace(tzinfo=None).isoformat()] = round(total / 1000.0, 4)
+        hour += timedelta(hours=1)
+    return out
+
+
+def saveeye_unrecorded_minutes(conn, start_local, end_local, device_serial):
+    """Minutes per hour the Saveeye estimate is covering without a record.
+
+    Every hour bracketed by samples gets an estimate, which is why a day can
+    read as fully covered and still be short: a counter reset with the device
+    silent across it leaves the estimate crediting only what the counter had
+    accumulated by its first reading back. The consumption before that was
+    recorded by nothing.
+
+    This finds those windows, so a figure built partly on one can say so
+    instead of presenting itself as a clean measurement. It reports the gap,
+    not a guess at the missing energy — the missing energy is exactly the thing
+    nobody knows.
+
+    Deliberately silent about resets the device counted straight through: a
+    nine-minute silence that comes back holding 886 Wh is paid for, and warning
+    about it would train the reader to ignore the warning that matters.
+    Returns {naive local hour ISO: minutes}, hours with none omitted.
+    """
+    if not device_serial:
+        return {}
+    query_start = (start_local - timedelta(hours=1)).astimezone(timezone.utc).isoformat()
+    query_end = (end_local + timedelta(hours=1)).astimezone(timezone.utc).isoformat()
+    rows = conn.execute(
+        "SELECT ts_utc, cumulative_wh FROM saveeye_samples "
+        "WHERE device_serial = ? AND ts_utc >= ? AND ts_utc <= ? ORDER BY ts_utc",
+        (device_serial, query_start, query_end),
+    ).fetchall()
+    samples = [
+        (datetime.fromisoformat(r["ts_utc"]).timestamp(), r["cumulative_wh"])
+        for r in rows
+        if r["cumulative_wh"] is not None
+    ]
+    if len(samples) < 2:
+        return {}
+
+    segments = _counter_segments(samples)
+    unrecorded = []
+    for index, segment in enumerate(segments):
+        if index == 0:
+            continue
+        gap_start = segments[index - 1][-1][0]
+        gap_end = segment[0][0]
+        gap_hours = (gap_end - gap_start) / 3600.0
+        if gap_hours * 60.0 < UNRECORDED_GAP_FLOOR_MIN:
+            continue
+        credited_w = max(0.0, segment[0][1]) / gap_hours if gap_hours else 0.0
+        if credited_w >= MIN_PLAUSIBLE_STANDBY_W:
+            continue  # the counter ran through it; the energy is accounted for
+        unrecorded.append((gap_start, gap_end))
+
+    if not unrecorded:
+        return {}
+
+    out = {}
+    hour = start_local.replace(minute=0, second=0, microsecond=0)
+    while hour < end_local:
+        hour_start = hour.astimezone(timezone.utc).timestamp()
+        hour_end = (hour + timedelta(hours=1)).astimezone(timezone.utc).timestamp()
+        overlap = sum(
+            max(0.0, min(hour_end, gap_end) - max(hour_start, gap_start))
+            for gap_start, gap_end in unrecorded
+        )
+        if overlap > 0:
+            out[hour.replace(tzinfo=None).isoformat()] = round(overlap / 60.0, 1)
         hour += timedelta(hours=1)
     return out
 

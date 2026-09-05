@@ -1123,6 +1123,7 @@ function aggregateDaily(rows) {
       day, kwh: 0, cost: 0, costKnown: true,
       measured_kwh: null, measuredHours: 0,
       saveeye_kwh: null, saveeyeHours: 0,
+      saveeyeUnrecordedMin: 0,
     };
     entry.kwh += r.kwh;
     if (r.cost_dkk != null) entry.cost += r.cost_dkk;
@@ -1134,6 +1135,7 @@ function aggregateDaily(rows) {
     if (r.saveeye_kwh != null) {
       entry.saveeye_kwh = (entry.saveeye_kwh || 0) + r.saveeye_kwh;
       entry.saveeyeHours += 1;
+      entry.saveeyeUnrecordedMin += r.saveeye_unrecorded_min || 0;
     }
     map.set(day, entry);
   }
@@ -1146,8 +1148,12 @@ function renderHourlyChart(rows) {
     series: CONSUMPTION_SERIES,
     tooltipOf: (r) => {
       const costStr = r.cost_dkk != null ? `${r.cost_dkk.toFixed(2)} kr` : "cost n/a";
-      const pair = fmtSeriesPair(r.measured_kwh, r.saveeye_kwh,
-        (isMeasured) => (!isMeasured && r.source === "saveeye_partial" ? " so far" : ""));
+      const pair = fmtSeriesPair(r.measured_kwh, r.saveeye_kwh, (isMeasured) => {
+        if (isMeasured) return "";
+        if (r.source === "saveeye_partial") return " so far";
+        const gap = r.saveeye_unrecorded_min || 0;
+        return gap >= 1 ? ` (${Math.round(gap)} min unrecorded)` : "";
+      });
       return `${hm(r.time_dk)} — ${pair}, ${costStr}`;
     },
     axisLabelOf: (r, _i, expanded) =>
@@ -1170,8 +1176,15 @@ function renderDailyChart(rows) {
       // A day either source only partly covers is flagged with its hour count —
       // otherwise a half-reported day reads as a genuine drop in consumption.
       const hours = (n) => (n > 0 && n < 24 ? ` (${n}/24 h)` : "");
+      // Two different shortfalls, and they must not read as the same one.
+      // Hours missing means the estimate does not cover the day; minutes
+      // unrecorded means it does cover it, on top of a window where the meter
+      // reader was down and nothing measured the house at all.
+      const gap = (n) => (n >= 1 ? ` (${Math.round(n)} min unrecorded)` : "");
       const pair = fmtSeriesPair(d.measured_kwh, d.saveeye_kwh,
-        (isMeasured) => hours(isMeasured ? d.measuredHours : d.saveeyeHours));
+        (isMeasured) => (isMeasured
+          ? hours(d.measuredHours)
+          : hours(d.saveeyeHours) + gap(d.saveeyeUnrecordedMin)));
       return `${fmtDate(d.day)} — ${pair}, ${costStr}`;
     },
     axisLabelOf: (d, i, expanded) => (i % (expanded ? Math.max(1, Math.ceil(step / 2)) : step) === 0
