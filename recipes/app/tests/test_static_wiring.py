@@ -135,3 +135,61 @@ def test_a_logged_cooking_can_be_taken_back():
 def test_the_undo_appears_only_once_there_is_something_to_undo():
     line = JS[JS.index('class="muted cooked-line"'):JS.index('class="muted added"')]
     assert "recipe.times_cooked" in line, "undo should be conditional on the count"
+
+
+def test_both_ways_of_adding_are_behind_the_one_plus_button():
+    """A second icon in the topbar for "the other kind of adding" is a menu
+    growing out of a button that already means "add"."""
+    assert 'data-mode="paste"' in HTML and 'data-mode="write"' in HTML
+    assert 'id="mode-paste"' in HTML and 'id="mode-write"' in HTML
+    handler = JS[JS.index('el("add-mode").addEventListener'):]
+    assert 'el("mode-paste").hidden' in handler[:600]
+    assert 'el("mode-write").hidden' in handler[:600]
+
+
+def test_the_written_form_has_a_field_for_everything_a_recipe_holds():
+    """A form that cannot record servings is one you notice the first time you
+    use it, and the fields already exist in the schema."""
+    for field in ("own-name", "own-category", "own-servings", "own-minutes",
+                  "own-protein", "own-kcal", "own-method", "own-notes"):
+        assert f'id="{field}"' in HTML, f"the form has no {field}"
+
+
+def test_both_category_pickers_are_filled_from_one_place():
+    """A category added to the options file appearing in one sheet and not the
+    other is the kind of difference nobody reports and everybody works around."""
+    fn = JS[JS.index("async function loadSummary("):JS.index("\n}\n", JS.index("async function loadSummary("))]
+    assert '["prompt-category", "own-category"]' in fn
+
+
+def test_a_written_recipe_goes_through_the_same_reader_as_a_paste():
+    """Otherwise a typed "grams" never merges with a pasted "g" on the list,
+    and nothing about the app explains why."""
+    app_py = open(os.path.join(APP_DIR, "app.py"), encoding="utf-8").read()
+    route = app_py[app_py.index('@app.route("/api/recipes", methods=["POST"])'):]
+    assert "importer.normalise(" in route[:1600]
+    assert 'source="own"' in route[:1600]
+
+
+def test_writing_over_an_existing_recipe_has_to_be_asked_for():
+    """Replacing on a name match is right for a re-pasted pack. The thing being
+    replaced here is something somebody typed and cannot get back."""
+    app_py = open(os.path.join(APP_DIR, "app.py"), encoding="utf-8").read()
+    route = app_py[app_py.index('@app.route("/api/recipes", methods=["POST"])'):]
+    assert "store.find_by_name(" in route[:1600]
+    assert "409" in route[:1600]
+    handler = JS[JS.index("async function saveOwn("):]
+    assert "response.status === 409" in handler[:2000], "the form should offer to replace"
+
+
+def test_the_amount_is_sent_as_typed_rather_than_converted_twice():
+    """The importer already reads 1,5 — see its _number. Converting in the form
+    as well would put one rule in two places."""
+    fn = JS[JS.index("function ownIngredients(")::]
+    assert 'replace(",", ".")' not in fn[:900]
+
+
+def test_the_ingredient_rows_are_never_emptied_to_nothing():
+    """A form you have to rebuild from zero reads as broken."""
+    handler = JS[JS.index('el("own-ingredients").addEventListener'):]
+    assert "addIngredientRows(1)" in handler[:500]

@@ -20,7 +20,7 @@ import schema
 import seeding
 import store
 
-APP_VERSION = "1.5.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.6.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("RECIPES_DB_PATH", "/data/recipes.db")
 INGRESS_USER_ID_HEADER = "X-Remote-User-ID"
@@ -126,6 +126,50 @@ def api_delete_recipe(recipe_id):
     store.delete_recipe(db, recipe_id)
     db.commit()
     return jsonify({"deleted": recipe_id})
+
+
+@app.route("/api/recipes", methods=["POST"])
+def api_create_recipe():
+    """One recipe, written in by hand rather than pasted from an assistant.
+
+    Runs through the same importer the paste path uses. A recipe typed here and
+    the same recipe pasted should end up identical in the database — units
+    normalised, a missing Danish name falling back to the English one — and the
+    only way to be sure of that is for there to be one piece of code that
+    decides it.
+
+    Refuses to overwrite by default. Replacing on a name match is right for a
+    pasted pack, where re-pasting a half-worked import is normal; it is wrong
+    here, where the thing being replaced is something somebody typed out and
+    cannot get back. `replace: true` says to go ahead.
+    """
+    body = request.get_json(silent=True) or {}
+    db = get_db()
+    try:
+        parsed = importer.normalise(body)
+    except importer.PackError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    recipe = parsed["recipes"][0]
+    existing = store.find_by_name(db, recipe["name"], recipe["category"])
+    if existing and not body.get("replace"):
+        return jsonify({
+            "error": "already there",
+            "detail": f"You already have {existing['name']!r} in {existing['category']}.",
+            "existing_id": existing["id"],
+        }), 409
+
+    recipe_id = store.save_recipe(db, recipe, source="own")
+    db.commit()
+    return jsonify({
+        "id": recipe_id,
+        "replaced": bool(existing),
+        "recipe": store.get_recipe(db, recipe_id),
+        # The importer's notes, which are the useful ones here: an unrecognised
+        # unit will not merge on the shopping list, and a missing Danish name
+        # means the English one goes to the shop.
+        "warnings": parsed["warnings"],
+    })
 
 
 @app.route("/api/duplicates")

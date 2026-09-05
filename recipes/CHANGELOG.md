@@ -1,5 +1,31 @@
 # Changelog
 
+## 1.6.0
+
+- **Write a recipe in yourself.** **＋** now opens both ways in: **Paste a
+  reply** for a batch from an assistant, and **Write one** for the dish nobody
+  needs an assistant for. Until now the only door into the catalogue was a
+  paste, which is the right way to get twenty recipes and the wrong way to get
+  one.
+- Name, category and one ingredient are all it requires. Servings, time,
+  protein, calories and notes are there when you know them and blank when you
+  do not — a zero nobody meant is worse than an empty field.
+- An ingredient is amount, unit, the English name, and the Danish name under
+  it. The Danish one is what the shopping list is built from; left blank, the
+  English name stands in, which is one line to translate in the shop rather
+  than no recipe.
+- **It goes through the same reader a paste does.** A typed `grams` becomes
+  `g`, `1,5` reads as a number, and the aisle comes from the Danish name — so a
+  written recipe and the same recipe pasted are the same row in the database.
+  A typed `grams` that never merged with a pasted `g` would split one shopping
+  line in two and nothing would explain why.
+- **A name you already have is refused, not replaced.** Re-pasting a pack that
+  half-worked should land one copy, so the import path replaces on a name
+  match. Writing over something somebody typed out is a different matter, and
+  it now says what it found and offers **Replace it**.
+- The ＋ button and the empty state say "load a batch, or write one in
+  yourself", because a door nobody can find is not a door.
+
 ## 1.5.0
 
 - **"Made it" now says it counts, and can be undone.** It sat next to *Want to

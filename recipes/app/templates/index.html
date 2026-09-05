@@ -11,7 +11,7 @@
 <header class="topbar">
   <span class="topbar-icon">🍳</span>
   <h1>Recipes</h1>
-  <button type="button" class="topbar-icon-btn" id="import-btn" title="Load recipes">＋</button>
+  <button type="button" class="topbar-icon-btn" id="import-btn" title="Add recipes">＋</button>
 </header>
 
 <nav class="tabs" id="tabs">
@@ -41,7 +41,7 @@
          "0 duplicates" line is a thing you stop reading. -->
     <button type="button" class="dupe-nudge" id="dupe-nudge" hidden></button>
     <div id="recipe-list"></div>
-    <p class="empty-state" id="recipe-empty" hidden>Nothing here yet. Use ＋ to load some.</p>
+    <p class="empty-state" id="recipe-empty" hidden>Nothing here yet. Use ＋ to load a batch, or write one in yourself.</p>
   </section>
 </main>
 
@@ -88,10 +88,19 @@
 <div class="sheet-backdrop" id="import-backdrop" hidden data-close="import-backdrop">
   <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="import-title">
     <div class="sheet-head">
-      <h2 id="import-title">Load recipes</h2>
+      <h2 id="import-title">Add recipes</h2>
       <button type="button" class="topbar-icon-btn" data-close="import-backdrop" aria-label="Close">✕</button>
     </div>
 
+    <!-- Two ways in, one door. A batch from an assistant is what you do to
+         fill the catalogue; typing one is what you do for the dish your
+         grandmother made, which no assistant has. -->
+    <div class="seg seg-quiet" id="add-mode" role="tablist" aria-label="How to add">
+      <button type="button" class="seg-btn seg-on" data-mode="paste">Paste a reply</button>
+      <button type="button" class="seg-btn" data-mode="write">Write one</button>
+    </div>
+
+    <div id="mode-paste">
     <p class="muted">
       This add-on never goes online. Copy the prompt below, run it on any
       assistant you like, and paste the reply back here.
@@ -136,6 +145,74 @@
       <button type="button" class="btn-primary" id="do-import">Load it</button>
     </div>
     <div id="import-report"></div>
+    </div><!-- /mode-paste -->
+
+    <div id="mode-write" hidden>
+      <p class="muted">
+        Your own recipe, typed in. It goes through the same reader a pasted one
+        does, so it lands in the catalogue and on the shopping list identically.
+      </p>
+
+      <label class="field">
+        <span>Name</span>
+        <input type="text" id="own-name" placeholder="Grandmother's frikadeller"
+          autocomplete="off">
+      </label>
+      <label class="field">
+        <span>Category</span>
+        <select id="own-category"></select>
+      </label>
+      <div class="row row-fields">
+        <label class="field field-inline">
+          <span>Servings</span>
+          <input type="number" id="own-servings" min="1" max="24" placeholder="4">
+        </label>
+        <label class="field field-inline">
+          <span>Minutes</span>
+          <input type="number" id="own-minutes" min="1" max="600" placeholder="30">
+        </label>
+      </div>
+      <!-- Both optional, and blank means unknown rather than zero. Protein is
+           here because it is the figure that decides one bulk meal over
+           another; inventing it would be worse than leaving it out. -->
+      <div class="row row-fields">
+        <label class="field field-inline">
+          <span>Protein <em class="field-hint">g, optional</em></span>
+          <input type="number" id="own-protein" min="0" max="500">
+        </label>
+        <label class="field field-inline">
+          <span>Calories <em class="field-hint">optional</em></span>
+          <input type="number" id="own-kcal" min="0" max="5000">
+        </label>
+      </div>
+
+      <h3>Ingredients</h3>
+      <div id="own-ingredients"></div>
+      <button type="button" class="btn-secondary full" id="own-add-row">+ Another ingredient</button>
+      <!-- The Danish name is what the shopping list is built from. Left blank
+           the English one stands in, which is a shopping list with one line you
+           have to translate in the shop rather than no recipe at all. -->
+      <p class="field-note">
+        The Danish name is what goes on the shopping list. Leave it blank and
+        the English one is used instead.
+      </p>
+
+      <label class="field">
+        <span>Method</span>
+        <textarea id="own-method" rows="6"
+          placeholder="1. Chop the onion.&#10;2. Brown the mince."></textarea>
+      </label>
+      <label class="field">
+        <span>Notes <em class="field-hint">optional</em></span>
+        <textarea id="own-notes" rows="2"
+          placeholder="Freezes well. Double the batch."></textarea>
+      </label>
+
+      <div class="row">
+        <button type="button" class="btn-primary full" id="own-save">Save the recipe</button>
+      </div>
+      <div id="own-report"></div>
+    </div><!-- /mode-write -->
   </div>
 </div>
 

@@ -65,10 +65,15 @@ of is still something you need, and hiding it means noticing in the shop rather
 than at home. The header says how many of the items are staples, so the count
 is not quietly inflated by things you own.
 
-## Loading more recipes
+## Adding recipes
 
-**＋** → pick a category and what to ask for → **Copy the prompt**. Run it on
-whatever assistant you have, paste the reply into the box, and press **Load it**.
+**＋** opens both ways in: **Paste a reply** for a batch from an assistant, and
+**Write one** for a recipe you have yourself.
+
+### Pasting a batch
+
+Pick a category and what to ask for → **Copy the prompt**. Run it on whatever
+assistant you have, paste the reply into the box, and press **Load it**.
 **Check it** parses without saving, so a paste can be inspected first.
 
 Anything unusable is dropped and listed rather than failing the whole paste — a
@@ -77,6 +82,31 @@ error, because the only other remedy is asking again.
 
 Loading a pack twice replaces rather than duplicates: a recipe is identified by
 its name and category.
+
+### Writing one yourself
+
+For the dish nobody needs an assistant for — your grandmother's frikadeller,
+the thing you have made every fortnight for years. Name, category and at least
+one ingredient are all that is required; servings, time, protein, calories and
+notes are there when you know them and blank when you do not, because a zero
+you did not mean is worse than an empty field.
+
+An ingredient is amount, unit, the English name, and the Danish name under it.
+**The Danish name is the one the shopping list is built from.** Leave it blank
+and the English name stands in — one line to translate in the shop, rather than
+no recipe.
+
+It goes through the same reader a pasted recipe does, so the two land
+identically: `grams` becomes `g` either way, `1,5` is read as a number, and the
+aisle a thing belongs in is worked out from the Danish name. That matters more
+than it sounds — a typed `grams` that never merged with a pasted `g` would
+split one line on the shopping list into two, and nothing in the app would
+explain why.
+
+Unlike a pasted pack, **a name you already have is refused rather than
+replaced.** Re-pasting a half-worked import is a normal thing to do; writing
+over ten minutes of typing is not. The form says what it found and offers
+**Replace it** if that is what you meant.
 
 ## Nutrition
 

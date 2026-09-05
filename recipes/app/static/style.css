@@ -191,6 +191,21 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent-soft
   color: var(--text-muted); }
 .field-note { font-size: 0.74rem; color: var(--text-muted); margin-top: 0.25rem; }
 .keyword-chips { display: flex; flex-wrap: wrap; gap: 0.3rem; margin: -0.4rem 0 0.8rem; }
+
+
+/* --- writing a recipe yourself ---------------------------------------------
+   An ingredient is four answers, and four boxes across a phone is four boxes
+   too narrow to read. So: amount, unit and name on the line, the Danish name
+   under it — the one that is usually left blank sits where a blank is least
+   in the way. */
+.ing-row { display: grid; grid-template-columns: 3.6rem 3rem 1fr auto;
+  gap: 0.3rem; margin-bottom: 0.5rem; align-items: center; }
+.ing-in { font-size: 0.85rem; padding: 0.4rem 0.5rem; }
+.ing-in-shop { grid-column: 1 / -1; }
+.ing-drop { padding: 0.3rem 0.5rem; }
+/* Two short numbers side by side rather than each on its own line. Not .row's
+   default stretch: a servings box as wide as the sheet invites a paragraph. */
+.row-fields { align-items: flex-start; }
 .chip {
   font-size: 0.74rem; padding: 0.15rem 0.5rem; border-radius: 999px;
   background: var(--accent-soft); color: var(--accent);

@@ -100,9 +100,12 @@ async function loadSummary() {
   }
   filter.innerHTML = all.join("");
 
-  const select = el("prompt-category");
-  select.innerHTML = state.summary.categories
+  const options = state.summary.categories
     .map((c) => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join("");
+  // Both sheets ask the same question of the same list. Filling them from one
+  // place is how a category added to the options file cannot appear in one and
+  // not the other.
+  for (const id of ["prompt-category", "own-category"]) el(id).innerHTML = options;
 
   // Shown only when there is something to act on. A permanent "0 duplicates"
   // line is one you stop reading, and then miss the day it says 3.
@@ -593,6 +596,150 @@ async function sendImport(path) {
 
 el("check-import").addEventListener("click", () => sendImport("api/import/preview"));
 el("do-import").addEventListener("click", () => sendImport("api/import"));
+
+
+// --- writing one yourself ----------------------------------------------------
+//
+// The other half of the same door. A batch from an assistant is how you fill
+// the catalogue; typing one is how the dish your grandmother made gets in, and
+// no prompt is going to produce that one.
+
+el("add-mode").addEventListener("click", (event) => {
+  const button = event.target.closest("[data-mode]");
+  if (!button) return;
+  for (const other of el("add-mode").querySelectorAll(".seg-btn")) {
+    other.classList.toggle("seg-on", other === button);
+  }
+  const writing = button.dataset.mode === "write";
+  el("mode-paste").hidden = writing;
+  el("mode-write").hidden = !writing;
+  // A form with no rows to fill in reads as a form that is still loading.
+  if (writing && !el("own-ingredients").children.length) addIngredientRows(3);
+});
+
+// A row is plain DOM rather than state re-rendered on every keystroke: half-typed
+// text lives in the inputs, and rebuilding the list under someone's fingers is
+// how a caret jumps to the end mid-word.
+function addIngredientRows(count = 1) {
+  const host = el("own-ingredients");
+  for (let i = 0; i < count; i++) {
+    const row = document.createElement("div");
+    row.className = "ing-row";
+    row.innerHTML = `
+      <input type="text" class="ing-in ing-in-amount" placeholder="400" inputmode="decimal"
+        aria-label="Amount" autocomplete="off">
+      <input type="text" class="ing-in ing-in-unit" placeholder="g"
+        aria-label="Unit" autocapitalize="none" autocomplete="off">
+      <input type="text" class="ing-in ing-in-name" placeholder="cod"
+        aria-label="Ingredient" autocomplete="off">
+      <button type="button" class="btn-small ing-drop" aria-label="Remove">✕</button>
+      <input type="text" class="ing-in ing-in-shop" placeholder="torsk — Danish, optional"
+        aria-label="Danish name" autocomplete="off">`;
+    host.appendChild(row);
+  }
+}
+
+el("own-add-row").addEventListener("click", () => addIngredientRows(1));
+
+el("own-ingredients").addEventListener("click", (event) => {
+  if (!event.target.closest(".ing-drop")) return;
+  event.target.closest(".ing-row").remove();
+  // Never down to nothing: an empty list has no "+" to aim at except the one
+  // below it, and a form you have to rebuild from zero reads as broken.
+  if (!el("own-ingredients").children.length) addIngredientRows(1);
+});
+
+function ownIngredients() {
+  return [...el("own-ingredients").querySelectorAll(".ing-row")].map((row) => {
+    const value = (selector) => row.querySelector(selector).value.trim();
+    return {
+      name: value(".ing-in-name"),
+      shop_name: value(".ing-in-shop"),
+      // Sent as typed, comma and all. The importer already reads 1,5 — see
+      // its _number — and converting here as well would put the rule in two
+      // places, which is how they come to disagree.
+      amount: value(".ing-in-amount"),
+      unit: value(".ing-in-unit"),
+    };
+  // Blank rows are how the form ships — three of them — not something to
+  // complain about. Only a row with something in it has to make sense.
+  }).filter((i) => i.name || i.amount || i.unit || i.shop_name);
+}
+
+function ownRecipe() {
+  const number = (id) => Number(el(id).value) || null;
+  return {
+    name: el("own-name").value.trim(),
+    category: el("own-category").value,
+    servings: number("own-servings"),
+    minutes: number("own-minutes"),
+    protein_g: number("own-protein"),
+    kcal: number("own-kcal"),
+    method: el("own-method").value.trim(),
+    notes: el("own-notes").value.trim(),
+    ingredients: ownIngredients(),
+  };
+}
+
+function clearOwnForm() {
+  for (const id of ["own-name", "own-servings", "own-minutes", "own-protein",
+                    "own-kcal", "own-method", "own-notes"]) el(id).value = "";
+  el("own-ingredients").innerHTML = "";
+  addIngredientRows(3);
+}
+
+async function saveOwn(replace) {
+  const report = el("own-report");
+  const recipe = ownRecipe();
+  // Answered here rather than by the server's 400, because the server can only
+  // say "no usable recipes in that paste" — true, and useless in front of a
+  // form with named fields.
+  if (!recipe.name) {
+    report.innerHTML = '<div class="notice notice-warn">It needs a name.</div>';
+    return;
+  }
+  if (!recipe.ingredients.length) {
+    report.innerHTML = '<div class="notice notice-warn">It needs at least one ingredient.</div>';
+    return;
+  }
+
+  const response = await fetch("api/recipes", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...recipe, replace: Boolean(replace) }),
+  });
+  const body = await response.json().catch(() => null);
+
+  // Not an error to shout about: you asked for something the catalogue already
+  // has, and the only question is whether you meant to write over it.
+  if (response.status === 409) {
+    report.innerHTML = `<div class="notice notice-warn">${escapeHtml(body.detail)}
+      <button type="button" class="link-btn" id="own-replace">Replace it</button></div>`;
+    el("own-replace").addEventListener("click", () => saveOwn(true));
+    return;
+  }
+  if (!response.ok) {
+    report.innerHTML = `<div class="notice notice-warn">${
+      escapeHtml((body && body.error) || `server returned ${response.status}`)}</div>`;
+    return;
+  }
+
+  report.innerHTML = "";
+  clearOwnForm();
+  toast(body.replaced ? `Replaced ${body.recipe.name}.` : `Saved ${body.recipe.name}.`);
+  // The notes are worth keeping in front of you — an ingredient with no Danish
+  // name goes to the shop in English, and that is better found now than in the
+  // shop. Shown on the recipe you just saved rather than as a toast that goes.
+  closeSheet("import-backdrop");
+  await loadSummary();
+  await loadRecipes();
+  await openRecipe(body.id);
+  if (body.warnings && body.warnings.length) {
+    toast(body.warnings.length === 1 ? body.warnings[0]
+          : `Saved, with ${body.warnings.length} notes — see the shopping names.`);
+  }
+}
+
+el("own-save").addEventListener("click", () => saveOwn(false));
 
 
 // --- boot --------------------------------------------------------------------

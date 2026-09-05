@@ -111,6 +111,21 @@ def counts(conn):
 # --- writing ------------------------------------------------------------------
 
 
+def find_by_name(conn, name, category):
+    """The recipe a save would land on, or None.
+
+    Same normalised key save_recipe matches on, so "what would this replace"
+    and "what does this replace" can never disagree. Pasting a pack twice
+    replacing one copy is right; a hand-written recipe quietly overwriting one
+    you spent ten minutes typing is not, so the caller can look first.
+    """
+    row = conn.execute(
+        "SELECT * FROM recipes WHERE dedupe_key = ? ORDER BY updated_at DESC, id DESC LIMIT 1",
+        (schema.key_text((name or "").strip(), (category or "").strip()),),
+    ).fetchone()
+    return _as_recipe(conn, row) if row else None
+
+
 def save_recipe(conn, recipe, source="import"):
     """Insert or replace a recipe by (name, category).
 
