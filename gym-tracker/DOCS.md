@@ -362,6 +362,51 @@ for an open-ended daily habit.
 Archiving a challenge hides it without deleting anything: its items and every
 tick you made stay in the database.
 
+### Scoring
+
+A challenge can keep a **running score**. It is off by default and switched on
+per challenge, under **Scoring** in *Edit challenge*:
+
+- A due day you **finish** earns **points a day kept** (10 by default).
+- A due day you **miss** deducts **penalty a day missed** (10 by default).
+- **Rest days are worth nothing** either way — a schedule that didn't ask for
+  the day can't charge you for it.
+
+Either weight can be set to 0: a penalty of 0 makes it a pure reward tally, and
+points of 0 makes it a pure count of what you dropped. The score is allowed to
+go **negative**, and it is drawn below a dashed zero line when it does. A
+deficit is the honest number; flooring it at zero would make a bad fortnight and
+a bad quarter read exactly alike.
+
+**A miss is only charged once the day is over.** Today, still open, is neither
+kept nor missed — the card says what it is worth instead: *+10 if you finish
+today · −10 if you don't*. Finish it and the points land straight away. This is
+the same rule the streak and the statistics already follow, and it exists
+because charging the day's penalty from midnight puts it on the board before the
+day has had a chance to earn anything.
+
+**The score is never stored.** It is recomputed from your ticks every time it is
+shown, which is what makes it correctable: backfill a missed day in **History**
+and its penalty is repaid; un-tick a day and it is charged back. A stored
+running total would drift away from the record the first time either happened,
+and there would be no way to tell which of the two was lying.
+
+**The ledger opens the day you switch scoring on** — never before it. Turning it
+on for a habit you have been running for months starts you at zero rather than
+handing you a backdated deficit for days nobody was keeping score of. The card
+in Trends says *counting since* that date. Switching scoring back **off** keeps
+where the ledger opened, so an accidental toggle doesn't throw the score away;
+switching it on again resumes the same count.
+
+The **home card** shows the score, what last moved it (*+10 yesterday*), a
+sparkline of the last 30 scored days, and what today is still worth. **Trends**
+adds the score as a fourth tile and breaks it into its two halves — days kept
+and what they earned, days missed and what they cost — because "kept 24, dropped
+5" and a score of 190 are different facts.
+
+**Repeating** a scored challenge carries the settings over but opens a **fresh
+ledger** on the new run's first day. The previous run keeps its own score.
+
 **Repeat this challenge**, on its Trends card, starts another run of the same
 challenge: the same items, the same length, beginning today, with the dates
 editable before it is created. The original keeps its own record.
@@ -390,6 +435,9 @@ The **Trends** tab shows, for each challenge:
 - **Completion rate** — days where every item was ticked, out of the days the
   challenge was actually due (rest days don't count against you).
 - **Current and longest streak**.
+- **Score**, where the challenge is scored, with the days kept and the days
+  missed shown as the two halves that make it up. See
+  [Scoring](#scoring) above.
 - **Adherence**, one bar per day for the last 30: all done, partly done,
   missed, or a rest day. A missed day is drawn as an empty track rather than a flat bar, so
   it never looks like data that's simply absent.

@@ -1001,6 +1001,77 @@ function renderChallenge(list) {
   host.innerHTML = running.map(challengeCardHtml).join("");
 }
 
+// "yesterday" beats a date for the day just gone: it is the one the score most
+// often just moved on, and reading a date to work out whether it means today is
+// work the card can do for you.
+function dayLabel(day, today) {
+  if (!day) return "";
+  if (day === today) return "today";
+  // Stepped in UTC and read back in UTC. Doing the arithmetic in local time and
+  // formatting with toISOString() lands a day out for every zone east of
+  // Greenwich, which turns "yesterday" into a date for half the world.
+  const before = new Date(`${today}T00:00:00Z`);
+  before.setUTCDate(before.getUTCDate() - 1);
+  return day === before.toISOString().slice(0, 10) ? "yesterday" : `on ${fmtDate(day)}`;
+}
+
+// A delta always states its direction; a total only states a minus, because
+// "+190" reads as a change and 190 is a position.
+function signed(n) { return `${n > 0 ? "+" : n < 0 ? "\u2212" : ""}${Math.abs(n)}`; }
+function scoreText(n) { return `${n < 0 ? "\u2212" : ""}${Math.abs(n)}`; }
+
+// The score, where it has been, and what today is still worth.
+//
+// Nothing here is stored: the ledger is recomputed from the completion record
+// every time, so a day put right in History puts the score right with it. The
+// zero line is drawn because a score can go negative, and a line that dips
+// below nothing has to be visibly below *something* to say so.
+function scoreStripHtml(ch) {
+  const sc = ch.score;
+  if (!sc || !sc.enabled) return "";
+  const series = sc.series || [];
+  const last = sc.last_change;
+  const lastText = last
+    ? `<span class="score-delta ${last.delta < 0 ? "down" : "up"}">${signed(last.delta)} ${escapeHtml(dayLabel(last.day, ch.today))}</span>`
+    : '<span class="score-delta muted">no scored days yet</span>';
+
+  let spark = "";
+  if (series.length > 1) {
+    const W = 300, H = 34, pad = 4;
+    const scores = series.map((p) => p.score).concat([0]);
+    const lo = Math.min(...scores), hi = Math.max(...scores);
+    const span = hi - lo || 1;
+    const sx = (i) => (series.length === 1 ? W / 2 : (i / (series.length - 1)) * W);
+    const sy = (v) => pad + (1 - (v - lo) / span) * (H - pad * 2);
+    const line = series.map((p, i) => `${sx(i).toFixed(1)},${sy(p.score).toFixed(1)}`).join(" ");
+    const zero = sy(0).toFixed(1);
+    const tip = sc.score;
+    spark = `
+      <svg class="score-spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img"
+           aria-label="Score over the last ${series.length} scored days">
+        <line x1="0" y1="${zero}" x2="${W}" y2="${zero}" class="score-zero"/>
+        <polyline points="${line}" class="score-line ${tip < 0 ? "down" : ""}"/>
+        <circle cx="${sx(series.length - 1).toFixed(1)}" cy="${sy(tip).toFixed(1)}" r="2.5" class="score-dot"/>
+      </svg>`;
+  }
+
+  // Today is not counted until it is over, so the card states the stake rather
+  // than pretending the day is already lost.
+  const stake = sc.at_stake
+    ? `<p class="score-stake">${signed(sc.at_stake.gain)} if you finish today · ${signed(-sc.at_stake.risk)} if you don't</p>`
+    : "";
+  return `
+    <div class="score-strip">
+      <div class="score-head">
+        <span class="score-value${sc.score < 0 ? " down" : ""}">${scoreText(sc.score)}</span>
+        <span class="score-label">Score</span>
+        ${lastText}
+      </div>
+      ${spark}
+      ${stake}
+    </div>`;
+}
+
 function challengeCardHtml(ch) {
   const items = (ch.items || [])
     .map(
@@ -1052,6 +1123,7 @@ function challengeCardHtml(ch) {
         <h2>${escapeHtml(ch.name)}</h2>
         <span class="pill pill-streak">🔥 ${ch.streak}</span>
       </div>
+      ${scoreStripHtml(ch)}
       ${body}
       ${empty}
       <div class="week-dots">${dots}</div>
@@ -1411,9 +1483,51 @@ function readScheduleFields() {
   return { schedule_kind: "daily" };
 }
 
+const SCORING_NOTE =
+  "A day you finish earns its points; a due day you miss deducts the penalty " +
+  "once the day is over. Today is never counted against you while it is still " +
+  "open, and rest days are worth nothing either way.";
+
+function syncScoringFields() {
+  const on = document.getElementById("challenge-edit-scoring").value === "on";
+  document.getElementById("challenge-edit-scoring-fields").hidden = !on;
+}
+document.getElementById("challenge-edit-scoring").addEventListener("change", syncScoringFields);
+
+function setScoringFields(scoring) {
+  document.getElementById("challenge-edit-scoring").value =
+    scoring && scoring.enabled ? "on" : "off";
+  document.getElementById("challenge-edit-points").value =
+    scoring && scoring.points_per_day != null ? scoring.points_per_day : 10;
+  document.getElementById("challenge-edit-penalty").value =
+    scoring && scoring.penalty_per_miss != null ? scoring.penalty_per_miss : 10;
+  // Where the ledger stands, said before you save rather than after. Switching
+  // scoring on for a challenge that has been running a while opens the ledger
+  // today, and someone expecting their past misses to be charged for should
+  // find that out here and not by wondering why the score reads zero.
+  const note = document.getElementById("challenge-edit-scoring-note");
+  const since = scoring && scoring.since;
+  note.textContent = SCORING_NOTE + (
+    since
+      ? ` Counting since ${fmtDate(since)}.`
+      : " The count opens the day you switch this on — days before it are not charged for."
+  );
+  syncScoringFields();
+}
+
+function readScoringFields() {
+  const on = document.getElementById("challenge-edit-scoring").value === "on";
+  return {
+    scoring_enabled: on,
+    points_per_day: document.getElementById("challenge-edit-points").value,
+    penalty_per_miss: document.getElementById("challenge-edit-penalty").value,
+  };
+}
+
 function openChallengeEditor(ch) {
   delete document.getElementById("challenge-edit-form").dataset.repeatOf;
   setScheduleFields(ch && ch.schedule);
+  setScoringFields(ch && ch.scoring);
   document.getElementById("challenge-edit-title").textContent = ch ? "Edit challenge" : "New challenge";
   document.getElementById("challenge-edit-id").value = ch ? ch.id : "";
   document.getElementById("challenge-edit-name").value = ch ? ch.name : "";
@@ -1439,6 +1553,7 @@ document.getElementById("challenge-edit-form").addEventListener("submit", async 
     // Sent even when empty: that is how an end date gets cleared.
     end_date: document.getElementById("challenge-edit-end").value,
     ...readScheduleFields(),
+    ...readScoringFields(),
   };
   const url = repeatOf
     ? `api/challenges/${repeatOf}/repeat`
@@ -1630,6 +1745,9 @@ async function openChallengeRepeat(sourceId) {
   }
   openChallengeEditor(null);
   setScheduleFields(src.schedule);
+  // The repeat inherits how the original was scored; the server opens it a
+  // fresh ledger starting on the new run's first day.
+  setScoringFields(src.scoring);
   document.getElementById("challenge-edit-title").textContent = `Repeat · ${src.name}`;
   document.getElementById("challenge-edit-name").value = src.name;
   document.getElementById("challenge-edit-start").value = todayISO();
@@ -1690,12 +1808,43 @@ function describeSchedule(schedule) {
   return (schedule.weekdays || []).map((d) => WEEKDAY_NAMES[d]).join(", ");
 }
 
+// What the score is made of. The two halves are shown side by side rather than
+// netted off, because "kept 24, dropped 6" and a score of 180 are different
+// facts: the score says where you stand, this says how you got there.
+function scoreLedgerHtml(score) {
+  if (!score) return "";
+  const since = score.since ? ` · counting since ${escapeHtml(fmtDate(score.since))}` : "";
+  const total = score.days_kept + score.days_missed;
+  if (!total) {
+    // Scored, but nothing to show yet — said plainly, because an empty ledger
+    // and a ledger that nets to zero look identical and mean opposite things.
+    const opened = score.since ? ` Counting since ${escapeHtml(fmtDate(score.since))}.` : "";
+    return `<p class="challenge-progress">Scored — no day has settled yet.${opened}</p>`;
+  }
+  const gain = Math.max(score.earned, score.lost) || 1;
+  return `
+    <div class="score-ledger">
+      <div class="ghist-row">
+        <span class="ghist-day">${score.days_kept} kept</span>
+        <span class="ghist-bar"><span class="ghist-fill" style="width:${Math.round((score.earned / gain) * 100)}%"></span></span>
+        <span class="ghist-val score-up">+${score.earned}</span>
+      </div>
+      <div class="ghist-row">
+        <span class="ghist-day">${score.days_missed} missed</span>
+        <span class="ghist-bar"><span class="ghist-fill score-fill-down" style="width:${Math.round((score.lost / gain) * 100)}%"></span></span>
+        <span class="ghist-val score-down">\u2212${score.lost}</span>
+      </div>
+    </div>
+    <p class="challenge-progress">${score.points_per_day} a day kept · ${score.penalty_per_miss} a day missed${since}</p>`;
+}
+
 function challengeStatsHtml(st) {
   const period = st.end_date
     ? `${fmtDate(st.start_date)} – ${fmtDate(st.end_date)}`
     : `since ${fmtDate(st.start_date)}`;
   const schedule = describeSchedule(st.schedule);
   const pct = st.completion_pct == null ? "—" : `${st.completion_pct}%`;
+  const score = st.score && st.score.enabled ? st.score : null;
 
   // One bar per day: complete, partly done, or missed. A missed day is drawn
   // as an empty track rather than a zero-height bar, so it reads as "nothing
@@ -1763,7 +1912,9 @@ function challengeStatsHtml(st) {
         <div class="mini-stat"><span class="mini-value">${pct}</span><span class="mini-label">Completed</span></div>
         <div class="mini-stat"><span class="mini-value">🔥 ${st.current_streak}</span><span class="mini-label">Streak</span></div>
         <div class="mini-stat"><span class="mini-value">${st.longest_streak}</span><span class="mini-label">Longest</span></div>
+        ${score ? `<div class="mini-stat"><span class="mini-value${score.score < 0 ? " score-down" : ""}">${scoreText(score.score)}</span><span class="mini-label">Score</span></div>` : ""}
       </div>
+      ${scoreLedgerHtml(score)}
       <p class="challenge-progress">${st.days_complete} of ${st.days_elapsed} ${schedule ? "due " : ""}days${st.pending_today ? " · today still open" : ""}${schedule ? ` · ${escapeHtml(schedule)}` : ""}</p>
 
       <figure class="chart-figure">

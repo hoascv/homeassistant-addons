@@ -1,5 +1,41 @@
 # Changelog
 
+## 1.50.0
+
+- **A challenge can keep a score now, and a missed day costs you.** Off by
+  default and switched on per challenge: a due day you finish earns its points,
+  a due day you miss deducts a penalty, and rest days are worth nothing either
+  way. Both weights are yours to set — a penalty of zero makes it a pure reward
+  tally, points of zero makes it a pure count of what you dropped.
+- **A miss is only charged once the day is over.** Today is neither kept nor
+  missed while it is still winnable; the card states the stake instead — *+10 if
+  you finish today · −10 if you don't* — and the points land the moment you
+  finish. Charging the day from midnight would put its penalty on the board
+  before the day had a chance to earn anything, which is both wrong and the most
+  discouraging possible moment to be wrong at. It is the same rule the streak and
+  the statistics already follow.
+- **The score is never stored.** It is recomputed from your ticks every time it
+  is shown, which is the whole reason it can be *corrected*: backfill a missed
+  day in History and its penalty is repaid; un-tick a day and it is charged back.
+  A stored running total drifts away from the record the first time either
+  happens, and then nothing on the screen can tell you which of the two is lying.
+- **Switching scoring on never backdates a deficit.** The ledger opens that day.
+  Turning it on for a habit you have kept for months starts you at zero rather
+  than presenting a bill for days nobody was keeping score of. Switching it back
+  off remembers where the ledger opened, so an accidental toggle cannot throw the
+  score away.
+- **The score is allowed to go negative**, and is drawn below a dashed zero line
+  when it is. Flooring it at zero would make a bad fortnight and a bad quarter
+  read exactly alike.
+- Home shows the score, what last moved it, a sparkline of the last 30 scored
+  days, and what today is worth. Trends adds it as a fourth tile and splits it
+  into the days kept and the days missed — a score of 190 and "kept 24, dropped
+  5" are different facts, and the second is the one you can act on.
+- Repeating a scored challenge carries the settings but opens a fresh ledger on
+  the new run's first day; the old run keeps its own score.
+- The colours are never the only signal: every figure carries its own sign, so
+  the red and green pair stays readable to someone who cannot tell them apart.
+
 ## 1.49.0
 
 - **Twenty-one more stoic quotes**, taking the list from 16 to 37 — enough that

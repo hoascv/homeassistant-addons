@@ -247,6 +247,36 @@ body {
 }
 .wstrip-dot { fill: var(--surface); stroke: var(--accent); stroke-width: 2; vector-effect: non-scaling-stroke; }
 
+/* Score strip: the running score on a challenge card. Colour is never the only
+   signal — the number carries its own sign, so a red/green pair stays readable
+   to someone who cannot tell them apart. */
+.score-strip { margin: 0 0 0.7rem; }
+.score-head { display: flex; align-items: baseline; gap: 0.4rem; flex-wrap: wrap; }
+.score-value { font-size: 1.25rem; font-weight: 700; color: var(--success); }
+.score-value.down { color: var(--danger); }
+.score-label { font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.score-delta { margin-left: auto; font-size: 0.8rem; font-weight: 600; }
+.score-delta.up { color: var(--success); }
+.score-delta.down { color: var(--danger); }
+.score-spark { display: block; width: 100%; height: 34px; margin-top: 0.35rem; overflow: visible; }
+.score-line {
+  fill: none; stroke: var(--success); stroke-width: 2;
+  stroke-linejoin: round; stroke-linecap: round; vector-effect: non-scaling-stroke;
+}
+.score-line.down { stroke: var(--danger); }
+.score-zero { stroke: var(--border); stroke-width: 1; stroke-dasharray: 3 3; vector-effect: non-scaling-stroke; }
+.score-dot { fill: var(--surface); stroke: var(--success); stroke-width: 2; vector-effect: non-scaling-stroke; }
+.score-line.down ~ .score-dot { stroke: var(--danger); }
+.score-stake {
+  margin: 0.35rem 0 0; font-size: 0.78rem; color: var(--text-muted);
+}
+
+/* Trends: what the score is made of. */
+.score-ledger { margin: 0.2rem 0 0.4rem; }
+.score-up { color: var(--success); }
+.score-down { color: var(--danger); }
+.score-fill-down { background: var(--danger); }
+
 /* Garmin daily history */
 .ghist-head {
   display: flex; align-items: center; justify-content: space-between;

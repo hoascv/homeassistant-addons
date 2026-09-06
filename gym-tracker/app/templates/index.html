@@ -373,6 +373,27 @@
           <button type="button" data-day="6">S</button>
         </div>
       </div>
+      <label class="full-label">Scoring
+        <select id="challenge-edit-scoring">
+          <option value="off">Off</option>
+          <option value="on">Keep a score</option>
+        </select>
+      </label>
+      <div id="challenge-edit-scoring-fields" hidden>
+        <div class="field-row">
+          <label>Points a day kept
+            <input type="number" id="challenge-edit-points" min="0" max="1000" value="10">
+          </label>
+          <label>Penalty a day missed
+            <input type="number" id="challenge-edit-penalty" min="0" max="1000" value="10">
+          </label>
+        </div>
+        <p class="sheet-subtext" id="challenge-edit-scoring-note">
+          A day you finish earns its points; a due day you miss deducts the
+          penalty once the day is over. Today is never counted against you while
+          it is still open, and rest days are worth nothing either way.
+        </p>
+      </div>
       <div class="form-actions">
         <button type="button" class="btn-secondary" id="challenge-edit-delete" hidden>Archive</button>
         <button type="submit" class="btn-primary">Save</button>

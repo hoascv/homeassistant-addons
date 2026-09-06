@@ -20,7 +20,7 @@ from flask import Flask, Response, g, jsonify, render_template, request, send_fi
 import garmin_client
 import meals
 
-APP_VERSION = "1.49.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.50.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("GYM_DB_PATH", "/data/gym.db")
 OPTIONS_PATH = os.environ.get("GYM_OPTIONS_PATH", "/data/options.json")
@@ -85,6 +85,18 @@ STOIC_QUOTES = [
 # home screen instead of empty state. All editable afterwards.
 SEED_START_DATE = "2026-07-03"
 DEFAULT_CHALLENGE_NAME = "Daily challenge"
+# Scoring. A challenge can keep a running score: a due day kept earns points, a
+# due day missed deducts them. Ten and ten because equal weights are the only
+# ones that need no explaining — a day kept is worth exactly a day dropped, and
+# the score reads as "days ahead, times ten".
+DEFAULT_POINTS_PER_DAY = 10
+DEFAULT_PENALTY_PER_MISS = 10
+# Bounds. Zero is allowed on either side — a penalty of 0 makes the score a
+# pure reward tally, and points of 0 makes it a pure penalty count — but a
+# five-figure swing per day is a typo, not an intention.
+MAX_SCORE_WEIGHT = 1000
+# How many scored days the home card's sparkline carries. Trends shows the run.
+CARD_SCORE_DAYS = 30
 SEED_START_WEIGHT = 99.7
 SEED_GOAL = {
     "target_date": "2026-12-28",
@@ -632,7 +644,11 @@ def init_db():
             schedule_kind TEXT NOT NULL DEFAULT 'daily',
             schedule_interval INTEGER,
             schedule_weekdays TEXT,
-            celebrated_at TEXT
+            celebrated_at TEXT,
+            scoring_enabled INTEGER NOT NULL DEFAULT 0,
+            points_per_day INTEGER NOT NULL DEFAULT 10,
+            penalty_per_miss INTEGER NOT NULL DEFAULT 10,
+            scoring_from TEXT
         )
         """
     )
@@ -987,6 +1003,21 @@ def _migrate_columns(conn):
             "WHERE end_date IS NOT NULL AND end_date < ?",
             (_now_ts(), date.today().isoformat()),
         )
+    if "scoring_enabled" not in challenge_cols:
+        # Points for a day kept, a deduction for one missed. Off for every
+        # existing challenge: a score nobody asked for, arriving with a
+        # backdated deficit already on it, is not a feature.
+        conn.execute("ALTER TABLE challenges ADD COLUMN scoring_enabled INTEGER NOT NULL DEFAULT 0")
+        conn.execute(
+            f"ALTER TABLE challenges ADD COLUMN points_per_day INTEGER NOT NULL "
+            f"DEFAULT {DEFAULT_POINTS_PER_DAY}"
+        )
+        conn.execute(
+            f"ALTER TABLE challenges ADD COLUMN penalty_per_miss INTEGER NOT NULL "
+            f"DEFAULT {DEFAULT_PENALTY_PER_MISS}"
+        )
+        # The day the ledger opens. NULL until scoring is switched on.
+        conn.execute("ALTER TABLE challenges ADD COLUMN scoring_from TEXT")
 
     item_cols = {row[1] for row in conn.execute("PRAGMA table_info(challenge_items)")}
     if "challenge_id" not in item_cols:
@@ -2631,6 +2662,87 @@ def _longest_streak(days):
     return best
 
 
+def _scoring_view(ch):
+    """The scoring settings as the API states them."""
+    per_day = ch.get("points_per_day")
+    penalty = ch.get("penalty_per_miss")
+    return {
+        "enabled": bool(ch.get("scoring_enabled")),
+        "points_per_day": DEFAULT_POINTS_PER_DAY if per_day is None else int(per_day),
+        "penalty_per_miss": DEFAULT_PENALTY_PER_MISS if penalty is None else int(penalty),
+        "since": ch.get("scoring_from"),
+    }
+
+
+def _challenge_score(ch, days, cap=180):
+    """The running score: a due day kept earns points, a due day missed deducts
+    them. Returns None for a challenge that is not scored.
+
+    Nothing is stored. The ledger is recomputed from the completion record every
+    time it is asked for, which is what makes it *correctable*: backfilling a
+    day in History repays its penalty, and un-ticking one charges it. A stored
+    running total would drift away from the record the first time either
+    happened, and there would be no way to tell which of the two was lying.
+
+    A miss is only charged once the day is over. Today, still open, is neither
+    kept nor missed — it is at stake, and the card says so. Charging it from
+    midnight would put the day's penalty on the board before the day had a
+    chance to earn anything, which is both wrong and the most discouraging
+    possible moment to be wrong at.
+    """
+    scoring = _scoring_view(ch)
+    if not scoring["enabled"]:
+        return None
+    gain = scoring["points_per_day"]
+    cost = scoring["penalty_per_miss"]
+    since = scoring["since"]
+
+    score = earned = lost = kept = missed = 0
+    series = []
+    last_change = None
+    at_stake = False
+    for entry in days:
+        if not entry["scheduled"]:
+            continue  # a rest day owes nothing and so is worth nothing
+        # The ledger opens the day scoring was switched on: turning it on for a
+        # challenge already months old must not hand you a backdated deficit
+        # for days nobody was keeping score of.
+        if since and entry["day"] < since:
+            continue
+        if entry["pending"]:
+            at_stake = True
+            continue
+        if entry["complete"]:
+            kept += 1
+            earned += gain
+            delta = gain
+        else:
+            missed += 1
+            lost += cost
+            delta = -cost
+        score += delta
+        series.append({"day": entry["day"], "score": score, "delta": delta})
+        if delta:
+            last_change = {"day": entry["day"], "delta": delta}
+    return {
+        "enabled": True,
+        "score": score,
+        "earned": earned,
+        "lost": lost,
+        "days_kept": kept,
+        "days_missed": missed,
+        "points_per_day": gain,
+        "penalty_per_miss": cost,
+        "since": since,
+        # The last settled day that moved the score, so the card can say what
+        # just happened rather than only where you stand.
+        "last_change": last_change,
+        # What today is worth either way, while it is still winnable.
+        "at_stake": {"gain": gain, "risk": cost} if at_stake else None,
+        "series": series[-cap:],
+    }
+
+
 def _challenge_complete_on(conn, day_iso, challenge_id=None):
     if challenge_id is None:
         challenge_id = _default_challenge_id(conn)
@@ -3868,6 +3980,13 @@ def _challenge_view(conn, ch):
         except ValueError:
             total_days = None
     complete_today = bool(ids) and set(ids) <= done_today
+    # Only paid for when it is asked for: the ledger needs the whole membership
+    # history, which is a good deal more work than the seven dots above.
+    score = (
+        _challenge_score(ch, _challenge_days(conn, ch), cap=CARD_SCORE_DAYS)
+        if ch.get("scoring_enabled")
+        else None
+    )
     return {
         "id": ch["id"],
         "name": ch["name"],
@@ -3890,6 +4009,9 @@ def _challenge_view(conn, ch):
         "awaiting_celebration": (
             not ch["celebrated_at"] and _challenge_over(ch, complete_today, today)
         ),
+        "scoring": _scoring_view(ch),
+        # None unless the challenge is scored; the card draws nothing then.
+        "score": score,
         "last_7_days": last_7,
     }
 
@@ -4003,6 +4125,8 @@ def _challenge_stats(conn, ch):
         "finished": _challenge_finished(ch),
         "weight": _challenge_weight(conn, ch),
         "schedule": _schedule_view(ch),
+        "scoring": _scoring_view(ch),
+        "score": _challenge_score(ch, days),
         "days_elapsed": elapsed,
         "days_complete": complete_days,
         "completion_pct": round(complete_days / elapsed * 100, 1) if elapsed else None,
@@ -4151,13 +4275,18 @@ def api_add_challenge():
     kind, interval, weekdays, err = _resolve_schedule(data)
     if err:
         return jsonify({"error": err}), 400
+    scored, per_day, penalty, since, err = _resolve_scoring(data, start_date=start)
+    if err:
+        return jsonify({"error": err}), 400
     db = get_db()
     order = db.execute("SELECT COALESCE(MAX(sort_order), -1) + 1 AS n FROM challenges").fetchone()["n"]
     cur = db.execute(
         "INSERT INTO challenges (name, start_date, end_date, sort_order, archived, created_at, "
-        "updated_at, schedule_kind, schedule_interval, schedule_weekdays) "
-        "VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?)",
-        (name, start, end, order, _now_ts(), _now_ts(), kind, interval, weekdays),
+        "updated_at, schedule_kind, schedule_interval, schedule_weekdays, scoring_enabled, "
+        "points_per_day, penalty_per_miss, scoring_from) "
+        "VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (name, start, end, order, _now_ts(), _now_ts(), kind, interval, weekdays,
+         int(scored), per_day, penalty, since),
     )
     db.commit()
     return jsonify({"status": "created", "id": cur.lastrowid}), 201
@@ -4181,10 +4310,15 @@ def api_update_challenge(challenge_id):
     kind, interval, weekdays, err = _resolve_schedule(data, dict(existing))
     if err:
         return jsonify({"error": err}), 400
+    scored, per_day, penalty, since, err = _resolve_scoring(data, dict(existing), start_date=start)
+    if err:
+        return jsonify({"error": err}), 400
     db.execute(
         "UPDATE challenges SET name = ?, start_date = ?, end_date = ?, updated_at = ?, "
-        "schedule_kind = ?, schedule_interval = ?, schedule_weekdays = ? WHERE id = ?",
-        (name, start, end, _now_ts(), kind, interval, weekdays, challenge_id),
+        "schedule_kind = ?, schedule_interval = ?, schedule_weekdays = ?, scoring_enabled = ?, "
+        "points_per_day = ?, penalty_per_miss = ?, scoring_from = ? WHERE id = ?",
+        (name, start, end, _now_ts(), kind, interval, weekdays, int(scored), per_day, penalty,
+         since, challenge_id),
     )
     db.commit()
     return jsonify({"status": "updated"})
@@ -4228,11 +4362,20 @@ def api_repeat_challenge(challenge_id):
     kind, interval, weekdays, err = _resolve_schedule(data, dict(source))
     if err:
         return jsonify({"error": err}), 400
+    scored, per_day, penalty, since, err = _resolve_scoring(data, dict(source), start_date=start)
+    if err:
+        return jsonify({"error": err}), 400
+    if "scoring_from" not in data:
+        # A repeat is a new run: its ledger opens with it rather than
+        # inheriting the original's, and stays shut until scoring is on.
+        since = start if scored else None
     cur = db.execute(
         "INSERT INTO challenges (name, start_date, end_date, sort_order, archived, created_at, "
-        "updated_at, repeat_of, schedule_kind, schedule_interval, schedule_weekdays) "
-        "VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)",
-        (name, start, end, order, now, now, challenge_id, kind, interval, weekdays),
+        "updated_at, repeat_of, schedule_kind, schedule_interval, schedule_weekdays, "
+        "scoring_enabled, points_per_day, penalty_per_miss, scoring_from) "
+        "VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (name, start, end, order, now, now, challenge_id, kind, interval, weekdays,
+         int(scored), per_day, penalty, since),
     )
     new_id = cur.lastrowid
     for item in db.execute(
@@ -4456,15 +4599,20 @@ def api_start_challenge_from_template():
     kind, interval, weekdays, err = _resolve_schedule({**tpl["schedule"], **data})
     if err:
         return jsonify({"error": err}), 400
+    scored, per_day, penalty, since, err = _resolve_scoring(data, start_date=start)
+    if err:
+        return jsonify({"error": err}), 400
 
     db = get_db()
     stamp = _now_ts()
     order = db.execute("SELECT COALESCE(MAX(sort_order), -1) + 1 AS n FROM challenges").fetchone()["n"]
     cur = db.execute(
         "INSERT INTO challenges (name, start_date, end_date, sort_order, archived, created_at, "
-        "updated_at, schedule_kind, schedule_interval, schedule_weekdays) "
-        "VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?)",
-        (name, start, end, order, stamp, stamp, kind, interval, weekdays),
+        "updated_at, schedule_kind, schedule_interval, schedule_weekdays, scoring_enabled, "
+        "points_per_day, penalty_per_miss, scoring_from) "
+        "VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (name, start, end, order, stamp, stamp, kind, interval, weekdays,
+         int(scored), per_day, penalty, since),
     )
     challenge_id = cur.lastrowid
 
@@ -4549,6 +4697,66 @@ def _resolve_schedule(data, existing=None):
             return None, None, None, "schedule_weekdays must name at least one day (0=Mon…6=Sun)"
         return kind, None, ",".join(str(d) for d in sorted(days)), None
     return "daily", None, None, None
+
+
+def _resolve_scoring(data, existing=None, start_date=None, today=None):
+    """Pull the scoring settings out of a request body. Returns
+    (enabled, points_per_day, penalty_per_miss, scoring_from, error).
+
+    Falls back to the existing settings, then to off.
+    """
+    base = existing or {}
+    current = _scoring_view(base) if base else {
+        "enabled": False,
+        "points_per_day": DEFAULT_POINTS_PER_DAY,
+        "penalty_per_miss": DEFAULT_PENALTY_PER_MISS,
+        "since": None,
+    }
+    raw = data.get("scoring_enabled", current["enabled"])
+    if isinstance(raw, str):
+        enabled = raw.strip().lower() in ("1", "true", "yes", "on")
+    else:
+        enabled = bool(raw)
+
+    weights = {}
+    for key, fallback in (
+        ("points_per_day", current["points_per_day"]),
+        ("penalty_per_miss", current["penalty_per_miss"]),
+    ):
+        value = data.get(key, fallback)
+        try:
+            value = int(value)
+        except (TypeError, ValueError):
+            return None, None, None, None, f"{key} must be a number"
+        if not 0 <= value <= MAX_SCORE_WEIGHT:
+            return None, None, None, None, f"{key} must be between 0 and {MAX_SCORE_WEIGHT}"
+        weights[key] = value
+
+    today = today or date.today()
+    since = current["since"]
+    if "scoring_from" in data:
+        # An explicit reset of the ledger — what a repeat uses to start its own.
+        raw_from = (data.get("scoring_from") or "").strip() or None
+        if raw_from:
+            try:
+                date.fromisoformat(raw_from)
+            except ValueError:
+                return None, None, None, None, "scoring_from must be a date (YYYY-MM-DD)"
+        since = raw_from
+    elif enabled and not since:
+        # The ledger opens today, or on the start date for a challenge that has
+        # not begun — never before either, so switching scoring on cannot
+        # retroactively charge for days nobody was keeping score of.
+        opens = today
+        if start_date:
+            try:
+                opens = max(today, date.fromisoformat(start_date))
+            except ValueError:
+                opens = today
+        since = opens.isoformat()
+    # Switching scoring off deliberately leaves `since` alone: an accidental
+    # toggle would otherwise throw away the ledger with no way back.
+    return enabled, weights["points_per_day"], weights["penalty_per_miss"], since, None
 
 
 def _validate_challenge_dates(start, end):
