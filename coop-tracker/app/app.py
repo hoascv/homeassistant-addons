@@ -82,7 +82,7 @@ except ImportError as e:
     SKLEARN_AVAILABLE = False
     SKLEARN_ERROR = str(e)
 
-APP_VERSION = "1.60.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.61.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("COOP_DB_PATH", "/data/coop.db")
 OPTIONS_PATH = os.environ.get("COOP_OPTIONS_PATH", "/data/options.json")
@@ -1797,29 +1797,45 @@ def _compute_daily_eggs(conn, now, days):
     return {"days": labels, "eggs_per_day": values}
 
 
+# Above this many days the daily bars get too thin to read and too many to
+# scan, so the window buckets into trailing 7-day periods instead. Counted back
+# from today rather than snapped to calendar weeks, so every bucket covers
+# exactly seven days — including the newest, which would otherwise be a
+# part-week bar that always read as a slump. That is the same artefact the
+# monthly chart has, and reintroducing it at week scale would defeat the point.
+DAILY_MONEY_BUCKET_ABOVE_DAYS = 30
+DAILY_MONEY_BUCKET_DAYS = 7
+
+
 def _compute_daily_money(conn, now, days):
-    """Revenue, costs and net as running totals over the last `days`, day by
-    day up to today.
+    """Revenue, costs and net per bucket over a window ending today, plus the
+    running net across it.
 
-    Cumulative rather than per-day amounts, because money does not arrive as a
-    rate the way eggs do — it moves in lumps, a sale here and a sack of feed
-    there. Plotted raw, almost every day is a genuine zero and the chart is a
-    flat line with occasional spikes: true, and useless for the question being
-    asked. Accumulated, a quiet day holds the line flat instead of dropping it
-    to the floor, and the slope becomes the thing you read.
+    Amounts per bucket, not running totals: drawn as bars, a bucket where
+    nothing moved is simply an absent bar, which says "nothing happened" without
+    ambiguity. A *line* cannot say that — it has to join the gap, so a run of
+    genuine zeroes reads as a plunge to the floor, and that is why the same
+    figures were accumulated when this was drawn as a line.
 
-    This is what the month-by-month chart cannot do. There, the current month
-    is a bar that starts at zero on the 1st and has to climb all month to catch
-    up with the completed months beside it — so the ongoing month always reads
-    as a collapse, worst on the 1st and never honest until the 30th. A window
-    that simply ends today has no such edge.
+    The window ends today, which is the whole reason this exists alongside the
+    month-by-month chart. There, the current month starts at zero on the 1st and
+    spends the month catching up with the completed months beside it, so it
+    always reads as a collapse — worst on the 1st, and not honest until the
+    30th. A window that simply ends today has no such edge.
 
-    Each series starts at zero on the window's first day: the figures are what
-    has moved *within the window*, not the all-time balance.
+    Beyond DAILY_MONEY_BUCKET_ABOVE_DAYS the buckets become trailing 7-day
+    periods. Trailing rather than calendar weeks so that every bucket, the
+    newest included, covers exactly seven days: a part-week bar at the right-
+    hand edge would be the monthly chart's problem in miniature.
     """
     days = max(7, min(days, 365))
+    weekly = days > DAILY_MONEY_BUCKET_ABOVE_DAYS
+    size = DAILY_MONEY_BUCKET_DAYS if weekly else 1
+    # Whole buckets only, so no bar covers less time than its neighbours.
+    count = max(1, round(days / size))
     today = now.date()
-    start = today - timedelta(days=days - 1)
+    window_start = today - timedelta(days=count * size - 1)
+
     rows = conn.execute(
         """
         SELECT substr(ts, 1, 10) AS day,
@@ -1829,36 +1845,55 @@ def _compute_daily_money(conn, now, days):
         WHERE type IN ('sale', 'expense') AND ts >= ?
         GROUP BY day
         """,
-        (start.isoformat(),),
+        (window_start.isoformat(),),
     ).fetchall()
     # Same definitions the Finances tiles and the monthly chart use — sale.price
     # is revenue, expense.cost is what went out — so the three cannot disagree
-    # about what a day was worth.
+    # about what a sale was worth.
     moved = {
         row["day"]: (float(row["revenue"] or 0), float(row["costs"] or 0)) for row in rows
     }
 
-    labels, revenue, costs, net = [], [], [], []
-    run_rev = run_cost = 0.0
-    for offset in range(days - 1, -1, -1):
-        day = today - timedelta(days=offset)
-        iso = day.isoformat()
-        day_rev, day_cost = moved.get(iso, (0.0, 0.0))
-        run_rev += day_rev
-        run_cost += day_cost
-        labels.append(iso)
-        revenue.append(round(run_rev, 2))
-        costs.append(round(run_cost, 2))
-        net.append(round(run_rev - run_cost, 2))
+    starts, ends = [], []
+    revenue, costs, net, running_net = [], [], [], []
+    run = 0.0
+    for index in range(count):
+        end = today - timedelta(days=(count - 1 - index) * size)
+        begin = end - timedelta(days=size - 1)
+        bucket_rev = bucket_cost = 0.0
+        for offset in range(size):
+            day = begin + timedelta(days=offset)
+            day_rev, day_cost = moved.get(day.isoformat(), (0.0, 0.0))
+            bucket_rev += day_rev
+            bucket_cost += day_cost
+        run += bucket_rev - bucket_cost
+        starts.append(begin.isoformat())
+        ends.append(end.isoformat())
+        revenue.append(round(bucket_rev, 2))
+        costs.append(round(bucket_cost, 2))
+        net.append(round(bucket_rev - bucket_cost, 2))
+        # Accumulated from the unrounded figures, so a long window cannot gather
+        # a half-øre of drift into the total the caption quotes.
+        running_net.append(round(run, 2))
 
     return {
-        "days": labels,
+        "grouping": "week" if weekly else "day",
+        "bucket_days": size,
+        "starts": starts,
+        "ends": ends,
         "revenue": revenue,
         "costs": costs,
-        # Rounded from the running figures rather than from the rounded ones, so
-        # a long window cannot accumulate a half-øre of drift into the line the
-        # chart is actually for.
         "net": net,
+        # Where the window has left you at each point. Not drawn — it lives on a
+        # different scale from the per-bucket bars, and sharing one axis would
+        # flatten the bars to nothing over a long losing run — but it is the
+        # figure the tooltip and the caption are really for.
+        "running_net": running_net,
+        "totals": {
+            "revenue": round(sum(revenue), 2),
+            "costs": round(sum(costs), 2),
+            "net": round(run, 2),
+        },
     }
 
 

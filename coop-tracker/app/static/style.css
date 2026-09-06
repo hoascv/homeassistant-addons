@@ -885,6 +885,20 @@ img.chicken-avatar {
   height: 0;
 }
 .trends-swatch-net { background: var(--chart-net); }
+/* The bar chart's own swatches. Blocks rather than rules, because that is what
+   the chart draws — and no dash on the costs one: there, position carries the
+   identity that the dash carries on the line chart. Revenue sits above the zero
+   line and costs below it, which separates them for a reader who cannot use the
+   green/red hue more firmly than any line style could. */
+.trends-swatch-block {
+  height: 0.7rem;
+  width: 0.7rem;
+  border-radius: 2px;
+  border-top: 0;
+  align-self: center;
+  background: var(--chart-revenue);
+}
+.trends-swatch-block.trends-swatch-costs { background: var(--chart-costs); }
 /* Zero is a rule, not a gridline: on a chart that crosses it, it is the line
    the reader is actually asking about. */
 .chart-zero-line { stroke: var(--text-muted); stroke-width: 1; stroke-opacity: 0.55; }

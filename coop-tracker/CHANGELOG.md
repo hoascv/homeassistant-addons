@@ -1,5 +1,36 @@
 # Changelog
 
+## 1.61.0
+
+- **Money, recently is a bar chart now**, and it says which line is which.
+  Shipped yesterday without a legend, which was the more embarrassing of the
+  two — three coloured lines and nothing naming them.
+- **Money in above the zero line, money out below it**, one bar each, with the
+  bucket's net drawn over the top. The legend is the chart's own rather than the
+  monthly one's: these are blocks, not rules, and costs are not dashed here.
+- **The bars are what let the figures go back to being per-day amounts.** Money
+  is not a rate the way eggs are — it moves in lumps, so most days are a genuine
+  zero. A line has to join those gaps and reads as a plunge to the floor, which
+  is why this chart accumulated its figures when it was a line. A bucket with
+  nothing in it now simply has no bar, which says "nothing moved" and nothing
+  else.
+- Revenue above and costs below also does the colour-blind work that the dashed
+  line does on the monthly chart. Green against red is the pair that cannot be
+  fixed by choosing better steps; opposite sides of the zero line separate them
+  more firmly than any line style.
+- **At 90 days the bars become one a week.** Trailing seven-day periods counted
+  back from today, not calendar weeks, so every bar including the newest covers
+  exactly seven days — a part-week bar at the right-hand edge would be the
+  monthly chart's own problem one scale down.
+- The running net is still computed and still quoted, in the tooltip and the
+  caption, but it is deliberately **not drawn**: over a long losing run it
+  reaches a size that would flatten the bars to nothing on a shared axis, and a
+  second y-axis would let the choice of scales imply something the data does not
+  say.
+- Tests pin that the daily and weekly groupings reach the same totals over the
+  days they both cover — widening the range must show the same money in fewer
+  bars, not different money.
+
 ## 1.60.0
 
 - **Money, recently.** A second money chart under the monthly one: the same

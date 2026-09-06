@@ -689,40 +689,63 @@ no backtest counterpart here: the dashed line on this chart starts at the
 divider, since the historical side is already a measured rate, not a
 prediction.
 
-### Money day by day (v1.60.0)
+### Money day by day (v1.60.0, bars since v1.61.0)
 
 `_compute_daily_money` / `GET /api/trends/daily-money?days=` — revenue,
-costs and net over a window ending today, for the same structural reason
-the daily egg chart exists: the monthly chart cannot speak for the month
-you are standing in. That month's bar starts at zero on the 1st and
-spends the month catching up with the completed months beside it, so the
-current month always reads as a collapse — worst on the 1st, and not
-honest until the 30th. Its own endpoint, again because its window is days
-rather than the 3/6/12-month selector.
+costs and net per bucket over a window ending today, for the same
+structural reason the daily egg chart exists: the monthly chart cannot
+speak for the month you are standing in. That month's bar starts at zero
+on the 1st and spends the month catching up with the completed months
+beside it, so the current month always reads as a collapse — worst on the
+1st, and not honest until the 30th. Its own endpoint, again because its
+window is days rather than the 3/6/12-month selector.
 
-**Cumulative rather than per-day**, which is the one place this departs
-from the egg chart above, and the departure is forced by what money is.
+**Bars, not a line, and that choice decides the rest of the design.**
 Eggs arrive as a rate: every day the hens lay, and the only question is
 which day a collection speaks for. Money arrives in lumps — a sale here,
-a sack of feed there — so most days are a *genuine* zero, not an
-uncovered one. Plotted raw the chart is a flat line on the axis with
-occasional spikes: perfectly true, and useless for the question. Running
-totals put the information in the slope instead, and a quiet day holds
-the line flat rather than dropping it to the floor.
+a sack of feed there — so most buckets are a *genuine* zero, not an
+uncovered one. A line has to join those gaps, so a run of real zeroes
+reads as a plunge to the floor; that is why the first version of this
+chart (v1.60.0) accumulated its figures, and why bars let it stop. A
+bucket with nothing in it now draws no rect at all, which says "nothing
+moved" without ambiguity or a second convention to learn.
 
-Note what this means about nulls: the egg chart's central problem —
+Revenue is drawn above the zero line and costs below it, one bar each,
+with the bucket's net as a line over them. The split also solves §8's
+colour problem for free: green-against-red is the pair that cannot be
+separated by choosing better steps, and the monthly chart dashes costs to
+carry the identity — here **position** carries it, which is stronger than
+any line style.
+
+Note what all this means about nulls: the egg chart's central problem —
 distinguishing "no collection speaks for this day" from "nothing was
 laid" — has no counterpart here. There is no "still in the nest" for a
-sale that did not happen, so a day with no money is `0` and the series
+sale that did not happen, so a bucket with no money is `0` and the series
 never has gaps.
 
-Each series opens at zero on the window's first day, so the figures are
-what moved *inside* the window rather than an all-time balance. Widening
-the range therefore changes the totals; it is a different question, not
-more of the same one. The definitions are shared with `_compute_trends`
-and the Finances tiles (sale `price` in, expense `cost` out) and a test
-pins the agreement, so the three cannot disagree about what a sale was
-worth.
+**Bucketing.** Above `DAILY_MONEY_BUCKET_ABOVE_DAYS` (30) the window
+switches to `DAILY_MONEY_BUCKET_DAYS` (7) per bucket — ninety bars is
+past both what the chart can draw and what anyone can scan. The buckets
+are *trailing* 7-day periods counted back from today rather than calendar
+weeks, so every bucket including the newest covers exactly seven days.
+Snapping to calendar weeks would leave a part-week bar at the right-hand
+edge that always read low, which is precisely the artefact this chart
+exists to avoid, reintroduced one scale down. The bucket count is
+`round(days / size)`, so the window is a whole number of buckets and the
+90-day view is 13 weeks (91 days) rather than 12 weeks and a stub.
+
+`running_net` ships alongside but is **not drawn**. Over a long losing run
+it reaches a magnitude that would flatten the per-bucket bars to nothing
+on a shared axis, and a second y-axis would let the choice of scales imply
+a relationship the data does not contain. It goes in the tooltip and the
+caption, where it informs without distorting.
+
+The definitions are shared with `_compute_trends` and the Finances tiles
+(sale `price` in, expense `cost` out) and a test pins the agreement, so
+the three cannot disagree about what a sale was worth. A second test pins
+that the daily and weekly groupings reach the same totals over the days
+they both cover — widening the range must show the same money in fewer
+bars, not different money.
 
 ## 10. Feed duration estimate
 

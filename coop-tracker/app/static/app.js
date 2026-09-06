@@ -2244,80 +2244,105 @@ function buildFinanceSvg(data) {
     + ` role="img" aria-label="Monthly revenue, costs and net">${content}</svg>`;
 }
 
-// The same three series as the monthly chart, over days instead of months and
-// accumulated rather than totalled per bucket.
+// Money in and money out per bucket, as bars either side of the zero line, with
+// the bucket's net drawn over them.
 //
-// It exists because the monthly chart cannot say anything useful about the
-// month you are standing in: that bar starts at zero on the 1st and spends the
-// month catching up with the completed ones beside it, so the ongoing month
-// always reads as a collapse. A window that ends today has no such edge — the
-// right-hand end is simply where you are.
+// Bars rather than lines because money is not a rate. It moves in lumps — a sale
+// here, a sack of feed there — so most buckets are a *genuine* zero, and a bar
+// chart says that by simply having no bar. A line cannot: it has to join the
+// gap, so a run of real zeroes reads as a plunge to the floor.
+//
+// Revenue up and costs down rather than side by side: they are opposite
+// directions of the same thing, the zero line already separates them, and at
+// ninety days there is no room for two bars in a slot anyway.
 function buildDailyMoneySvg(data) {
-  const pointSpacing = 12;
+  const weekly = data.grouping === "week";
+  // A week's bar gets more room than a day's — there are a fifth as many.
+  const slot = weekly ? 26 : 12;
   const chartH = 120;
   const topPad = 10;
   const labelH = 14;
-  // Room for the outermost date labels, which are centred on points at the very
-  // edge of the plot — the monthly chart gets away without it because "Jul" is a
-  // third the width of "29 Jul".
+  // Room for the outermost date labels, centred on slots at the very edge.
   const sidePad = 14;
-  const days = data.days || [];
+  const starts = data.starts || [];
+  const ends = data.ends || [];
   const revenue = data.revenue || [];
   const costs = data.costs || [];
   const net = data.net || [];
-  if (!days.length) return "";
+  const count = starts.length;
+  if (!count) return "";
 
-  const plotW = days.length * pointSpacing + sidePad * 2;
+  const plotW = count * slot + sidePad * 2;
   const height = topPad + chartH + labelH;
-  const all = [...revenue, ...costs, ...net];
-  const maxVal = Math.max(1, ...all);
-  const minVal = Math.min(0, ...all);
+  // Costs are drawn below the line, so it is -costs that sets the floor. Net is
+  // revenue minus costs and therefore always lands between the two, but it is
+  // included anyway rather than reasoned about.
+  const maxVal = Math.max(0, ...revenue, ...net);
+  const minVal = Math.min(0, ...costs.map((c) => -c), ...net);
 
   const cfg = window.CURRENCY || { symbol: "$" };
   const axis = chartYAxisSigned(minVal, maxVal, cfg.symbol, { topPad, chartH });
   const width = axis.gutter + plotW;
-  const xAt = (i) => axis.gutter + sidePad + i * pointSpacing + pointSpacing / 2;
+  const xAt = (i) => axis.gutter + sidePad + i * slot + slot / 2;
   const yAt = axis.yAt;
-  const pts = (values) => values.map((v, i) => [xAt(i), yAt(v)]);
+  const zeroY = axis.zeroY;
 
-  // Washed down to zero, not to the floor: on a chart that goes negative, a
-  // fill reaching the bottom would put ink under a window that lost money and
-  // read as if it had earned it.
-  const defs = `<defs>${areaGradient("daily-net-wash", "--chart-net")}</defs>`;
-  let content = defs + axis.render(width);
-  content += curveSeries(pts(revenue), "--chart-revenue", { markers: false });
-  content += curveSeries(pts(costs), "--chart-costs", { dashed: true, markers: false });
-  // Drawn last, a shade heavier, and the only one carrying a wash: it is the
-  // figure the chart is for and the other two are the working behind it.
-  content += curveSeries(pts(net), "--chart-net", {
-    width: 2.5, area: true, gradientId: "daily-net-wash", baselineY: axis.zeroY,
-    markers: false,
-  });
+  // Left with a gap either side so neighbouring buckets stay countable; capped
+  // so a 13-week view doesn't turn into slabs.
+  const barW = Math.min(slot * 0.62, 16);
 
-  // Today gets a marker on the net line. Without a deliberate end point the
-  // right-hand edge of a flat run looks like the line gave up rather than like
-  // the window ending on a quiet day.
-  const lastX = xAt(days.length - 1);
-  content += `<circle cx="${lastX.toFixed(2)}" cy="${yAt(net[net.length - 1]).toFixed(2)}"`
-    + ` r="3.5" fill="var(--chart-net)"></circle>`;
+  let content = axis.render(width);
 
-  // Labelled from the right, so today's end of the window always carries a date
-  // and the intervals fall back from it.
-  const labelEvery = Math.max(1, Math.round(days.length / 5));
-  for (let i = days.length - 1; i >= 0; i -= labelEvery) {
-    content += `<text class="trends-bar-label" x="${xAt(i)}" y="${height - 2}"`
-      + ` text-anchor="middle">${dayLabel(days[i])}</text>`;
+  // A bar is drawn from the zero line outwards, so a bucket with nothing in it
+  // produces no rect at all rather than a zero-height sliver.
+  const bar = (i, value, colorVar, up) => {
+    if (!value) return "";
+    const y = up ? yAt(value) : zeroY;
+    const h = Math.abs((up ? zeroY - yAt(value) : yAt(-value) - zeroY));
+    if (h <= 0) return "";
+    return `<rect class="money-bar" x="${(xAt(i) - barW / 2).toFixed(2)}" y="${y.toFixed(2)}"`
+      + ` width="${barW.toFixed(2)}" height="${h.toFixed(2)}" rx="1.5"`
+      + ` fill="var(${colorVar})"></rect>`;
+  };
+  for (let i = 0; i < count; i += 1) {
+    content += bar(i, revenue[i], "--chart-revenue", true);
+    content += bar(i, costs[i], "--chart-costs", false);
   }
 
-  // One target per day naming all three, as the monthly chart does: three
-  // overlapping circles would only fight each other.
+  // The bucket's own bottom line, over the bars it is the sum of. Markers only
+  // where they can be told apart; past that they merge into the line.
+  content += curveSeries(
+    net.map((v, i) => [xAt(i), yAt(v)]),
+    "--chart-net",
+    { width: 2.5, markers: count <= 31 }
+  );
+
+  // Labelled from the right, so the end of the window always carries a date and
+  // the intervals fall back from it.
+  const labelEvery = Math.max(1, Math.round(count / 5));
+  for (let i = count - 1; i >= 0; i -= labelEvery) {
+    content += `<text class="trends-bar-label" x="${xAt(i)}" y="${height - 2}"`
+      + ` text-anchor="middle">${dayLabel(ends[i])}</text>`;
+  }
+
+  // One target per bucket naming all of it: three overlapping circles would only
+  // fight each other. The running net rides along here rather than being drawn —
+  // it lives on a different scale from the bars, and sharing one axis would
+  // flatten them to nothing over a long losing run.
+  const running = data.running_net || [];
   content += hitTargets(
-    days.map((_, i) => ({ x: xAt(i), y: yAt(net[i]), i })),
-    (i) => `${dayLabel(days[i])} — ${fmtMoney(revenue[i])} in, `
-           + `${fmtMoney(costs[i])} out, net ${fmtMoney(net[i])} so far`);
+    starts.map((_, i) => ({ x: xAt(i), y: yAt(net[i]), i })),
+    (i) => {
+      const when = weekly ? `${dayLabel(starts[i])} – ${dayLabel(ends[i])}` : dayLabel(ends[i]);
+      const moved = revenue[i] || costs[i]
+        ? `${fmtMoney(revenue[i])} in, ${fmtMoney(costs[i])} out, net ${fmtMoney(net[i])}`
+        : "nothing moved";
+      return `${when} — ${moved}\n${fmtMoney(running[i])} over the window so far`;
+    });
 
   return `<svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet"`
-    + ` role="img" aria-label="Running revenue, costs and net over the window">${content}</svg>`;
+    + ` role="img" aria-label="Money in and out per ${weekly ? "week" : "day"},`
+    + ` with the net over each">${content}</svg>`;
 }
 
 // Same visual grammar as buildTrendsSvg (same spacing, same plot height,
@@ -2730,23 +2755,24 @@ async function loadDailyMoney() {
     return;
   }
 
-  // Nothing moved is not a chart of three flat lines on the axis: that reads as
-  // a measured result rather than as an empty ledger. The last figure is the
-  // window's total, so it is the only one worth asking.
-  const revenue = data.revenue || [];
-  const costs = data.costs || [];
-  const moved = (revenue[revenue.length - 1] || 0) + (costs[costs.length - 1] || 0);
+  // Nothing moved is not a chart of empty slots: an axis with no bars on it
+  // reads as a broken render rather than as an empty ledger.
+  const totals = data.totals || { revenue: 0, costs: 0, net: 0 };
+  const moved = totals.revenue + totals.costs;
   chartWrap.querySelector("svg")?.remove();
   emptyEl.hidden = moved > 0;
   if (moved > 0) chartWrap.insertAdjacentHTML("beforeend", buildDailyMoneySvg(data));
 
-  const net = data.net || [];
-  const total = net[net.length - 1] || 0;
+  const weekly = data.grouping === "week";
+  const span = weekly
+    ? `${data.starts.length} weeks`
+    : `${data.starts.length} days`;
   captionEl.textContent = moved > 0
-    ? `Running totals over the window, not per-day amounts — a day nothing moved holds`
-      + ` the line flat rather than dropping it to zero. Over these ${data.days.length} days:`
-      + ` ${fmtMoney(revenue[revenue.length - 1])} in, ${fmtMoney(costs[costs.length - 1])} out,`
-      + ` net ${fmtMoney(total)}.`
+    ? `Money in above the line, money out below, ${weekly ? "a bar a week" : "a bar a day"} —`
+      + ` a ${weekly ? "week" : "day"} nothing moved has no bar rather than a bar of zero.`
+      + ` The line is that ${weekly ? "week" : "day"}'s net. Over these ${span}:`
+      + ` ${fmtMoney(totals.revenue)} in, ${fmtMoney(totals.costs)} out,`
+      + ` net ${fmtMoney(totals.net)}.`
     : "";
 }
 
