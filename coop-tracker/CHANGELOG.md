@@ -1,5 +1,33 @@
 # Changelog
 
+## 1.60.0
+
+- **Money, recently.** A second money chart under the monthly one: the same
+  revenue, costs and net over a window that ends today — 14, 30 or 90 days, on
+  its own selector.
+- **It exists because the monthly chart cannot speak for the month you are
+  standing in.** That month starts at zero on the 1st and spends the rest of the
+  month catching up with the completed months beside it, so the current month
+  always reads as a collapse — worst on the 1st, and not honest until the 30th.
+  A window that simply ends today has no such edge.
+- **The lines are running totals, not per-day amounts.** Money does not arrive
+  as a rate the way eggs do; it moves in lumps, a sale here and a sack of feed
+  there. Plotted raw, almost every day is a genuine zero and the chart is a flat
+  line with occasional spikes — true, and useless for the question being asked.
+  Accumulated, a quiet day holds the line flat instead of dropping it to the
+  floor, and the slope becomes the thing you read.
+- Each series opens at zero on the window's first day, so the figures are what
+  moved *within* the window rather than an all-time balance. Widening the range
+  changes the totals because it is a different question.
+- Same definitions as the monthly chart and the tiles — sale price in, expense
+  cost out — so the three cannot disagree about what a sale was worth. A test
+  pins that agreement.
+- Only the last point carries a marker: at ninety points a dot per day merges
+  into a smear, and the one that is worth having is the one showing where today
+  is. `curveSeries` grew a `markers` option rather than a second copy of itself.
+- The chart-block wrapper class is `chart-section` now, not `eggs-per-day` — the
+  rules were only ever heading sizing, and there is a money chart in there too.
+
 ## 1.59.0
 
 - **Money, month by month.** A new chart under the egg trends: revenue, costs

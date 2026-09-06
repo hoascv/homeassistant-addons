@@ -82,7 +82,7 @@ except ImportError as e:
     SKLEARN_AVAILABLE = False
     SKLEARN_ERROR = str(e)
 
-APP_VERSION = "1.59.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.60.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("COOP_DB_PATH", "/data/coop.db")
 OPTIONS_PATH = os.environ.get("COOP_OPTIONS_PATH", "/data/options.json")
@@ -1797,6 +1797,71 @@ def _compute_daily_eggs(conn, now, days):
     return {"days": labels, "eggs_per_day": values}
 
 
+def _compute_daily_money(conn, now, days):
+    """Revenue, costs and net as running totals over the last `days`, day by
+    day up to today.
+
+    Cumulative rather than per-day amounts, because money does not arrive as a
+    rate the way eggs do — it moves in lumps, a sale here and a sack of feed
+    there. Plotted raw, almost every day is a genuine zero and the chart is a
+    flat line with occasional spikes: true, and useless for the question being
+    asked. Accumulated, a quiet day holds the line flat instead of dropping it
+    to the floor, and the slope becomes the thing you read.
+
+    This is what the month-by-month chart cannot do. There, the current month
+    is a bar that starts at zero on the 1st and has to climb all month to catch
+    up with the completed months beside it — so the ongoing month always reads
+    as a collapse, worst on the 1st and never honest until the 30th. A window
+    that simply ends today has no such edge.
+
+    Each series starts at zero on the window's first day: the figures are what
+    has moved *within the window*, not the all-time balance.
+    """
+    days = max(7, min(days, 365))
+    today = now.date()
+    start = today - timedelta(days=days - 1)
+    rows = conn.execute(
+        """
+        SELECT substr(ts, 1, 10) AS day,
+               COALESCE(SUM(CASE WHEN type = 'sale' THEN price END), 0) AS revenue,
+               COALESCE(SUM(CASE WHEN type = 'expense' THEN cost END), 0) AS costs
+        FROM logs
+        WHERE type IN ('sale', 'expense') AND ts >= ?
+        GROUP BY day
+        """,
+        (start.isoformat(),),
+    ).fetchall()
+    # Same definitions the Finances tiles and the monthly chart use — sale.price
+    # is revenue, expense.cost is what went out — so the three cannot disagree
+    # about what a day was worth.
+    moved = {
+        row["day"]: (float(row["revenue"] or 0), float(row["costs"] or 0)) for row in rows
+    }
+
+    labels, revenue, costs, net = [], [], [], []
+    run_rev = run_cost = 0.0
+    for offset in range(days - 1, -1, -1):
+        day = today - timedelta(days=offset)
+        iso = day.isoformat()
+        day_rev, day_cost = moved.get(iso, (0.0, 0.0))
+        run_rev += day_rev
+        run_cost += day_cost
+        labels.append(iso)
+        revenue.append(round(run_rev, 2))
+        costs.append(round(run_cost, 2))
+        net.append(round(run_rev - run_cost, 2))
+
+    return {
+        "days": labels,
+        "revenue": revenue,
+        "costs": costs,
+        # Rounded from the running figures rather than from the rounded ones, so
+        # a long window cannot accumulate a half-øre of drift into the line the
+        # chart is actually for.
+        "net": net,
+    }
+
+
 def _compute_eggs_per_day(conn, now, months):
     """Average eggs *laid* per day in each of the same months
     _compute_trends returns — deliberately not "that month's collected
@@ -2193,6 +2258,19 @@ def api_trends_daily():
     result["birds"] = sum(get_flock_counts().values())
     result["impossible"] = impossible_days(result["eggs_per_day"], result["birds"])
     return jsonify(result)
+
+
+@app.route("/api/trends/daily-money")
+def api_trends_daily_money():
+    """Its own endpoint for the same reason the daily egg one has its own: a
+    separate window that reloads on its own selector. Sharing the eggs endpoint
+    would tie the two charts' ranges together, and they answer different
+    questions over different amounts of activity."""
+    try:
+        days = int(request.args.get("days", 30))
+    except ValueError:
+        days = 30
+    return jsonify(_compute_daily_money(get_db(), datetime.now(), days))
 
 
 def _compute_feeding_stats(conn, food_type, now):

@@ -255,7 +255,27 @@
       make the line say more than it knows.
     </p>
 
-    <div class="eggs-per-day">
+    <!-- The same three series over a window that ends today. The chart above
+         cannot speak for the month you are standing in: that month starts at
+         zero on the 1st and spends itself catching up with the completed
+         months beside it, so it always reads as a collapse. -->
+    <div class="chart-section">
+      <div class="finances-header">
+        <h2>Money, recently</h2>
+        <select id="daily-money-range">
+          <option value="14">14 days</option>
+          <option value="30" selected>30 days</option>
+          <option value="90">90 days</option>
+        </select>
+      </div>
+      <div class="trends-chart-wrap" id="daily-money-chart-wrap">
+        <button type="button" class="trends-expand-btn" aria-label="Expand money chart">⛶</button>
+        <p class="empty-state" id="daily-money-empty" hidden>No money logged in this window</p>
+      </div>
+      <p class="trends-forecast-caption" id="daily-money-caption"></p>
+    </div>
+
+    <div class="chart-section">
       <div class="finances-header">
         <h2>Eggs per day, recently</h2>
         <select id="daily-eggs-range">
@@ -271,7 +291,7 @@
       <p class="trends-forecast-caption" id="daily-eggs-caption"></p>
     </div>
 
-    <div class="eggs-per-day">
+    <div class="chart-section">
       <h2>Eggs per day, by month</h2>
       <div class="trends-chart-wrap" id="eggs-per-day-chart-wrap">
         <button type="button" class="trends-expand-btn" aria-label="Expand eggs per day by month chart">⛶</button>

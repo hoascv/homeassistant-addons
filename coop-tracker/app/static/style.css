@@ -1032,12 +1032,15 @@ img.chicken-avatar {
   color: var(--text-muted);
 }
 
-.eggs-per-day h2 {
+/* A titled chart block under the main trends chart. Named for what it is
+   rather than for the first thing that used it: the rules were only ever
+   heading sizing, and there is a money chart in here now too. */
+.chart-section h2 {
   font-size: 1rem;
   margin: 0 0 0.5rem;
 }
 
-.eggs-per-day .finances-header h2 {
+.chart-section .finances-header h2 {
   margin: 0;
 }
 

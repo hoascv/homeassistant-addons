@@ -760,6 +760,31 @@ them for the dark theme drops their colour-blind separation further, not
 further apart — so the line style carries the identity for a reader who cannot
 use the hue, and the legend swatch is dashed to teach it.
 
+### Money, recently
+
+The same three series over a window that ends **today** — 14, 30 or 90 days —
+sitting under the monthly chart with its own range selector.
+
+It exists because the monthly chart cannot say anything useful about the month
+you are standing in. That month starts at zero on the 1st and spends the rest of
+the month catching up with the completed months beside it, so the current month
+always reads as a collapse: worst on the 1st, and not honest until the 30th. A
+window that simply ends today has no such edge.
+
+**The lines are running totals, not per-day amounts.** Money does not arrive as
+a rate the way eggs do — it moves in lumps, a sale here and a sack of feed
+there. Plotted raw, almost every day is a genuine zero and the chart is a flat
+line with occasional spikes: true, and useless. Accumulated, a day nothing moved
+holds the line flat instead of dropping it to the floor, and the slope becomes
+the thing you read — a net line climbing means the flock is ahead over these
+days, sinking means it is not.
+
+Each series opens at zero on the window's first day, so the figures are what
+moved **within the window**, not an all-time balance. Widening the range from 30
+to 90 days therefore changes the totals: it is a different question, not more of
+the same one. Only the last point carries a marker — at ninety points a dot per
+day merges into a smear — and it sits on the net line to mark where today is.
+
 ### Estimated savings
 
 The Finances section's **Est. savings** figures answer "what would this

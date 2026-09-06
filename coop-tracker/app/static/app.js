@@ -2131,6 +2131,9 @@ function areaGradient(gradientId, colorVar) {
 // wash, a marker per reading. `points` are already pixels.
 function curveSeries(points, colorVar, {
   dashed = false, width = 2, area = false, gradientId = null, baselineY = 0,
+  // Off for the daily charts. Six monthly points want marking; ninety daily
+  // ones merge into a smear that reads as a thicker, fuzzier line.
+  markers = true,
 } = {}) {
   if (!points.length) return "";
   const d = monotoneLinePath(points);
@@ -2138,8 +2141,10 @@ function curveSeries(points, colorVar, {
   let svg = area && gradientId ? areaUnder(d, points, baselineY, gradientId) : "";
   svg += `<path class="chart-line" d="${d}" fill="none" stroke="var(${colorVar})"`
     + ` stroke-width="${width}" stroke-linecap="round" stroke-linejoin="round"${dash}></path>`;
-  for (const [x, y] of points) {
-    svg += `<circle cx="${x.toFixed(2)}" cy="${y.toFixed(2)}" r="2.5" fill="var(${colorVar})"></circle>`;
+  if (markers) {
+    for (const [x, y] of points) {
+      svg += `<circle cx="${x.toFixed(2)}" cy="${y.toFixed(2)}" r="2.5" fill="var(${colorVar})"></circle>`;
+    }
   }
   return svg;
 }
@@ -2237,6 +2242,82 @@ function buildFinanceSvg(data) {
 
   return `<svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet"`
     + ` role="img" aria-label="Monthly revenue, costs and net">${content}</svg>`;
+}
+
+// The same three series as the monthly chart, over days instead of months and
+// accumulated rather than totalled per bucket.
+//
+// It exists because the monthly chart cannot say anything useful about the
+// month you are standing in: that bar starts at zero on the 1st and spends the
+// month catching up with the completed ones beside it, so the ongoing month
+// always reads as a collapse. A window that ends today has no such edge — the
+// right-hand end is simply where you are.
+function buildDailyMoneySvg(data) {
+  const pointSpacing = 12;
+  const chartH = 120;
+  const topPad = 10;
+  const labelH = 14;
+  // Room for the outermost date labels, which are centred on points at the very
+  // edge of the plot — the monthly chart gets away without it because "Jul" is a
+  // third the width of "29 Jul".
+  const sidePad = 14;
+  const days = data.days || [];
+  const revenue = data.revenue || [];
+  const costs = data.costs || [];
+  const net = data.net || [];
+  if (!days.length) return "";
+
+  const plotW = days.length * pointSpacing + sidePad * 2;
+  const height = topPad + chartH + labelH;
+  const all = [...revenue, ...costs, ...net];
+  const maxVal = Math.max(1, ...all);
+  const minVal = Math.min(0, ...all);
+
+  const cfg = window.CURRENCY || { symbol: "$" };
+  const axis = chartYAxisSigned(minVal, maxVal, cfg.symbol, { topPad, chartH });
+  const width = axis.gutter + plotW;
+  const xAt = (i) => axis.gutter + sidePad + i * pointSpacing + pointSpacing / 2;
+  const yAt = axis.yAt;
+  const pts = (values) => values.map((v, i) => [xAt(i), yAt(v)]);
+
+  // Washed down to zero, not to the floor: on a chart that goes negative, a
+  // fill reaching the bottom would put ink under a window that lost money and
+  // read as if it had earned it.
+  const defs = `<defs>${areaGradient("daily-net-wash", "--chart-net")}</defs>`;
+  let content = defs + axis.render(width);
+  content += curveSeries(pts(revenue), "--chart-revenue", { markers: false });
+  content += curveSeries(pts(costs), "--chart-costs", { dashed: true, markers: false });
+  // Drawn last, a shade heavier, and the only one carrying a wash: it is the
+  // figure the chart is for and the other two are the working behind it.
+  content += curveSeries(pts(net), "--chart-net", {
+    width: 2.5, area: true, gradientId: "daily-net-wash", baselineY: axis.zeroY,
+    markers: false,
+  });
+
+  // Today gets a marker on the net line. Without a deliberate end point the
+  // right-hand edge of a flat run looks like the line gave up rather than like
+  // the window ending on a quiet day.
+  const lastX = xAt(days.length - 1);
+  content += `<circle cx="${lastX.toFixed(2)}" cy="${yAt(net[net.length - 1]).toFixed(2)}"`
+    + ` r="3.5" fill="var(--chart-net)"></circle>`;
+
+  // Labelled from the right, so today's end of the window always carries a date
+  // and the intervals fall back from it.
+  const labelEvery = Math.max(1, Math.round(days.length / 5));
+  for (let i = days.length - 1; i >= 0; i -= labelEvery) {
+    content += `<text class="trends-bar-label" x="${xAt(i)}" y="${height - 2}"`
+      + ` text-anchor="middle">${dayLabel(days[i])}</text>`;
+  }
+
+  // One target per day naming all three, as the monthly chart does: three
+  // overlapping circles would only fight each other.
+  content += hitTargets(
+    days.map((_, i) => ({ x: xAt(i), y: yAt(net[i]), i })),
+    (i) => `${dayLabel(days[i])} — ${fmtMoney(revenue[i])} in, `
+           + `${fmtMoney(costs[i])} out, net ${fmtMoney(net[i])} so far`);
+
+  return `<svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet"`
+    + ` role="img" aria-label="Running revenue, costs and net over the window">${content}</svg>`;
 }
 
 // Same visual grammar as buildTrendsSvg (same spacing, same plot height,
@@ -2634,6 +2715,43 @@ function renderFinanceChart(data) {
   if (moved > 0) wrap.insertAdjacentHTML("beforeend", buildFinanceSvg(data));
 }
 
+const dailyMoneyRangeSelect = document.getElementById("daily-money-range");
+
+async function loadDailyMoney() {
+  const chartWrap = document.getElementById("daily-money-chart-wrap");
+  const emptyEl = document.getElementById("daily-money-empty");
+  const captionEl = document.getElementById("daily-money-caption");
+
+  let data;
+  try {
+    const res = await fetch(`api/trends/daily-money?days=${dailyMoneyRangeSelect.value}`);
+    data = await res.json();
+  } catch (err) {
+    return;
+  }
+
+  // Nothing moved is not a chart of three flat lines on the axis: that reads as
+  // a measured result rather than as an empty ledger. The last figure is the
+  // window's total, so it is the only one worth asking.
+  const revenue = data.revenue || [];
+  const costs = data.costs || [];
+  const moved = (revenue[revenue.length - 1] || 0) + (costs[costs.length - 1] || 0);
+  chartWrap.querySelector("svg")?.remove();
+  emptyEl.hidden = moved > 0;
+  if (moved > 0) chartWrap.insertAdjacentHTML("beforeend", buildDailyMoneySvg(data));
+
+  const net = data.net || [];
+  const total = net[net.length - 1] || 0;
+  captionEl.textContent = moved > 0
+    ? `Running totals over the window, not per-day amounts — a day nothing moved holds`
+      + ` the line flat rather than dropping it to zero. Over these ${data.days.length} days:`
+      + ` ${fmtMoney(revenue[revenue.length - 1])} in, ${fmtMoney(costs[costs.length - 1])} out,`
+      + ` net ${fmtMoney(total)}.`
+    : "";
+}
+
+document.getElementById("daily-money-range").addEventListener("change", loadDailyMoney);
+
 async function loadTrends() {
   const months = trendsRangeSelect.value;
   const res = await fetch(`api/trends?months=${months}`);
@@ -2700,6 +2818,7 @@ async function loadTrends() {
   trendsForecastCaption.textContent = caption;
 
   loadDailyEggs();
+  loadDailyMoney();
   loadFeedingStatsSummary();
 }
 

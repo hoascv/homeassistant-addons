@@ -689,6 +689,41 @@ no backtest counterpart here: the dashed line on this chart starts at the
 divider, since the historical side is already a measured rate, not a
 prediction.
 
+### Money day by day (v1.60.0)
+
+`_compute_daily_money` / `GET /api/trends/daily-money?days=` — revenue,
+costs and net over a window ending today, for the same structural reason
+the daily egg chart exists: the monthly chart cannot speak for the month
+you are standing in. That month's bar starts at zero on the 1st and
+spends the month catching up with the completed months beside it, so the
+current month always reads as a collapse — worst on the 1st, and not
+honest until the 30th. Its own endpoint, again because its window is days
+rather than the 3/6/12-month selector.
+
+**Cumulative rather than per-day**, which is the one place this departs
+from the egg chart above, and the departure is forced by what money is.
+Eggs arrive as a rate: every day the hens lay, and the only question is
+which day a collection speaks for. Money arrives in lumps — a sale here,
+a sack of feed there — so most days are a *genuine* zero, not an
+uncovered one. Plotted raw the chart is a flat line on the axis with
+occasional spikes: perfectly true, and useless for the question. Running
+totals put the information in the slope instead, and a quiet day holds
+the line flat rather than dropping it to the floor.
+
+Note what this means about nulls: the egg chart's central problem —
+distinguishing "no collection speaks for this day" from "nothing was
+laid" — has no counterpart here. There is no "still in the nest" for a
+sale that did not happen, so a day with no money is `0` and the series
+never has gaps.
+
+Each series opens at zero on the window's first day, so the figures are
+what moved *inside* the window rather than an all-time balance. Widening
+the range therefore changes the totals; it is a different question, not
+more of the same one. The definitions are shared with `_compute_trends`
+and the Finances tiles (sale `price` in, expense `cost` out) and a test
+pins the agreement, so the three cannot disagree about what a sale was
+worth.
+
 ## 10. Feed duration estimate
 
 A `container_empty` boolean on `logs` (meaningful only for `type =
