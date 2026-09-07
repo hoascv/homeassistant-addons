@@ -494,6 +494,28 @@ logged workout to change its sets, reps, weight, or date. (Workouts created
 by the challenge check-off are managed by the challenge and marked
 accordingly.)
 
+### Doing a day early
+
+Sometimes you know you will miss Sunday, so you do Sunday's session on
+Saturday. **Show the days ahead**, in the History sheet, extends the grid a
+week forward; tick the day there and that day is credited.
+
+The session is logged on the day you actually did it — that is the whole point
+of ticking it this way rather than waiting. The workout lands where your heart
+rate is, so Garmin can match it, and it carries a real time instead of the
+midday placeholder a day filed after the fact gets. A placeholder never gets a
+heart rate at all, and ticking twice — once now for the training, once on the
+day for the streak — would leave you with two workouts for one session.
+
+Until the day arrives it counts for nothing: the streak, the score, the
+adherence figures and the seven dots all stop at today. The card says
+*✓ Sep 9 already done* so you don't do it a second time, that day's reminder
+stays quiet, and when the day comes round it reads as kept.
+
+Un-ticking it removes the session from the day it was logged on, not from the
+day it counted for. You can tick up to a month ahead — the limit is only there
+so a mistyped year is caught.
+
 ## Challenge templates
 
 **Start from a template**, under the challenge list, offers ready-made
@@ -612,6 +634,12 @@ when it happened — those rows carry `ts_exact = 0` in the database, and are
 skipped when heart rate is worked out rather than being given one from the
 wrong window. Rows recorded before this behaviour existed are all marked
 `ts_exact = 0`: their times were placeholders too.
+
+A day kept in advance is the one case where the day something counts for and
+the day it happened come apart on purpose: the tick stores the first in `day`
+and the second in `done_on`, and the workout is timestamped for real on
+`done_on`. `done_on` is
+empty for every ordinary tick, which means the same as the day itself.
 
 If you export the database for your own analysis, `ts_exact` is what tells you
 whether a timestamp's time-of-day means anything. The date part is always

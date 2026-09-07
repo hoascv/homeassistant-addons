@@ -1,5 +1,33 @@
 # Changelog
 
+## 1.51.0
+
+- **A day can be kept in advance.** *Show the days ahead* in the History sheet
+  extends the grid a week forward; ticking a day there credits that day, for
+  when you already know you will not be able to do it on the day itself.
+- **The session is logged when you did it, not when it counts.** A tick now
+  records both: `day` is the day being credited, `done_on` the day the work
+  happened. The workout goes to `done_on` with a real timestamp, so the Garmin
+  sync can find the heart rate behind it. Filing it under the day it counts for
+  would put the entry on a day with no activity behind it and a midday
+  placeholder on top — and a placeholder is never given a heart rate, by
+  design. Doing the work today and ticking again on the day would have been two
+  workouts for one session.
+- **A day kept ahead counts for nothing until it arrives.** The streak, the
+  score, the adherence figures and the seven dots all stop at today, as they
+  already did. Nothing was taught to look forward; the tick simply sits there
+  until the day is today, and then reads as kept.
+- **The card says which coming days are already done** — *✓ Sep 9 already
+  done* — because nothing else on it can: every figure stops at today, and
+  without the line the session gets done twice. That day's reminder stays
+  quiet too.
+- Un-ticking removes the session from the day it was logged on rather than the
+  day it counted for, which is what stops an orphaned workout being left behind
+  on a day no further tick can reach.
+- Ticking more than a month ahead is refused. There is no principled horizon —
+  the limit is there to catch a mistyped year, which would otherwise park a
+  completion a century out where nothing would ever show it to you again.
+
 ## 1.50.0
 
 - **A challenge can keep a score now, and a missed day costs you.** Off by

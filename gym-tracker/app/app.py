@@ -20,7 +20,7 @@ from flask import Flask, Response, g, jsonify, render_template, request, send_fi
 import garmin_client
 import meals
 
-APP_VERSION = "1.50.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.51.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("GYM_DB_PATH", "/data/gym.db")
 OPTIONS_PATH = os.environ.get("GYM_OPTIONS_PATH", "/data/options.json")
@@ -97,6 +97,9 @@ DEFAULT_PENALTY_PER_MISS = 10
 MAX_SCORE_WEIGHT = 1000
 # How many scored days the home card's sparkline carries. Trends shows the run.
 CARD_SCORE_DAYS = 30
+# How far ahead a day can be kept in advance. There is no principled limit —
+# the point is only that a mistyped year is a typo, not a plan.
+AHEAD_HORIZON_DAYS = 30
 SEED_START_WEIGHT = 99.7
 SEED_GOAL = {
     "target_date": "2026-12-28",
@@ -614,6 +617,12 @@ def init_db():
             -- When it was actually ticked, not just which day. Needed to line
             -- an exercise up with the heart rate Garmin recorded for it.
             ts TEXT,
+            -- The day the work was really done, when that is not the day it
+            -- counts for. Sunday's session done on Saturday is still one
+            -- session: it is logged on Saturday, where the heart rate is, and
+            -- credited to Sunday. NULL — almost every row — means the two are
+            -- the same day.
+            done_on TEXT,
             UNIQUE(item_id, day)
         )
         """
@@ -1067,6 +1076,10 @@ def _migrate_columns(conn):
     completion_cols = {row[1] for row in conn.execute("PRAGMA table_info(challenge_completions)")}
     if "ts" not in completion_cols:
         conn.execute("ALTER TABLE challenge_completions ADD COLUMN ts TEXT")
+    if "done_on" not in completion_cols:
+        # No backfill: NULL already means "done on the day it counts for",
+        # which is what every row written before this existed meant.
+        conn.execute("ALTER TABLE challenge_completions ADD COLUMN done_on TEXT")
 
     supplement_cols = {row[1] for row in conn.execute("PRAGMA table_info(supplements)")}
     added_supplement_cols = False
@@ -2606,6 +2619,26 @@ def _completions_by_day(conn, item_ids):
     return by_day
 
 
+def _done_on_by_day(conn, item_ids):
+    """{day: {item_id: done_on}} for ticks kept in advance only.
+
+    Everything else stores NULL and means the obvious thing, so an empty map is
+    the normal case and the caller can treat a missing entry as "done that day".
+    """
+    if not item_ids:
+        return {}
+    placeholders = ",".join("?" for _ in item_ids)
+    rows = conn.execute(
+        f"SELECT day, item_id, done_on FROM challenge_completions "
+        f"WHERE item_id IN ({placeholders}) AND done_on IS NOT NULL AND done_on <> day",
+        tuple(item_ids),
+    )
+    out = defaultdict(dict)
+    for r in rows:
+        out[r["day"]][r["item_id"]] = r["done_on"]
+    return out
+
+
 def _challenge_streak(conn, challenge_id=None):
     if challenge_id is None:
         challenge_id = _default_challenge_id(conn)
@@ -3980,6 +4013,12 @@ def _challenge_view(conn, ch):
         except ValueError:
             total_days = None
     complete_today = bool(ids) and set(ids) <= done_today
+    # Days already kept in advance. They are inert until they arrive — every
+    # figure here stops at today — but the card still has to say so, or the
+    # session gets done twice.
+    done_ahead = [
+        d for d in sorted(by_day) if d > today_iso and ids and set(ids) <= by_day[d]
+    ]
     # Only paid for when it is asked for: the ledger needs the whole membership
     # history, which is a good deal more work than the seven dots above.
     score = (
@@ -4004,6 +4043,7 @@ def _challenge_view(conn, ch):
         "items": items,
         "streak": _challenge_streak(conn, ch["id"]),
         "complete_today": complete_today,
+        "done_ahead": done_ahead[:7],
         # The end-of-challenge moment, shown once. The client marks it seen, so
         # a reload doesn't replay it and a missed one isn't lost.
         "awaiting_celebration": (
@@ -4796,8 +4836,17 @@ def _completion_stamp(day):
     return (now.isoformat(timespec="seconds") if today else f"{day}T12:00:00"), (1 if today else 0)
 
 
-def _record_completion(db, item, day, duration_sec=None, sets=None, reps=None, notes=None):
+def _record_completion(
+    db, item, day, done_on=None, duration_sec=None, sets=None, reps=None, notes=None
+):
     """Tick an item for a day, and log the workout it stands for.
+
+    `day` is the day being credited. `done_on` is the day the session actually
+    happened, which differs only when a day is kept in advance; it defaults to
+    `day`. The workout belongs to `done_on`, because that is when the work was
+    done — filing it under the day it counts for would put the entry on a day
+    with no Garmin activity behind it, and a midday placeholder never gets a
+    heart rate at all.
 
     One place knows the timestamp rule and the workout insert, because two
     callers need them identical: tapping an item, and finishing a guided
@@ -4806,15 +4855,23 @@ def _record_completion(db, item, day, duration_sec=None, sets=None, reps=None, n
     Idempotent on the workout: replaying replaces the row rather than adding a
     second one, which is what makes a retried session safe.
     """
-    ts, ts_exact = _completion_stamp(day)
     existing = db.execute(
-        "SELECT id FROM challenge_completions WHERE item_id = ? AND day = ?",
+        "SELECT id, COALESCE(done_on, day) AS logged FROM challenge_completions "
+        "WHERE item_id = ? AND day = ?",
         (item["id"], day),
     ).fetchone()
     if existing is None:
+        logged = done_on or day
+    else:
+        # The tick already stands, and its own `done_on` is the truth. A replay
+        # that moved the workout somewhere else would leave the un-tick looking
+        # for the session on a day it is not on.
+        logged = existing["logged"]
+    ts, ts_exact = _completion_stamp(logged)
+    if existing is None:
         db.execute(
-            "INSERT INTO challenge_completions (item_id, day, ts) VALUES (?, ?, ?)",
-            (item["id"], day, ts),
+            "INSERT INTO challenge_completions (item_id, day, ts, done_on) VALUES (?, ?, ?, ?)",
+            (item["id"], day, ts, logged if logged != day else None),
         )
 
     workout_id = None
@@ -4822,7 +4879,7 @@ def _record_completion(db, item, day, duration_sec=None, sets=None, reps=None, n
         db.execute(
             "DELETE FROM workout_logs WHERE source = 'challenge' AND challenge_item_id = ? "
             "AND substr(ts, 1, 10) = ?",
-            (item["id"], day),
+            (item["id"], logged),
         )
         cur = db.execute(
             "INSERT INTO workout_logs (ts, exercise_id, sets, reps, duration_sec, notes, "
@@ -4838,7 +4895,17 @@ def _clear_completion(db, item, day):
 
     Manual entries are never touched — only rows this app wrote on the user's
     behalf, which is what `source = 'challenge'` marks.
+
+    The workout is deleted from the day it was *done*, which for a day kept in
+    advance is not the day being un-ticked. Keying the delete on `day` instead
+    would leave the session behind as an orphan that no further tick can reach.
     """
+    row = db.execute(
+        "SELECT COALESCE(done_on, day) AS logged FROM challenge_completions "
+        "WHERE item_id = ? AND day = ?",
+        (item["id"], day),
+    ).fetchone()
+    logged = row["logged"] if row else day
     db.execute(
         "DELETE FROM challenge_completions WHERE item_id = ? AND day = ?", (item["id"], day)
     )
@@ -4846,7 +4913,7 @@ def _clear_completion(db, item, day):
         db.execute(
             "DELETE FROM workout_logs WHERE source = 'challenge' AND challenge_item_id = ? "
             "AND substr(ts, 1, 10) = ?",
-            (item["id"], day),
+            (item["id"], logged),
         )
 
 
@@ -4867,9 +4934,19 @@ def api_challenge_toggle():
         return jsonify({"error": "no such challenge item"}), 404
     day = (data.get("day") or "").strip() or date.today().isoformat()
     try:
-        date.fromisoformat(day)
+        parsed = date.fromisoformat(day)
     except ValueError:
         return jsonify({"error": "day must be YYYY-MM-DD"}), 400
+    today = date.today()
+    if (parsed - today).days > AHEAD_HORIZON_DAYS:
+        return jsonify(
+            {"error": f"day is more than {AHEAD_HORIZON_DAYS} days ahead"}
+        ), 400
+    # Nobody trains in the future. Ticking a day ahead says the session is
+    # happening now, so that is where its workout and its heart rate go; the
+    # day itself is only credited. Backfilling a past day keeps meaning what it
+    # always did — it happened then, and the time of day is unknowable.
+    done_on = min(day, today.isoformat())
 
     existing = db.execute(
         "SELECT id FROM challenge_completions WHERE item_id = ? AND day = ?", (item_id, day)
@@ -4881,7 +4958,7 @@ def api_challenge_toggle():
         # An exercise item ticked off also lands in the workout log; a timed one
         # logs the hold, so the entry means the same thing as one logged by hand.
         _record_completion(
-            db, item, day,
+            db, item, day, done_on=done_on,
             sets=item["target_sets"],
             reps=item["target_reps"],
             duration_sec=_row_value(item, "target_seconds"),
@@ -5078,6 +5155,7 @@ def api_challenge_history():
     items = _active_challenge_items(db, challenge_id)
     active_ids = [i["id"] for i in items]
     by_day = _completions_by_day(db, active_ids)
+    ahead_by_day = _done_on_by_day(db, active_ids)
     history = []
     d = to_date
     while d >= from_date:
@@ -5088,6 +5166,9 @@ def api_challenge_history():
                 "day": iso,
                 "done": [i["id"] for i in items if i["id"] in done],
                 "complete": bool(active_ids) and set(active_ids) <= done,
+                # Only the ticks that were kept in advance, so the grid can say
+                # when the work behind a future day actually happened.
+                "done_on": ahead_by_day.get(iso, {}),
             }
         )
         d -= timedelta(days=1)

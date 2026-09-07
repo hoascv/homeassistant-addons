@@ -1104,6 +1104,12 @@ function challengeCardHtml(ch) {
     ? `day ${ch.day_number} of ${ch.total_days}`
     : "";
   const empty = items ? "" : '<p class="empty-state">No items yet — add some to start ticking.</p>';
+  // Days already done in advance. Nothing else on the card can show this — the
+  // dots and every figure stop at today — and without it the session gets done
+  // a second time when the day comes round.
+  const ahead = (ch.done_ahead || []).length
+    ? `<p class="challenge-ahead">✓ ${ch.done_ahead.map((d) => escapeHtml(fmtDate(d))).join(", ")} already done</p>`
+    : "";
   // On a rest day the list is a wall of things you are not being asked to do,
   // and with several challenges resting at once it buries the ones you are. So
   // it folds away — but only folds: a bonus session on a rest day is still worth
@@ -1128,6 +1134,7 @@ function challengeCardHtml(ch) {
       ${empty}
       <div class="week-dots">${dots}</div>
       ${progress ? `<p class="challenge-progress">${progress}</p>` : ""}
+      ${ahead}
       <div class="card-actions">
         <button type="button" class="link-btn ch-edit" data-challenge="${ch.id}">Edit challenge</button>
         <button type="button" class="link-btn ch-history" data-challenge="${ch.id}">History</button>
@@ -1948,6 +1955,7 @@ function openChallengeHistory() {
   from.setDate(from.getDate() - 13);
   document.getElementById("history-to").value = to.toISOString().slice(0, 10);
   document.getElementById("history-from").value = from.toISOString().slice(0, 10);
+  syncHistoryAheadBtn();
   loadChallengeHistory();
 }
 document.getElementById("challenge-history-close-btn").addEventListener("click", () => {
@@ -1956,6 +1964,30 @@ document.getElementById("challenge-history-close-btn").addEventListener("click",
 });
 document.getElementById("history-from").addEventListener("change", loadChallengeHistory);
 document.getElementById("history-to").addEventListener("change", loadChallengeHistory);
+
+// How far forward "Show the days ahead" reaches. A week covers the case this
+// is for — a day you already know you will miss — without turning the grid
+// into a list of days nobody has any business ticking yet.
+const HISTORY_AHEAD_DAYS = 7;
+
+// The grid normally ends today, because nothing later can have happened yet.
+// Reaching forward is what lets a day be kept in advance: the tick credits that
+// day, and logs the session now.
+document.getElementById("history-ahead-btn").addEventListener("click", () => {
+  const to = document.getElementById("history-to");
+  const showing = to.value > todayISO();
+  const target = new Date(`${todayISO()}T00:00:00`);
+  if (!showing) target.setDate(target.getDate() + HISTORY_AHEAD_DAYS);
+  to.value = `${target.getFullYear()}-${String(target.getMonth() + 1).padStart(2, "0")}-${String(target.getDate()).padStart(2, "0")}`;
+  syncHistoryAheadBtn();
+  loadChallengeHistory();
+});
+
+function syncHistoryAheadBtn() {
+  const showing = document.getElementById("history-to").value > todayISO();
+  document.getElementById("history-ahead-btn").textContent =
+    showing ? "Hide the days ahead" : "Show the days ahead";
+}
 
 // Last /api/challenge/history payload — the source for optimistic cell toggles.
 let challengeHistoryData = null;
@@ -1972,6 +2004,7 @@ async function loadChallengeHistory() {
 function renderChallengeHistory(data) {
   const host = document.getElementById("history-grid");
   const items = data.items || [];
+  const today = todayISO();
   host.innerHTML = data.days
     .map((d) => {
       const done = new Set(d.done);
@@ -1981,10 +2014,19 @@ function renderChallengeHistory(data) {
             data-item="${it.id}" data-day="${d.day}" title="${escapeHtml(it.name)}">${it.item_type === "supplement" ? "💊" : "🏋️"}</button>`
         )
         .join("");
+      // A day kept in advance says when the work was really done; a day still
+      // to come says so, so the dashed row is never a mystery.
+      const doneOn = Object.values(d.done_on || {})[0];
+      const note = doneOn
+        ? `done ${escapeHtml(fmtDate(doneOn))}`
+        : d.day > today
+        ? "ahead"
+        : "";
       return `
-        <div class="history-row ${d.complete ? "complete" : ""}">
+        <div class="history-row ${d.complete ? "complete" : ""} ${d.day > today ? "ahead" : ""}">
           <span class="history-day">${escapeHtml(fmtDate(d.day))}</span>
           <div class="history-cells">${cells}</div>
+          ${note ? `<span class="history-note">${note}</span>` : ""}
         </div>`;
     })
     .join("");
