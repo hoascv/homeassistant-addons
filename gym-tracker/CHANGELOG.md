@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.54.0
+
+- **Distance and floors climbed, from the same summary as steps.** Both were
+  already in the payload — `totalDistanceMeters` and `floorsAscended` — so
+  again there is no extra call to Garmin. Distance is stored in metres and
+  floors as whole floors, with `userFloorsAscendedGoal` beside them the way the
+  step goal is.
+- **The ⌚ sheet gets a Distance and a Floors chart**, floors scaled against
+  your floors goal. The chip row wraps now; there are more metrics than fit one
+  phone-width row. The home card keeps its four tiles — it is a glance, not a
+  dashboard.
+- **Distance joins the metrics that mark a day incomplete**, which fills it in
+  backwards across your history and, more to the point, covers the days synced
+  by 1.53.0 — those have steps and would otherwise have counted as done.
+- **Floors deliberately do not.** They need an altimeter, and a watch without
+  one would have every day it has ever recorded marked incomplete over a number
+  it is not built to produce. That is the sleep score's mistake, one sensor
+  along.
+- Floors descended is left where it is: the same climb seen from the other end,
+  and Garmin's own goal and card only ever speak about the ascent.
+
 ## 1.53.0
 
 - **Steps are collected now.** The diagnostic in 1.52.0 settled that this watch

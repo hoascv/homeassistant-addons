@@ -256,16 +256,25 @@ def _body_battery_from_series(client, day):
     return out
 
 
-def _steps_fields(summary):
-    """Steps and the day's goal, from the summary already fetched.
+def _activity_fields(summary):
+    """The day's movement — steps, distance and floors — with the goals Garmin
+    was measuring them against, from the summary already fetched.
 
-    Zero is a real answer — a day the watch spent on the bedside table — so it
-    is stored like any other number. A day Garmin has nothing for answers with
-    the field empty instead, which `_num` turns into None and the upsert skips.
+    Zero is a real answer — a day the watch spent on the bedside table, or one
+    with no stairs in it — so it is stored like any other number. A day Garmin
+    has nothing for answers with the field empty instead, which `_num` turns
+    into None and the upsert skips.
+
+    Metres and whole floors, as Garmin reports them. Floors descended is left
+    where it is: it is the same climb seen from the other end, and Garmin's own
+    goal and card only ever speak about the ascent.
     """
     return {
         "steps": _num(summary.get("totalSteps")),
         "step_goal": _num(summary.get("dailyStepGoal")),
+        "distance_m": _num(summary.get("totalDistanceMeters")),
+        "floors_up": _num(summary.get("floorsAscended")),
+        "floors_goal": _num(summary.get("userFloorsAscendedGoal")),
     }
 
 
@@ -401,7 +410,7 @@ def fetch_day(client, day):
     fields.update(_sleep_fields(client, day))
     fields.update(_stress_fields(client, day))
     fields.update(_body_battery_fields(client, day, summary))
-    fields.update(_steps_fields(summary))
+    fields.update(_activity_fields(summary))
     return fields
 
 

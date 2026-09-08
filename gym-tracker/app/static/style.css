@@ -283,7 +283,8 @@ body {
   display: flex; align-items: center; justify-content: space-between;
   gap: 0.5rem; flex-wrap: wrap;
 }
-.ghist-metrics { display: flex; gap: 0.3rem; }
+/* Wraps: there are more metrics than fit one phone-width row. */
+.ghist-metrics { display: flex; flex-wrap: wrap; gap: 0.3rem; }
 .chip {
   font-size: 0.72rem; padding: 0.2rem 0.55rem; border-radius: 999px; cursor: pointer;
   border: 1px solid var(--border); background: var(--surface-2); color: var(--text-muted);

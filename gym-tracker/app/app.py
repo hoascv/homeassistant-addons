@@ -20,7 +20,7 @@ from flask import Flask, Response, g, jsonify, render_template, request, send_fi
 import garmin_client
 import meals
 
-APP_VERSION = "1.53.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.54.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("GYM_DB_PATH", "/data/gym.db")
 OPTIONS_PATH = os.environ.get("GYM_OPTIONS_PATH", "/data/options.json")
@@ -737,6 +737,9 @@ def init_db():
             -- steps are: it is what makes the number mean anything, and it
             -- cannot be recovered later.
             step_goal INTEGER,
+            distance_m INTEGER,
+            floors_up INTEGER,
+            floors_goal INTEGER,
             synced_at TEXT
         )
         """
@@ -999,6 +1002,12 @@ def _migrate_columns(conn):
         conn.execute("ALTER TABLE garmin_daily ADD COLUMN steps INTEGER")
     if "step_goal" not in daily_cols:
         conn.execute("ALTER TABLE garmin_daily ADD COLUMN step_goal INTEGER")
+    if "distance_m" not in daily_cols:
+        conn.execute("ALTER TABLE garmin_daily ADD COLUMN distance_m INTEGER")
+    if "floors_up" not in daily_cols:
+        conn.execute("ALTER TABLE garmin_daily ADD COLUMN floors_up INTEGER")
+    if "floors_goal" not in daily_cols:
+        conn.execute("ALTER TABLE garmin_daily ADD COLUMN floors_goal INTEGER")
 
     challenge_cols = {row[1] for row in conn.execute("PRAGMA table_info(challenges)")}
     if "repeat_of" not in challenge_cols:
@@ -1365,9 +1374,16 @@ GARMIN_PROBE_ATTEMPTS = 3
 # steps is listed for that reason too: it rides in the same summary as Body
 # Battery, so days already stored have it empty through no fault of the watch,
 # and this is what fills it in backwards. A day Garmin genuinely has nothing
-# for is still asked about only GARMIN_PROBE_ATTEMPTS times.
+# for is still asked about only GARMIN_PROBE_ATTEMPTS times. distance_m is
+# listed for the same reason, and covers the days that were synced knowing
+# about steps but not yet about distance.
+#
+# Floors are deliberately absent. They need an altimeter, and a watch without
+# one would have every day it ever recorded marked incomplete over a number it
+# is not built to produce — the sleep score's mistake, one sensor along.
 GARMIN_DAY_METRICS = (
     "sleep_seconds", "resting_hr", "stress_avg", "body_battery_high", "steps",
+    "distance_m",
 )
 
 

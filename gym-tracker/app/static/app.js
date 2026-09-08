@@ -3704,6 +3704,10 @@ const GARMIN_METRICS = {
   // so a full bar means the day was made. `max` is only the floor for history
   // stored before the goal was.
   steps: { key: "steps", max: 6000, goalKey: "step_goal", fmt: (v) => v.toLocaleString() },
+  distance: { key: "distance_m", max: 5000, fmt: (v) => `${(v / 1000).toFixed(1)} km` },
+  // Same goal treatment as steps. A day with no stairs in it is a real zero,
+  // and reads as one: an empty bar against the goal, not a gap.
+  floors: { key: "floors_up", max: 10, goalKey: "floors_goal", fmt: (v) => `${v}` },
 };
 const GARMIN_HISTORY_DAYS = 14;
 let garminMetric = "sleep";

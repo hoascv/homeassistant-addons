@@ -586,7 +586,7 @@ send a **test** notification.
 ## Garmin Connect
 
 Connect your Garmin account to pull in **sleep**, **stress**, **Body
-Battery**, **steps** and **activities**. Open the ⌚ Garmin sheet and sign in with your
+Battery**, **steps**, **distance**, **floors climbed** and **activities**. Open the ⌚ Garmin sheet and sign in with your
 Garmin email and password. If your account uses **2-factor authentication**,
 you'll be asked for the code Garmin sends — enter it and the connection
 completes.
@@ -655,12 +655,16 @@ has empty timestamps, because the original times were never recorded.
 
 Every day pulled is kept, building up a history you can scroll back through —
 the ⌚ sheet charts the **last 14 days** of sleep, stress, Body Battery,
-resting heart rate or steps.
+resting heart rate, steps, distance or floors.
 
-Steps are charted against **your own step goal** for the day rather than a
-round number, so a full bar means you made it. Garmin's goal moves on an
+Steps and floors are charted against **your own goal** for the day rather than
+a round number, so a full bar means you made it. Garmin's goals move on an
 adaptive setting, so the goal in force is stored per day alongside the count —
 it cannot be worked out afterwards.
+
+Floors climbed needs a watch with an altimeter. Unlike the other daily numbers
+a missing one never marks a day incomplete, so a watch that cannot measure
+them is never asked twice.
 
 Your watch only reaches Garmin when it syncs with the Garmin Connect phone
 app, which can lag by days. Goal Tracker treats that as normal rather than as

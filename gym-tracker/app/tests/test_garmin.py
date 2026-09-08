@@ -959,7 +959,8 @@ def test_a_day_is_not_re_chased_for_a_sleep_score_alone(conn, monkeypatch):
     old_day = (date.today() - timedelta(days=9)).isoformat()
     conn.execute(
         "INSERT INTO garmin_daily (day, sleep_seconds, resting_hr, stress_avg, body_battery_high, "
-        "steps, synced_at) VALUES (?, 27000, 54, 30, 88, 8412, '2026-07-01T06:00:00')",
+        "steps, distance_m, synced_at) "
+        "VALUES (?, 27000, 54, 30, 88, 8412, 6210, '2026-07-01T06:00:00')",
         (old_day,),
     )
     conn.commit()
@@ -1059,15 +1060,35 @@ def test_diagnose_endpoint_includes_steps(client, monkeypatch):
 # --- Steps ------------------------------------------------------------------
 
 
-def test_steps_and_the_goal_are_read_from_the_daily_summary():
-    fields = gymapp.garmin_client._steps_fields({"totalSteps": 3704, "dailyStepGoal": 6110})
-    assert fields == {"steps": 3704, "step_goal": 6110}
+def test_the_days_movement_is_read_from_the_daily_summary():
+    fields = gymapp.garmin_client._activity_fields(
+        {
+            "totalSteps": 3704,
+            "dailyStepGoal": 6110,
+            "totalDistanceMeters": 2618,
+            "floorsAscended": 7,
+            "userFloorsAscendedGoal": 10,
+        }
+    )
+    assert fields == {
+        "steps": 3704,
+        "step_goal": 6110,
+        "distance_m": 2618,
+        "floors_up": 7,
+        "floors_goal": 10,
+    }
+
+
+def test_a_fractional_floor_count_is_rounded():
+    """Garmin reports floors as a float; the column is whole floors."""
+    assert gymapp.garmin_client._activity_fields({"floorsAscended": 6.7})["floors_up"] == 7
 
 
 def test_a_day_on_the_bedside_table_is_zero_steps_not_no_steps():
     """Zero is a measurement. Only an absent field means the watch said nothing."""
-    assert gymapp.garmin_client._steps_fields({"totalSteps": 0})["steps"] == 0
-    assert gymapp.garmin_client._steps_fields({})["steps"] is None
+    assert gymapp.garmin_client._activity_fields({"totalSteps": 0})["steps"] == 0
+    assert gymapp.garmin_client._activity_fields({})["steps"] is None
+    assert gymapp.garmin_client._activity_fields({"floorsAscended": 0})["floors_up"] == 0
 
 
 def test_the_daily_summary_is_fetched_once_for_both_metrics_that_need_it():
@@ -1086,12 +1107,16 @@ def test_the_daily_summary_is_fetched_once_for_both_metrics_that_need_it():
             "bodyBatteryLowestValue": 24,
             "totalSteps": 3704,
             "dailyStepGoal": 6110,
+            "totalDistanceMeters": 2618,
+            "floorsAscended": 7,
         }
     )
     fields = gymapp.garmin_client.fetch_day(client, "2026-09-07")
     assert _CountingClient.calls == 1
     assert fields["steps"] == 3704
     assert fields["step_goal"] == 6110
+    assert fields["distance_m"] == 2618
+    assert fields["floors_up"] == 7
     assert fields["body_battery_high"] == 92
 
 
@@ -1125,3 +1150,33 @@ def test_a_day_stored_without_steps_is_chased(conn, monkeypatch):
     row = conn.execute("SELECT * FROM garmin_daily WHERE day = ?", (old_day,)).fetchone()
     assert row["steps"] == 8412
     assert row["sleep_seconds"] == 27000  # and the day it already had is intact
+
+
+def test_a_day_stored_without_distance_is_chased(conn, monkeypatch):
+    """The window between knowing about steps and knowing about distance: those
+    days have steps and would otherwise count as complete."""
+    from datetime import date, timedelta
+
+    old_day = (date.today() - timedelta(days=6)).isoformat()
+    conn.execute(
+        "INSERT INTO garmin_daily (day, sleep_seconds, resting_hr, stress_avg, body_battery_high, "
+        "steps, synced_at) VALUES (?, 27000, 54, 30, 88, 8412, '2026-07-01T06:00:00')",
+        (old_day,),
+    )
+    conn.commit()
+
+    _patch_data(monkeypatch, {"distance_m": 6210, "floors_up": 7}, [], days_with_data={old_day})
+    for _ in range(5):
+        gymapp._garmin_do_sync(conn)
+
+    row = conn.execute("SELECT * FROM garmin_daily WHERE day = ?", (old_day,)).fetchone()
+    assert row["distance_m"] == 6210
+    assert row["floors_up"] == 7
+    assert row["steps"] == 8412  # untouched
+
+
+def test_floors_alone_never_mark_a_day_incomplete():
+    """A watch with no altimeter must not have its whole history re-asked for a
+    number it cannot produce."""
+    assert "floors_up" not in gymapp.GARMIN_DAY_METRICS
+    assert "floors_goal" not in gymapp.GARMIN_DAY_METRICS
