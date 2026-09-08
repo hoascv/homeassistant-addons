@@ -3671,6 +3671,8 @@ async function loadGarminCard() {
     document.getElementById("garmin-stress").textContent = d.stress_avg != null ? d.stress_avg : "–";
     document.getElementById("garmin-battery").textContent =
       d.body_battery_high != null ? `${d.body_battery_low != null ? d.body_battery_low + "–" : ""}${d.body_battery_high}` : "–";
+    document.getElementById("garmin-steps").textContent =
+      d.steps != null ? d.steps.toLocaleString() : "–";
   }
 
   list.innerHTML = (data.activities || [])
@@ -3687,17 +3689,21 @@ async function loadGarminCard() {
     .join("");
 
   empty.hidden = !!hasContent;
-  if (!data.connected) empty.textContent = "Connect Garmin to see your sleep, stress, Body Battery and activities.";
+  if (!data.connected) empty.textContent = "Connect Garmin to see your sleep, stress, Body Battery, steps and activities.";
   else if (!hasContent) empty.textContent = "Connected. Press Sync to pull your latest Garmin data.";
 }
 
-// The three stored daily metrics, one shown at a time. Only one series is on
-// screen at once, so colour carries no identity here — the chip does.
+// The stored daily metrics, one shown at a time. Only one series is on screen
+// at once, so colour carries no identity here — the chip does.
 const GARMIN_METRICS = {
   sleep: { key: "sleep_seconds", max: 9 * 3600, fmt: (v) => fmtDuration(v) },
   stress: { key: "stress_avg", max: 100, fmt: (v) => `${v}` },
   battery: { key: "body_battery_high", max: 100, fmt: (v) => `${v}` },
   resting: { key: "resting_hr", max: 80, fmt: (v) => `${v} bpm` },
+  // Scaled against your own step goal rather than a round number nobody chose,
+  // so a full bar means the day was made. `max` is only the floor for history
+  // stored before the goal was.
+  steps: { key: "steps", max: 6000, goalKey: "step_goal", fmt: (v) => v.toLocaleString() },
 };
 const GARMIN_HISTORY_DAYS = 14;
 let garminMetric = "sleep";
@@ -3723,7 +3729,10 @@ async function renderGarminHistory() {
   const uploadedThrough = garminDeviceUpload ? garminDeviceUpload.slice(0, 10) : null;
 
   const values = (rows || []).map((r) => r[metric.key]).filter((v) => v != null);
-  const scale = Math.max(metric.max, ...values) || 1;
+  const goals = metric.goalKey
+    ? (rows || []).map((r) => r[metric.goalKey]).filter((v) => v != null)
+    : [];
+  const scale = Math.max(metric.max, ...goals, ...values) || 1;
 
   const out = [];
   for (let i = 0; i < GARMIN_HISTORY_DAYS; i++) {

@@ -174,11 +174,22 @@ _BB_SUMMARY_KEYS = {
 }
 
 
-def _body_battery_from_summary(client, day):
+def _day_summary(client, day):
+    """Garmin's daily user summary, or {} if it cannot be had.
+
+    Fetched once per day and read by everything that needs it. Body Battery and
+    steps both live in this payload, and asking for it twice would be a second
+    round-trip to Garmin for bytes already in hand.
+    """
     try:
         data = client.get_user_summary(day) or {}
     except Exception:  # noqa: BLE001
         return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _body_battery_from_summary(client, day, summary=None):
+    data = _day_summary(client, day) if summary is None else summary
     if not isinstance(data, dict):
         return {}
     out = {}
@@ -245,8 +256,21 @@ def _body_battery_from_series(client, day):
     return out
 
 
-def _body_battery_fields(client, day):
-    fields = _body_battery_from_summary(client, day)
+def _steps_fields(summary):
+    """Steps and the day's goal, from the summary already fetched.
+
+    Zero is a real answer — a day the watch spent on the bedside table — so it
+    is stored like any other number. A day Garmin has nothing for answers with
+    the field empty instead, which `_num` turns into None and the upsert skips.
+    """
+    return {
+        "steps": _num(summary.get("totalSteps")),
+        "step_goal": _num(summary.get("dailyStepGoal")),
+    }
+
+
+def _body_battery_fields(client, day, summary=None):
+    fields = _body_battery_from_summary(client, day, summary)
     if fields.get("body_battery_high") is None or fields.get("body_battery_low") is None:
         for key, value in _body_battery_from_series(client, day).items():
             if fields.get(key) is None:
@@ -372,10 +396,12 @@ def device_last_upload(client):
 
 def fetch_day(client, day):
     """All wellness metrics for one YYYY-MM-DD, flattened into a single dict."""
+    summary = _day_summary(client, day)
     fields = {}
     fields.update(_sleep_fields(client, day))
     fields.update(_stress_fields(client, day))
-    fields.update(_body_battery_fields(client, day))
+    fields.update(_body_battery_fields(client, day, summary))
+    fields.update(_steps_fields(summary))
     return fields
 
 

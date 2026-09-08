@@ -586,7 +586,7 @@ send a **test** notification.
 ## Garmin Connect
 
 Connect your Garmin account to pull in **sleep**, **stress**, **Body
-Battery** and **activities**. Open the ⌚ Garmin sheet and sign in with your
+Battery**, **steps** and **activities**. Open the ⌚ Garmin sheet and sign in with your
 Garmin email and password. If your account uses **2-factor authentication**,
 you'll be asked for the code Garmin sends — enter it and the connection
 completes.
@@ -599,7 +599,7 @@ normally only sign in once.
 Once connected, Goal Tracker syncs automatically in the background (every
 `garmin_sync_interval_hours`, default 6), and the ⌚ sheet has a **Sync now**
 button for an immediate pull. The home **Garmin** card shows your latest sleep,
-stress and Body Battery, plus recent activities. Use **Disconnect** to remove
+stress, Body Battery and steps, plus recent activities. Use **Disconnect** to remove
 the stored token; already-imported data stays.
 
 ### Heart rate for your exercises
@@ -654,8 +654,13 @@ has empty timestamps, because the original times were never recorded.
 ### History, and a watch that hasn't synced
 
 Every day pulled is kept, building up a history you can scroll back through —
-the ⌚ sheet charts the **last 14 days** of sleep, stress, Body Battery or
-resting heart rate.
+the ⌚ sheet charts the **last 14 days** of sleep, stress, Body Battery,
+resting heart rate or steps.
+
+Steps are charted against **your own step goal** for the day rather than a
+round number, so a full bar means you made it. Garmin's goal moves on an
+adaptive setting, so the goal in force is stored per day alongside the count —
+it cannot be worked out afterwards.
 
 Your watch only reaches Garmin when it syncs with the Garmin Connect phone
 app, which can lag by days. Goal Tracker treats that as normal rather than as
@@ -687,10 +692,9 @@ data — which is what's needed to work out why something is empty. **Copy** put
 it on the clipboard. The same thing is available at
 `/api/garmin/diagnose?day=YYYY-MM-DD` if you'd rather use the URL.
 
-The diagnostic also reports what the daily summary says about **steps**, which
-nothing collects yet: `totalSteps` and `dailyStepGoal` if they are there, and
-otherwise the summary's key names, so you can see whether your watch reports
-them at all before anything is built on it.
+The diagnostic also reports what the daily summary says about **steps**, and
+the summary's other key names — useful for seeing whether a field your watch
+reports could be worth collecting.
 
 Note that not every Garmin device reports a **sleep score** — some send no such
 field at all. Where it isn't available it simply stays empty and the add-on

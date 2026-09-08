@@ -959,7 +959,7 @@ def test_a_day_is_not_re_chased_for_a_sleep_score_alone(conn, monkeypatch):
     old_day = (date.today() - timedelta(days=9)).isoformat()
     conn.execute(
         "INSERT INTO garmin_daily (day, sleep_seconds, resting_hr, stress_avg, body_battery_high, "
-        "synced_at) VALUES (?, 27000, 54, 30, 88, '2026-07-01T06:00:00')",
+        "steps, synced_at) VALUES (?, 27000, 54, 30, 88, 8412, '2026-07-01T06:00:00')",
         (old_day,),
     )
     conn.commit()
@@ -1054,3 +1054,74 @@ def test_diagnose_endpoint_includes_steps(client, monkeypatch):
     )
     data = client.get("/api/garmin/diagnose?day=2026-07-29").get_json()["steps"]
     assert data["totalSteps"] == 8412
+
+
+# --- Steps ------------------------------------------------------------------
+
+
+def test_steps_and_the_goal_are_read_from_the_daily_summary():
+    fields = gymapp.garmin_client._steps_fields({"totalSteps": 3704, "dailyStepGoal": 6110})
+    assert fields == {"steps": 3704, "step_goal": 6110}
+
+
+def test_a_day_on_the_bedside_table_is_zero_steps_not_no_steps():
+    """Zero is a measurement. Only an absent field means the watch said nothing."""
+    assert gymapp.garmin_client._steps_fields({"totalSteps": 0})["steps"] == 0
+    assert gymapp.garmin_client._steps_fields({})["steps"] is None
+
+
+def test_the_daily_summary_is_fetched_once_for_both_metrics_that_need_it():
+    """Body Battery and steps share one payload; asking twice is a wasted call."""
+
+    class _CountingClient(_BBClient):
+        calls = 0
+
+        def get_user_summary(self, day):
+            _CountingClient.calls += 1
+            return self._summary
+
+    client = _CountingClient(
+        summary={
+            "bodyBatteryHighestValue": 92,
+            "bodyBatteryLowestValue": 24,
+            "totalSteps": 3704,
+            "dailyStepGoal": 6110,
+        }
+    )
+    fields = gymapp.garmin_client.fetch_day(client, "2026-09-07")
+    assert _CountingClient.calls == 1
+    assert fields["steps"] == 3704
+    assert fields["step_goal"] == 6110
+    assert fields["body_battery_high"] == 92
+
+
+def test_a_day_with_no_steps_stores_none(conn, monkeypatch):
+    from datetime import date
+
+    day = date.today().isoformat()
+    _patch_data(monkeypatch, {"sleep_seconds": 26000}, [], days_with_data={day})
+    gymapp._garmin_do_sync(conn)
+    row = conn.execute("SELECT steps FROM garmin_daily WHERE day = ?", (day,)).fetchone()
+    assert row["steps"] is None
+
+
+def test_a_day_stored_without_steps_is_chased(conn, monkeypatch):
+    """Steps ride in the summary Body Battery already used, so every day stored
+    before this existed has them empty through no fault of the watch."""
+    from datetime import date, timedelta
+
+    old_day = (date.today() - timedelta(days=6)).isoformat()
+    conn.execute(
+        "INSERT INTO garmin_daily (day, sleep_seconds, resting_hr, stress_avg, body_battery_high, "
+        "synced_at) VALUES (?, 27000, 54, 30, 88, '2026-07-01T06:00:00')",
+        (old_day,),
+    )
+    conn.commit()
+
+    _patch_data(monkeypatch, {"steps": 8412}, [], days_with_data={old_day})
+    for _ in range(5):
+        gymapp._garmin_do_sync(conn)
+
+    row = conn.execute("SELECT * FROM garmin_daily WHERE day = ?", (old_day,)).fetchone()
+    assert row["steps"] == 8412
+    assert row["sleep_seconds"] == 27000  # and the day it already had is intact

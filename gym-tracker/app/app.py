@@ -20,7 +20,7 @@ from flask import Flask, Response, g, jsonify, render_template, request, send_fi
 import garmin_client
 import meals
 
-APP_VERSION = "1.52.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.53.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("GYM_DB_PATH", "/data/gym.db")
 OPTIONS_PATH = os.environ.get("GYM_OPTIONS_PATH", "/data/options.json")
@@ -731,6 +731,12 @@ def init_db():
             body_battery_charged INTEGER,
             body_battery_drained INTEGER,
             resting_hr INTEGER,
+            steps INTEGER,
+            -- The goal Garmin had set that day, which on an adaptive goal is
+            -- not the goal it has now. Stored per day for the same reason the
+            -- steps are: it is what makes the number mean anything, and it
+            -- cannot be recovered later.
+            step_goal INTEGER,
             synced_at TEXT
         )
         """
@@ -989,6 +995,10 @@ def _migrate_columns(conn):
     daily_cols = {row[1] for row in conn.execute("PRAGMA table_info(garmin_daily)")}
     if "resting_hr" not in daily_cols:
         conn.execute("ALTER TABLE garmin_daily ADD COLUMN resting_hr INTEGER")
+    if "steps" not in daily_cols:
+        conn.execute("ALTER TABLE garmin_daily ADD COLUMN steps INTEGER")
+    if "step_goal" not in daily_cols:
+        conn.execute("ALTER TABLE garmin_daily ADD COLUMN step_goal INTEGER")
 
     challenge_cols = {row[1] for row in conn.execute("PRAGMA table_info(challenges)")}
     if "repeat_of" not in challenge_cols:
@@ -1352,7 +1362,13 @@ GARMIN_PROBE_ATTEMPTS = 3
 # ever fill it, and listing it here would have the backfill re-asking about
 # two months of days forever. resting_hr is listed, because it arrives in the
 # same response and is therefore worth chasing for days stored without it.
-GARMIN_DAY_METRICS = ("sleep_seconds", "resting_hr", "stress_avg", "body_battery_high")
+# steps is listed for that reason too: it rides in the same summary as Body
+# Battery, so days already stored have it empty through no fault of the watch,
+# and this is what fills it in backwards. A day Garmin genuinely has nothing
+# for is still asked about only GARMIN_PROBE_ATTEMPTS times.
+GARMIN_DAY_METRICS = (
+    "sleep_seconds", "resting_hr", "stress_avg", "body_battery_high", "steps",
+)
 
 
 def _garmin_upsert_day(conn, day, fields):

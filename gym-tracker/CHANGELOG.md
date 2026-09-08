@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.53.0
+
+- **Steps are collected now.** The diagnostic in 1.52.0 settled that this watch
+  reports them — `totalSteps` and `dailyStepGoal`, in the daily summary the
+  Body Battery sync was already fetching — so they cost no extra call to
+  Garmin. The summary is now fetched once per day and read by both.
+- **The goal is stored per day, next to the count.** Garmin's step goal is
+  adaptive: it moves. Keeping only today's goal would rewrite the meaning of
+  every day behind it, and the goal in force on a past day cannot be recovered
+  afterwards.
+- **Home shows a steps tile, and the ⌚ sheet a Steps chart** — scaled against
+  your own goal rather than a round number nobody chose, so a full bar means
+  the day was made. Days stored before the goal was fall back to a floor.
+- **Your history fills in backwards.** Steps join the metrics that mark a day
+  incomplete, because every day already stored has them empty through no fault
+  of the watch — so the backfill chases them the way it chased Body Battery.
+  A day Garmin genuinely has nothing for is still asked about three times and
+  then left alone.
+- Zero steps is stored as zero. A day the watch spent on the bedside table is a
+  measurement; only an absent field means the watch said nothing.
+
 ## 1.52.0
 
 - **Diagnostics report what the watch says about steps.** The daily user
