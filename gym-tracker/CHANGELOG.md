@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.52.0
+
+- **Diagnostics report what the watch says about steps.** The daily user
+  summary is already fetched for Body Battery, and steps would ride along in
+  it for free — but only if this watch and account actually report them, which
+  no amount of reading the API can settle. The diagnostic answers that
+  outright: `totalSteps` and `dailyStepGoal` as parsed, every summary key
+  naming itself after steps with its value, and the rest of the summary by key
+  name so a field worth having that isn't called "step" — distance, floors,
+  active calories — can be spotted too.
+- Nothing collects steps yet. This is the check that comes first, in the same
+  spirit as the Body Battery diagnostic: find out what the device answers
+  before building a column that assumes it.
+
 ## 1.51.0
 
 - **A day can be kept in advance.** *Show the days ahead* in the History sheet

@@ -1007,3 +1007,50 @@ def test_a_day_without_a_resting_heart_rate_is_chased(conn, monkeypatch):
     row = conn.execute("SELECT * FROM garmin_daily WHERE day = ?", (old_day,)).fetchone()
     assert row["resting_hr"] == 54
     assert row["sleep_seconds"] == 27000  # nothing else disturbed
+
+
+def test_diagnose_steps_reports_what_the_summary_carries():
+    client = _BBClient(
+        summary={
+            "totalSteps": 8412,
+            "dailyStepGoal": 7500,
+            "totalStepsGoal": 7500,
+            "totalDistanceMeters": 6210,
+            "bodyBatteryHighestValue": 90,
+        }
+    )
+    out = gymapp.garmin_client.diagnose_steps(client, "2026-07-29")
+    assert out["totalSteps"] == 8412
+    assert out["dailyStepGoal"] == 7500
+    # Values for the keys that name themselves after steps...
+    assert out["step_keys"] == {"dailyStepGoal": 7500, "totalSteps": 8412, "totalStepsGoal": 7500}
+    # ...and names only for the rest, so distance or floors can still be seen.
+    assert "totalDistanceMeters" in out["summary_keys"]
+    assert "bodyBatteryHighestValue" in out["summary_keys"]
+
+
+def test_diagnose_steps_reports_a_watch_that_says_nothing_about_them():
+    out = gymapp.garmin_client.diagnose_steps(_BBClient(summary={}), "2026-07-29")
+    assert out["totalSteps"] is None
+    assert out["step_keys"] == {}
+    assert out["summary_keys"] == []
+
+
+def test_diagnose_steps_reports_a_source_that_raises():
+    class _Broken:
+        def get_user_summary(self, day):
+            raise RuntimeError("403 Forbidden")
+
+    out = gymapp.garmin_client.diagnose_steps(_Broken(), "2026-07-29")
+    assert out["error"] == "403 Forbidden"
+
+
+def test_diagnose_endpoint_includes_steps(client, monkeypatch):
+    monkeypatch.setattr(gymapp.garmin_client, "is_connected", lambda: True)
+    monkeypatch.setattr(
+        gymapp.garmin_client,
+        "get_client",
+        lambda: _BBClient(summary={"totalSteps": 8412, "dailyStepGoal": 7500}),
+    )
+    data = client.get("/api/garmin/diagnose?day=2026-07-29").get_json()["steps"]
+    assert data["totalSteps"] == 8412

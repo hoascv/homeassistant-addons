@@ -316,6 +316,34 @@ def diagnose_body_battery(client, day):
     }
 
 
+def diagnose_steps(client, day):
+    """What the daily user summary says about steps.
+
+    Values for the keys that name themselves after steps, and everything else
+    in the summary by key name only. Names rather than the whole payload for
+    the same reason as the Body Battery diagnostic above: the question is what
+    this watch reports, not what it recorded.
+
+    Nothing reads steps yet — this is what settles whether anything could.
+    """
+    try:
+        summary = client.get_user_summary(day) or {}
+    except Exception as e:  # noqa: BLE001 - a diagnostic must report, not raise
+        return {"day": day, "error": str(e)}
+    if not isinstance(summary, dict):
+        return {"day": day, "error": f"summary is {type(summary).__name__}, not an object"}
+    return {
+        "day": day,
+        # The two fields a step column would actually be built on.
+        "totalSteps": _num(summary.get("totalSteps")),
+        "dailyStepGoal": _num(summary.get("dailyStepGoal")),
+        "step_keys": {k: summary[k] for k in sorted(summary) if "step" in k.lower()},
+        # So a field worth collecting that isn't called "step" — distance,
+        # floors, active calories — can still be spotted.
+        "summary_keys": sorted(summary),
+    }
+
+
 def device_last_upload(client):
     """When the watch itself last uploaded to Garmin Connect, as a local ISO
     string (Garmin reports epoch milliseconds).

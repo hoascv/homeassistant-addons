@@ -687,6 +687,11 @@ data — which is what's needed to work out why something is empty. **Copy** put
 it on the clipboard. The same thing is available at
 `/api/garmin/diagnose?day=YYYY-MM-DD` if you'd rather use the URL.
 
+The diagnostic also reports what the daily summary says about **steps**, which
+nothing collects yet: `totalSteps` and `dailyStepGoal` if they are there, and
+otherwise the summary's key names, so you can see whether your watch reports
+them at all before anything is built on it.
+
 Note that not every Garmin device reports a **sleep score** — some send no such
 field at all. Where it isn't available it simply stays empty and the add-on
 stops asking. **Resting heart rate** comes from the same data and is usually the
