@@ -12,7 +12,16 @@ import pytest
 import app as gymapp
 
 
-LOG_START = "2026-07-03"
+# Relative to today, so the newest reading in a fixture lands today.
+#
+# A goal is always dated from today, and the projection is the line through the
+# readings extended to the target date — so the span it is extrapolated over is
+# (first reading → target). Pinned to a calendar date, that span grew by a day
+# every day and the fixtures below slowly drifted across the thresholds they
+# were written to sit on: three of them were set to start failing between
+# September and December 2026, on no change to the code at all. A test that
+# depends on when it is run fails on a Tuesday for no reason anybody can see.
+LOG_START = (datetime.date.today() - datetime.timedelta(days=56)).isoformat()
 
 
 def _logs(points, start=LOG_START):
@@ -71,12 +80,9 @@ def test_a_trend_landing_past_the_target_reads_ahead():
 def test_a_trend_landing_on_the_target_reads_on_track():
     """Within the band either side, which is what 'on track' means.
 
-    The span is measured from the first *log* to the target, not from today.
-    `_logs` anchors to a fixed date while `_goal` is relative to today, so those
-    two drift apart by a day for every day that passes — and this test, written
-    with `56 + days_from_today`, started reading "ahead" once the gap reached
-    six days. A test that depends on when it is run is a test that will fail on
-    a Tuesday for no reason anybody can see.
+    The span is measured from the first *log* to the target, not from today —
+    which is the same thing now that LOG_START is relative, and stays correct
+    if a fixture is ever anchored somewhere else.
     """
     first_log = datetime.date.fromisoformat(LOG_START)
     target = datetime.date.fromisoformat(_goal()["target_date"])
@@ -105,9 +111,12 @@ def test_a_projection_just_inside_the_band_is_not_called_behind():
     """Half a point short of 15 % is not a story worth a warning badge."""
     goal = _goal(target_bf=15.0)
     days = (datetime.date.fromisoformat(goal["target_date"]) - datetime.date.today()).days
+    # 56 + days is the whole span the line is projected over, because LOG_START
+    # puts the last reading on today.
     per_day = (30.0 - 15.3) / (56 + days)   # lands at 15.3, i.e. 0.3 short
     fc = _forecast([(0, 100, 30.0), (56, 100, 30 - 56 * per_day)], goal)
     assert fc["bf_status"] == "on_track"
+    assert fc["bf_projected_pct"] == pytest.approx(15.3, abs=0.05)
 
 
 # --- the pieces the line is built from ----------------------------------------
