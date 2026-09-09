@@ -3479,9 +3479,15 @@ function renderFerment(data) {
     // Where it is in its life, in the words you would use out loud. A spent tub
     // looks exactly like a good one, so the row has to carry the judgement.
     const day = Math.floor(b.age_days);
+    // How long it has been going. A ready or spent tub says so already — "day 4
+    // of 7" is its age — but a fermenting one only says when it will be ready,
+    // which leaves the one state where you cannot tell a tub started this
+    // morning from one started on Tuesday. Same words as the jar above it.
+    const startedWords = daysAgoWords(b.started_at);
+    const started = startedWords ? ` · started ${startedWords}` : "";
     const stage = b.spent ? `Past it — day ${day} of ${data.max_age_days}`
       : b.state === "ready" ? `Ready · day ${day} of ${data.max_age_days}`
-      : `Ready ${fmtDay(b.ready_at)}`;
+      : `Ready ${fmtDay(b.ready_at)}${started}`;
     return `
       <div class="ferment-row${b.stir_due ? " stir-due" : ""}${b.spent ? " batch-spent" : ""}"
         data-id="${b.id}">
@@ -3521,9 +3527,7 @@ function renderStarter(data) {
       + `in ${data.seeded_days} days.</span>`;
     return;
   }
-  const age = jar.age_days < 1 ? "today"
-    : jar.age_days < 2 ? "yesterday"
-    : `${Math.round(jar.age_days)} days ago`;
+  const age = daysAgoWords(jar.saved_at) || `${Math.round(jar.age_days)} days ago`;
   // Two different cautions, and they are not the same kind of thing: stale is
   // about this jar, generations is about the line it came from. Show the one
   // that would change what you do first.
@@ -3550,6 +3554,18 @@ document.getElementById("ferment-starter").addEventListener("click", async (even
   renderFerment(await fetch("api/ferment/starter", { method: "DELETE" })
     .then((r) => r.json()));
 });
+
+// "today", "yesterday", "3 days ago" — counted in calendar days rather than in
+// elapsed hours. A tub started at six last night did not start today, however
+// few hours ago that was, and this card is read first thing in the morning.
+function daysAgoWords(iso) {
+  if (!iso) return null;
+  const then = new Date(iso);
+  if (isNaN(then)) return null;
+  const midnight = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const days = Math.round((midnight(new Date()) - midnight(then)) / 86400000);
+  return days <= 0 ? "today" : days === 1 ? "yesterday" : `${days} days ago`;
+}
 
 function fmtDay(iso) {
   if (!iso) return "—";

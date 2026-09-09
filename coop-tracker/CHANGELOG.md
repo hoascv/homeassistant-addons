@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.62.0
+
+- **A fermenting tub says how old it is** — *Ready Thu 10 Sep · started
+  yesterday*. A ready or spent tub already gave its age as "day 4 of 7", but
+  a fermenting one said only when it would be ready, which is the one state
+  where a tub started this morning and a tub started on Tuesday read exactly
+  alike.
+- **"Yesterday" means yesterday now.** The words are counted in calendar days
+  rather than elapsed hours: a tub started at six last night did not start
+  today, however few hours ago that was, and this is a card you read first
+  thing in the morning. The saved-liquid jar above it is worded by the same
+  helper, so the same word cannot mean two things on one card.
+
 ## 1.61.0
 
 - **Money, recently is a bar chart now**, and it says which line is which.
