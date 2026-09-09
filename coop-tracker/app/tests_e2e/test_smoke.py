@@ -99,6 +99,28 @@ def test_log_egg_via_photo_smoke(
     expect(page.locator("#history-list")).to_contain_text("3 eggs collected")
 
 
+def _hit_centre(page, selector, why):
+    """The centre of the last hit target on a chart, in viewport coordinates,
+    with the chart scrolled into view first.
+
+    `page.mouse` works in viewport coordinates and does not scroll to reach
+    anything — unlike `locator.hover()`, which these tests deliberately avoid
+    because overlapping hit targets make Playwright refuse a hover whose centre
+    a sibling covers.
+
+    Trends has grown a chart at a time, and once the daily chart slid past the
+    720px viewport the mouse was being aimed at empty space below the fold:
+    `elementFromPoint` there returns null, so no tooltip appeared and no click
+    landed. Nothing in the page was broken, and nothing said so either.
+    """
+    hits = page.locator(selector)
+    assert hits.count(), why
+    hits.last.scroll_into_view_if_needed()
+    page.wait_for_timeout(100)
+    box = hits.last.bounding_box()
+    return box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
+
+
 def test_hovering_a_chart_shows_a_tooltip(page, app_server, page_errors):
     """The browser's own <title> tooltip waits about a second, is styled by the
     OS and does nothing on a touchscreen, so the charts carry their own. Driven
@@ -118,10 +140,8 @@ def test_hovering_a_chart_shows_a_tooltip(page, app_server, page_errors):
     # against a near-empty database, so the only covered day is today at the
     # far right, and the tooltip correctly declines to appear for a point 44px
     # or more from the cursor.
-    hits = page.locator("#daily-eggs-chart-wrap .chart-hit")
-    assert hits.count(), "no hover targets on the chart"
-    box = hits.last.bounding_box()
-    page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+    x, y = _hit_centre(page, "#daily-eggs-chart-wrap .chart-hit", "no hover targets on the chart")
+    page.mouse.move(x, y)
     page.wait_for_timeout(300)
 
     tip = page.locator(".chart-tip")
@@ -136,9 +156,13 @@ def test_the_tooltip_goes_away(page, app_server, page_errors):
     page.wait_for_load_state("networkidle")
     page.click('.tabbar-btn[data-page="page-trends"]')
     page.wait_for_timeout(800)
-    box = page.locator("#daily-eggs-chart-wrap .chart-hit").last.bounding_box()
-    page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+    x, y = _hit_centre(page, "#daily-eggs-chart-wrap .chart-hit", "no hover targets on the chart")
+    page.mouse.move(x, y)
     page.wait_for_timeout(200)
+    # That it appeared at all is asserted here too: without this the test passes
+    # just as happily when the tooltip never shows up, which is exactly what it
+    # did while the hover was landing off-screen.
+    assert page.locator(".chart-tip").is_visible(), "no tooltip to dismiss"
     page.mouse.move(5, 5)
     page.wait_for_timeout(200)
     assert page.locator(".chart-tip").is_hidden()
@@ -154,10 +178,10 @@ def test_clicking_a_chart_point_opens_its_entries(page, app_server, page_errors)
     page.click('.tabbar-btn[data-page="page-trends"]')
     page.wait_for_timeout(800)
 
-    hits = page.locator("#daily-eggs-chart-wrap .chart-hit[data-day]")
-    assert hits.count(), "no drillable points on the daily chart"
-    box = hits.last.bounding_box()
-    page.mouse.click(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+    x, y = _hit_centre(
+        page, "#daily-eggs-chart-wrap .chart-hit[data-day]", "no drillable points on the daily chart"
+    )
+    page.mouse.click(x, y)
     page.wait_for_timeout(400)
 
     backdrop = page.locator("#day-backdrop")
