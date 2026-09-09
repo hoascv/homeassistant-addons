@@ -70,6 +70,35 @@ def test_logging_a_trip_round_trips(page, app_server, page_errors):
     assert page_errors == []
 
 
+def _chart_centre(page, selector, why):
+    """The centre of a chart, in viewport coordinates, scrolled into view first.
+
+    `page.mouse` works in viewport coordinates and does not scroll to reach
+    anything — unlike `locator.hover()`, which these tests avoid on purpose:
+    the hit targets overlap on a dense chart and Playwright refuses a hover
+    whose centre a sibling covers.
+
+    Coop Tracker had precisely this go wrong. Its Trends page grew a chart, the
+    one being hovered slid past the 720px viewport, and the mouse spent two
+    releases aimed at empty space below the fold — where `elementFromPoint` is
+    null, so no tooltip appeared, no click landed, and no test could say why.
+    Scrolling first is what stops the same thing happening here the next time
+    this page gets longer.
+    """
+    chart = page.locator(selector).first
+    chart.scroll_into_view_if_needed()
+    page.wait_for_timeout(100)
+    box = chart.bounding_box()
+    assert box, why
+    # Clamped into the viewport: a chart taller than the window is scrolled
+    # into view without its centre necessarily being on screen, and a point
+    # outside the window is exactly the failure this helper exists to prevent.
+    viewport = page.viewport_size
+    x = min(max(box["x"] + box["width"] * 0.5, 1), viewport["width"] - 1)
+    y = min(max(box["y"] + box["height"] * 0.5, 1), viewport["height"] - 1)
+    return x, y
+
+
 def test_hovering_a_chart_shows_a_tooltip(page, app_server, page_errors):
     """The browser's own <title> tooltip waits about a second, is styled by the
     OS and does nothing on a touchscreen, so the charts carry their own. Driven
@@ -84,9 +113,8 @@ def test_hovering_a_chart_shows_a_tooltip(page, app_server, page_errors):
     page.goto(app_server)
     page.wait_for_load_state("networkidle")
     
-    box = page.locator("#price-chart svg").first.bounding_box()
-    assert box, "no chart rendered to hover"
-    page.mouse.move(box["x"] + box["width"] * 0.5, box["y"] + box["height"] * 0.5)
+    x, y = _chart_centre(page, "#price-chart svg", "no chart rendered to hover")
+    page.mouse.move(x, y)
     page.wait_for_timeout(300)
 
     tip = page.locator(".chart-tip")
@@ -100,9 +128,13 @@ def test_the_tooltip_goes_away(page, app_server, page_errors):
     page.goto(app_server)
     page.wait_for_load_state("networkidle")
     
-    box = page.locator("#price-chart svg").first.bounding_box()
-    page.mouse.move(box["x"] + box["width"] * 0.5, box["y"] + box["height"] * 0.5)
+    x, y = _chart_centre(page, "#price-chart svg", "no chart rendered to hover")
+    page.mouse.move(x, y)
     page.wait_for_timeout(200)
+    # That it appeared at all is asserted here too: without it this test passes
+    # just as happily when the tooltip never shows up, which is what Coop
+    # Tracker's copy of it did through two releases of a broken hover.
+    assert page.locator(".chart-tip").is_visible(), "no tooltip to dismiss"
     page.mouse.move(5, 5)
     page.wait_for_timeout(200)
     assert page.locator(".chart-tip").is_hidden()
