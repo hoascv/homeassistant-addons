@@ -106,6 +106,16 @@
      is its tab button: an empty tab is worse than no tab, because it looks
      like something broke rather than something you never turned on. -->
 <main id="page-ferment" class="page" hidden>
+  <section class="ferment" id="ferment-card">
+    <div class="ferment-header">
+      <h2>Fermented feed</h2>
+      <button type="button" class="link-btn" id="ferment-new">+ New batch</button>
+    </div>
+    <p class="ferment-hint" id="ferment-hint"></p>
+    <div class="ferment-starter" id="ferment-starter" hidden></div>
+    <div id="ferment-batches"></div>
+  </section>
+
   <!-- Herbal tonics. Hidden independently of the ferment card: a keeper may
        well want one and not the other, and the tab appears if either is on. -->
   <section class="ferment" id="tonic-card" hidden>
@@ -122,16 +132,6 @@
       Supplements, not medicine. A bird that is unwell needs a vet — none of
       this treats an illness.
     </p>
-  </section>
-
-  <section class="ferment" id="ferment-card">
-    <div class="ferment-header">
-      <h2>Fermented feed</h2>
-      <button type="button" class="link-btn" id="ferment-new">+ New batch</button>
-    </div>
-    <p class="ferment-hint" id="ferment-hint"></p>
-    <div class="ferment-starter" id="ferment-starter" hidden></div>
-    <div id="ferment-batches"></div>
   </section>
 </main>
 

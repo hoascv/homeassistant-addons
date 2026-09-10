@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.63.0
+
+- **The tubs come first on the Feed page.** Fermented feed sat below Flock
+  tonics, which put the card with a clock on it under the card that usually
+  has nothing to say. A tub left unstirred grows mould on the top; a tonic
+  that waits until tomorrow is a tonic that waits until tomorrow.
+
 ## 1.62.0
 
 - **A fermenting tub says how old it is** — *Ready Thu 10 Sep · started
