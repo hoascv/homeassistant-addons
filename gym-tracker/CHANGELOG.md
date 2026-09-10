@@ -1,5 +1,35 @@
 # Changelog
 
+## 1.55.0
+
+- **A missed day can now cost you something real.** A challenge can carry a
+  **forfeit** — a stake per missed day, in whatever you have agreed with
+  yourself: kroner into a jar, reps owed, anything. Off by default and set per
+  challenge, alongside but separate from scoring: a score is a number on a
+  card, a forfeit is money you actually owe, and lumping them together would
+  make one of the two a lie.
+- **The same two rules as the score.** Today is never charged while it can
+  still be won — the card says *20 kr if you don't finish today* — and rest
+  days are free.
+- **What you owe is derived; what you paid is stored.** The charge is
+  recomputed from your ticks every time, so backfilling a day in History takes
+  its charge back off the tab and un-ticking one puts it back. Payments are the
+  only stored half, because paying is an event in the world that nothing in the
+  tick record could ever imply.
+- **The home card shows the tab and a Paid up button.** It records that you
+  settled, since nothing in the app can see the jar — and it pays off what is
+  owed at that moment rather than what the screen last said, in case a day
+  settled in between.
+- **The tab is allowed to go into credit.** Settle up, then backfill a day you
+  were charged for, and the card says you are owed. That is what the record now
+  says, and it beats quietly keeping money you no longer owe. A payment entered
+  by mistake can be deleted.
+- The tab opens the day you switch the forfeit on and never earlier, switching
+  it off remembers where it opened, and a repeat starts a clean tab — the same
+  rules the score's ledger already follows.
+- Payments are in the export and the change feed as
+  `challenge_forfeit_payments`, so a pipeline can watch the jar fill up.
+
 ## 1.54.0
 
 - **Distance and floors climbed, from the same summary as steps.** Both were

@@ -271,6 +271,13 @@ body {
 .score-stake {
   margin: 0.35rem 0 0; font-size: 0.78rem; color: var(--text-muted);
 }
+/* The forfeit tab. Money owed is not a bad score, so it borrows the score
+   strip's shape without its colours: an amount you have agreed to pay is a
+   fact to settle, not a failure to be scolded in red for. The Paid up button
+   pushes to the right so it is never a mis-tap away from anything else. */
+.forfeit-strip { margin: 0 0 0.7rem; }
+.forfeit-value { font-size: 1.25rem; font-weight: 700; }
+.forfeit-pay { margin-left: auto; }
 
 /* Trends: what the score is made of. */
 .score-ledger { margin: 0.2rem 0 0.4rem; }

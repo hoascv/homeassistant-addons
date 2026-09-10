@@ -407,6 +407,45 @@ and what they earned, days missed and what they cost — because "kept 24, dropp
 **Repeating** a scored challenge carries the settings over but opens a **fresh
 ledger** on the new run's first day. The previous run keeps its own score.
 
+### Forfeit
+
+A score is a number on a card. A **forfeit** is what a missed day costs you in
+the world — money into a jar, reps owed, whatever you have agreed with
+yourself. It is separate from scoring and off by default, under **Forfeit** in
+*Edit challenge*: a stake (10 by default) and what it is counted in (`kr`,
+`reps`, anything you like — it is only a label).
+
+Every due day you miss adds the stake to a **tab**, on the same two rules the
+score follows: today is never charged while it can still be won — the card says
+*20 kr if you don't finish today* — and **rest days are free**.
+
+The home card shows what is owed with a **Paid up** button. Pressing it records
+that you settled the tab, because nothing here can see the jar: paying is a
+claim about the world, and the only thing that makes it true is you saying so.
+It always pays off what is owed *at that moment* rather than what the screen
+last said, in case a day settled in between.
+
+**What you owe is derived; what you paid is stored.** The charge is recomputed
+from your ticks every time, exactly like the score, so backfilling a day in
+**History** takes its charge back off the tab and un-ticking one puts it back.
+The payments are the only stored half, because a payment is an event in the
+world that nothing in the tick record could imply.
+
+That has one consequence worth knowing: settle up, then backfill a day you had
+been charged for, and the tab goes **into credit** — the card says so. It is
+the honest answer, and better than quietly keeping money the record says you no
+longer owe. A payment entered by mistake can be deleted outright
+(`DELETE /api/challenges/<id>/forfeit/payments/<payment_id>`).
+
+**The tab opens the day you switch the forfeit on**, never before, and
+switching it off remembers where it opened — the same rules as the score's
+ledger, for the same reasons. **Repeating** a challenge carries the settings
+but opens a clean tab: what you owe on one run stays on that run.
+
+Trends states the tab in full — what was charged, what was paid, what is
+outstanding — because "owes nothing" and "has never owed anything" are
+different facts and only one of them is worth being pleased about.
+
 **Repeat this challenge**, on its Trends card, starts another run of the same
 challenge: the same items, the same length, beginning today, with the dates
 editable before it is created. The original keeps its own record.

@@ -20,7 +20,7 @@ from flask import Flask, Response, g, jsonify, render_template, request, send_fi
 import garmin_client
 import meals
 
-APP_VERSION = "1.54.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.55.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("GYM_DB_PATH", "/data/gym.db")
 OPTIONS_PATH = os.environ.get("GYM_OPTIONS_PATH", "/data/options.json")
@@ -97,6 +97,18 @@ DEFAULT_PENALTY_PER_MISS = 10
 MAX_SCORE_WEIGHT = 1000
 # How many scored days the home card's sparkline carries. Trends shows the run.
 CARD_SCORE_DAYS = 30
+# The forfeit: what a missed day costs outside the app, as opposed to the
+# points it costs inside one. Money into a jar, reps owed, whatever you have
+# agreed with yourself. Ten because a stake you would not notice is not a
+# stake, and the unit is free text because the app has no business deciding
+# what you owe yourself in.
+DEFAULT_FORFEIT_AMOUNT = 10
+DEFAULT_FORFEIT_UNIT = "kr"
+MAX_FORFEIT_AMOUNT = 10000
+MAX_FORFEIT_UNIT_LEN = 12
+# How many payments the card and the stats carry. The rest stay in the table,
+# where the export and the change feed can see them.
+FORFEIT_PAYMENTS_SHOWN = 10
 # How far ahead a day can be kept in advance. There is no principled limit —
 # the point is only that a mistyped year is a typo, not a plan.
 AHEAD_HORIZON_DAYS = 30
@@ -657,13 +669,36 @@ def init_db():
             scoring_enabled INTEGER NOT NULL DEFAULT 0,
             points_per_day INTEGER NOT NULL DEFAULT 10,
             penalty_per_miss INTEGER NOT NULL DEFAULT 10,
-            scoring_from TEXT
+            scoring_from TEXT,
+            -- The forfeit a missed day costs in the world: the stake, what it
+            -- is counted in, and the day the tab opened. Kept apart from the
+            -- score's weights because they are different currencies — one is
+            -- a number on a card, the other is money you actually owe.
+            forfeit_enabled INTEGER NOT NULL DEFAULT 0,
+            forfeit_amount INTEGER NOT NULL DEFAULT 10,
+            forfeit_unit TEXT,
+            forfeit_from TEXT
         )
         """
     )
     # Every insert, update and delete on a tracked table, in order. The
     # sequence is the watermark a pipeline reads from: monotonic, with none of
     # a clock's ambiguity, and unlike a timestamp column it records deletes.
+    # What you have actually paid off the tab. The charge itself is never
+    # stored — it is recomputed from the ticks, so backfilling a day repays it
+    # — but a payment is something that happened in the world, and nothing in
+    # the completion record could ever imply it.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS challenge_forfeit_payments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            challenge_id INTEGER NOT NULL REFERENCES challenges(id),
+            paid_at TEXT NOT NULL,
+            amount INTEGER NOT NULL,
+            note TEXT
+        )
+        """
+    )
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS change_log (
@@ -798,6 +833,7 @@ TRACKED_TABLES = {
     "challenges": "id",
     "challenge_items": "id",
     "challenge_completions": "id",
+    "challenge_forfeit_payments": "id",
     # Without these a 240-second workout logged by a routine is unexplainable
     # downstream: you could see the time but not what was actually done.
     "routine_steps": "id",
@@ -1046,6 +1082,20 @@ def _migrate_columns(conn):
         )
         # The day the ledger opens. NULL until scoring is switched on.
         conn.execute("ALTER TABLE challenges ADD COLUMN scoring_from TEXT")
+
+    if "forfeit_enabled" not in challenge_cols:
+        conn.execute(
+            "ALTER TABLE challenges ADD COLUMN forfeit_enabled INTEGER NOT NULL DEFAULT 0"
+        )
+    if "forfeit_amount" not in challenge_cols:
+        conn.execute(
+            f"ALTER TABLE challenges ADD COLUMN forfeit_amount INTEGER NOT NULL "
+            f"DEFAULT {DEFAULT_FORFEIT_AMOUNT}"
+        )
+    if "forfeit_unit" not in challenge_cols:
+        conn.execute("ALTER TABLE challenges ADD COLUMN forfeit_unit TEXT")
+    if "forfeit_from" not in challenge_cols:
+        conn.execute("ALTER TABLE challenges ADD COLUMN forfeit_from TEXT")
 
     item_cols = {row[1] for row in conn.execute("PRAGMA table_info(challenge_items)")}
     if "challenge_id" not in item_cols:
@@ -2739,6 +2789,78 @@ def _scoring_view(ch):
     }
 
 
+def _forfeit_view(ch):
+    """The forfeit settings as the API states them."""
+    amount = ch.get("forfeit_amount")
+    unit = str(ch.get("forfeit_unit") or "").strip()
+    return {
+        "enabled": bool(ch.get("forfeit_enabled")),
+        "amount": DEFAULT_FORFEIT_AMOUNT if amount is None else int(amount),
+        "unit": unit or DEFAULT_FORFEIT_UNIT,
+        "since": ch.get("forfeit_from"),
+    }
+
+
+def _challenge_forfeit(conn, ch, days):
+    """What the missed days have cost you in the world, and what is still owed.
+
+    The charge is derived, exactly as the score is: every settled due day
+    missed since the tab opened costs the stake, recomputed from the ticks
+    every time it is asked for. So backfilling a day you did after all wipes
+    its charge, and un-ticking one adds it back.
+
+    The payments are the one part that is stored. Paying is something that
+    happened in the world — the jar is heavier — and nothing in the completion
+    record could ever imply it.
+
+    Today is never charged while it is still winnable, and rest days are free:
+    the same two rules the score and the streak already follow.
+    """
+    view = _forfeit_view(ch)
+    if not view["enabled"]:
+        return None
+    stake = view["amount"]
+    since = view["since"]
+
+    missed = 0
+    at_stake = False
+    for entry in days or []:
+        if not entry["scheduled"]:
+            continue
+        if since and entry["day"] < since:
+            continue
+        if entry["pending"]:
+            at_stake = True
+            continue
+        if not entry["complete"]:
+            missed += 1
+
+    rows = conn.execute(
+        "SELECT id, paid_at, amount, note FROM challenge_forfeit_payments "
+        "WHERE challenge_id = ? ORDER BY paid_at DESC, id DESC",
+        (ch["id"],),
+    ).fetchall()
+    paid = sum(r["amount"] for r in rows)
+    charged = missed * stake
+    return {
+        "enabled": True,
+        "amount": stake,
+        "unit": view["unit"],
+        "since": since,
+        "days_missed": missed,
+        "charged": charged,
+        "paid": paid,
+        # Allowed to go below zero. Settle up, then backfill a day you were
+        # charged for, and you are in credit — which is what the record now
+        # says, and better than quietly keeping what you no longer owe.
+        "owed": charged - paid,
+        # What today adds if it goes unfinished, while it can still be won.
+        "at_stake": stake if at_stake else None,
+        "payments": [dict(r) for r in rows[:FORFEIT_PAYMENTS_SHOWN]],
+        "payment_count": len(rows),
+    }
+
+
 def _challenge_score(ch, days, cap=180):
     """The running score: a due day kept earns points, a due day missed deducts
     them. Returns None for a challenge that is not scored.
@@ -4052,12 +4174,19 @@ def _challenge_view(conn, ch):
         d for d in sorted(by_day) if d > today_iso and ids and set(ids) <= by_day[d]
     ]
     # Only paid for when it is asked for: the ledger needs the whole membership
-    # history, which is a good deal more work than the seven dots above.
+    # history, which is a good deal more work than the seven dots above. Both
+    # readers share the one pass.
+    ledger_days = (
+        _challenge_days(conn, ch)
+        if (ch.get("scoring_enabled") or ch.get("forfeit_enabled"))
+        else None
+    )
     score = (
-        _challenge_score(ch, _challenge_days(conn, ch), cap=CARD_SCORE_DAYS)
+        _challenge_score(ch, ledger_days, cap=CARD_SCORE_DAYS)
         if ch.get("scoring_enabled")
         else None
     )
+    forfeit = _challenge_forfeit(conn, ch, ledger_days)
     return {
         "id": ch["id"],
         "name": ch["name"],
@@ -4084,6 +4213,9 @@ def _challenge_view(conn, ch):
         "scoring": _scoring_view(ch),
         # None unless the challenge is scored; the card draws nothing then.
         "score": score,
+        "forfeit_settings": _forfeit_view(ch),
+        # None unless a forfeit is set; same rule.
+        "forfeit": forfeit,
         "last_7_days": last_7,
     }
 
@@ -4199,6 +4331,8 @@ def _challenge_stats(conn, ch):
         "schedule": _schedule_view(ch),
         "scoring": _scoring_view(ch),
         "score": _challenge_score(ch, days),
+        "forfeit_settings": _forfeit_view(ch),
+        "forfeit": _challenge_forfeit(conn, ch, days),
         "days_elapsed": elapsed,
         "days_complete": complete_days,
         "completion_pct": round(complete_days / elapsed * 100, 1) if elapsed else None,
@@ -4350,15 +4484,19 @@ def api_add_challenge():
     scored, per_day, penalty, since, err = _resolve_scoring(data, start_date=start)
     if err:
         return jsonify({"error": err}), 400
+    owing, stake, unit, owed_since, err = _resolve_forfeit(data, start_date=start)
+    if err:
+        return jsonify({"error": err}), 400
     db = get_db()
     order = db.execute("SELECT COALESCE(MAX(sort_order), -1) + 1 AS n FROM challenges").fetchone()["n"]
     cur = db.execute(
         "INSERT INTO challenges (name, start_date, end_date, sort_order, archived, created_at, "
         "updated_at, schedule_kind, schedule_interval, schedule_weekdays, scoring_enabled, "
-        "points_per_day, penalty_per_miss, scoring_from) "
-        "VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "points_per_day, penalty_per_miss, scoring_from, forfeit_enabled, forfeit_amount, "
+        "forfeit_unit, forfeit_from) "
+        "VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (name, start, end, order, _now_ts(), _now_ts(), kind, interval, weekdays,
-         int(scored), per_day, penalty, since),
+         int(scored), per_day, penalty, since, int(owing), stake, unit, owed_since),
     )
     db.commit()
     return jsonify({"status": "created", "id": cur.lastrowid}), 201
@@ -4385,12 +4523,16 @@ def api_update_challenge(challenge_id):
     scored, per_day, penalty, since, err = _resolve_scoring(data, dict(existing), start_date=start)
     if err:
         return jsonify({"error": err}), 400
+    owing, stake, unit, owed_since, err = _resolve_forfeit(data, dict(existing), start_date=start)
+    if err:
+        return jsonify({"error": err}), 400
     db.execute(
         "UPDATE challenges SET name = ?, start_date = ?, end_date = ?, updated_at = ?, "
         "schedule_kind = ?, schedule_interval = ?, schedule_weekdays = ?, scoring_enabled = ?, "
-        "points_per_day = ?, penalty_per_miss = ?, scoring_from = ? WHERE id = ?",
+        "points_per_day = ?, penalty_per_miss = ?, scoring_from = ?, forfeit_enabled = ?, "
+        "forfeit_amount = ?, forfeit_unit = ?, forfeit_from = ? WHERE id = ?",
         (name, start, end, _now_ts(), kind, interval, weekdays, int(scored), per_day, penalty,
-         since, challenge_id),
+         since, int(owing), stake, unit, owed_since, challenge_id),
     )
     db.commit()
     return jsonify({"status": "updated"})
@@ -4441,13 +4583,22 @@ def api_repeat_challenge(challenge_id):
         # A repeat is a new run: its ledger opens with it rather than
         # inheriting the original's, and stays shut until scoring is on.
         since = start if scored else None
+    owing, stake, unit, owed_since, err = _resolve_forfeit(data, dict(source), start_date=start)
+    if err:
+        return jsonify({"error": err}), 400
+    if "forfeit_from" not in data:
+        # And a new tab with it. What you owed on the last run stays on the
+        # last run — settling it is between you and the jar, and carrying the
+        # debt over would make a repeat something you start out behind on.
+        owed_since = start if owing else None
     cur = db.execute(
         "INSERT INTO challenges (name, start_date, end_date, sort_order, archived, created_at, "
         "updated_at, repeat_of, schedule_kind, schedule_interval, schedule_weekdays, "
-        "scoring_enabled, points_per_day, penalty_per_miss, scoring_from) "
-        "VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "scoring_enabled, points_per_day, penalty_per_miss, scoring_from, forfeit_enabled, "
+        "forfeit_amount, forfeit_unit, forfeit_from) "
+        "VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (name, start, end, order, now, now, challenge_id, kind, interval, weekdays,
-         int(scored), per_day, penalty, since),
+         int(scored), per_day, penalty, since, int(owing), stake, unit, owed_since),
     )
     new_id = cur.lastrowid
     for item in db.execute(
@@ -4707,6 +4858,101 @@ def api_start_challenge_from_template():
     return jsonify({"status": "created", "id": challenge_id}), 201
 
 
+def _forfeit_state(db, challenge_id):
+    """The forfeit block for one challenge, or (None, error response)."""
+    row = db.execute("SELECT * FROM challenges WHERE id = ?", (challenge_id,)).fetchone()
+    if row is None:
+        return None, None, (jsonify({"error": "no such challenge"}), 404)
+    ch = dict(row)
+    if not ch.get("forfeit_enabled"):
+        return None, None, (jsonify({"error": "this challenge has no forfeit"}), 400)
+    return ch, _challenge_forfeit(db, ch, _challenge_days(db, ch)), None
+
+
+@app.route("/api/challenges/<int:challenge_id>/forfeit/payments", methods=["POST"])
+def api_pay_forfeit(challenge_id):
+    """Settle some or all of the tab.
+
+    With no amount it pays off exactly what is owed right now, which is what
+    the card's button does: a day can settle between the card being drawn and
+    the button being pressed, and "Paid up" means what is owed now rather than
+    what the screen last said.
+    """
+    data = request.get_json(force=True, silent=True) or {}
+    db = get_db()
+    ch, forfeit, err = _forfeit_state(db, challenge_id)
+    if err:
+        return err
+
+    if "amount" in data:
+        try:
+            amount = int(data["amount"])
+        except (TypeError, ValueError):
+            return jsonify({"error": "amount must be a number"}), 400
+    else:
+        amount = forfeit["owed"]
+    if amount <= 0:
+        # Nothing owed, or an attempt to pay a negative sum into the jar. The
+        # way to undo a payment is to delete it, which leaves a record of both.
+        return jsonify({"error": "nothing to pay"}), 400
+    if amount > MAX_FORFEIT_AMOUNT * 1000:
+        return jsonify({"error": "amount is implausibly large"}), 400
+
+    note = (str(data.get("note") or "").strip() or None)
+    cur = db.execute(
+        "INSERT INTO challenge_forfeit_payments (challenge_id, paid_at, amount, note) "
+        "VALUES (?, ?, ?, ?)",
+        (challenge_id, _now_ts(), amount, note[:200] if note else None),
+    )
+    db.commit()
+    ch = dict(db.execute("SELECT * FROM challenges WHERE id = ?", (challenge_id,)).fetchone())
+    return jsonify({
+        "status": "ok",
+        "payment_id": cur.lastrowid,
+        "forfeit": _challenge_forfeit(db, ch, _challenge_days(db, ch)),
+    })
+
+
+@app.route("/api/challenges/<int:challenge_id>/forfeit/payments/<int:payment_id>",
+           methods=["DELETE"])
+def api_delete_forfeit_payment(challenge_id, payment_id):
+    """Take a payment back off the tab, for one entered by mistake.
+
+    The charge itself is never deleted — it is derived from the ticks, and the
+    way to clear a charge you did not deserve is to backfill the day in
+    History, which repays it honestly.
+    """
+    db = get_db()
+    ch, _forfeit, err = _forfeit_state(db, challenge_id)
+    if err:
+        return err
+    cur = db.execute(
+        "DELETE FROM challenge_forfeit_payments WHERE id = ? AND challenge_id = ?",
+        (payment_id, challenge_id),
+    )
+    if not cur.rowcount:
+        return jsonify({"error": "no such payment"}), 404
+    db.commit()
+    return jsonify({
+        "status": "deleted",
+        "forfeit": _challenge_forfeit(db, ch, _challenge_days(db, ch)),
+    })
+
+
+@app.route("/api/challenges/<int:challenge_id>/forfeit/payments")
+def api_forfeit_payments(challenge_id):
+    """Every payment against this challenge, newest first."""
+    db = get_db()
+    if db.execute("SELECT 1 FROM challenges WHERE id = ?", (challenge_id,)).fetchone() is None:
+        return jsonify({"error": "no such challenge"}), 404
+    rows = db.execute(
+        "SELECT id, paid_at, amount, note FROM challenge_forfeit_payments "
+        "WHERE challenge_id = ? ORDER BY paid_at DESC, id DESC",
+        (challenge_id,),
+    ).fetchall()
+    return jsonify({"payments": [dict(r) for r in rows]})
+
+
 @app.route("/api/challenges/<int:challenge_id>/celebrated", methods=["POST"])
 def api_mark_celebrated(challenge_id):
     """Record that the end-of-challenge celebration has been shown.
@@ -4829,6 +5075,60 @@ def _resolve_scoring(data, existing=None, start_date=None, today=None):
     # Switching scoring off deliberately leaves `since` alone: an accidental
     # toggle would otherwise throw away the ledger with no way back.
     return enabled, weights["points_per_day"], weights["penalty_per_miss"], since, None
+
+
+def _resolve_forfeit(data, existing=None, start_date=None, today=None):
+    """Pull the forfeit settings out of a request body. Returns
+    (enabled, amount, unit, forfeit_from, error).
+
+    Shaped like _resolve_scoring, and for the same reasons: falls back to what
+    is already set, opens the tab no earlier than today, and leaves the opening
+    day alone when the forfeit is switched off so an accidental toggle cannot
+    throw the tab away.
+    """
+    base = existing or {}
+    current = _forfeit_view(base) if base else {
+        "enabled": False,
+        "amount": DEFAULT_FORFEIT_AMOUNT,
+        "unit": DEFAULT_FORFEIT_UNIT,
+        "since": None,
+    }
+    raw = data.get("forfeit_enabled", current["enabled"])
+    if isinstance(raw, str):
+        enabled = raw.strip().lower() in ("1", "true", "yes", "on")
+    else:
+        enabled = bool(raw)
+
+    amount = data.get("forfeit_amount", current["amount"])
+    try:
+        amount = int(amount)
+    except (TypeError, ValueError):
+        return None, None, None, None, "forfeit_amount must be a number"
+    if not 0 <= amount <= MAX_FORFEIT_AMOUNT:
+        return None, None, None, None, f"forfeit_amount must be between 0 and {MAX_FORFEIT_AMOUNT}"
+
+    unit = data.get("forfeit_unit", current["unit"])
+    unit = str(unit or "").strip()[:MAX_FORFEIT_UNIT_LEN] or DEFAULT_FORFEIT_UNIT
+
+    today = today or date.today()
+    since = current["since"]
+    if "forfeit_from" in data:
+        raw_from = (data.get("forfeit_from") or "").strip() or None
+        if raw_from:
+            try:
+                date.fromisoformat(raw_from)
+            except ValueError:
+                return None, None, None, None, "forfeit_from must be a date (YYYY-MM-DD)"
+        since = raw_from
+    elif enabled and not since:
+        opens = today
+        if start_date:
+            try:
+                opens = max(today, date.fromisoformat(start_date))
+            except ValueError:
+                opens = today
+        since = opens.isoformat()
+    return enabled, amount, unit, since, None
 
 
 def _validate_challenge_dates(start, end):

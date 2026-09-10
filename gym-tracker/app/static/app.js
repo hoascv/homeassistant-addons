@@ -962,6 +962,30 @@ function isChallengeComplete(challenge) {
   return live.length > 0 && live.every((i) => i.done_today);
 }
 
+// Settling the tab. Confirmed first, because it is a claim about the world
+// rather than about the app: nothing here can see the jar, and the only thing
+// making this true is you saying so.
+//
+// The amount is left to the server. "Paid up" means what is owed now, and a
+// day can settle between this card being drawn and the button being pressed.
+async function payForfeit(challengeId) {
+  const ch = challengeById(challengeId);
+  const f = ch && ch.forfeit;
+  if (!f || !f.enabled || f.owed <= 0) return;
+  if (!confirm(`Mark ${f.owed} ${f.unit} as paid?`)) return;
+  try {
+    await fetchJSON(`api/challenges/${challengeId}/forfeit/payments`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+  } catch (err) {
+    toast("Couldn't record that — check your connection.");
+    return;
+  }
+  loadChallenge();
+}
+
 function challengeById(id) {
   return (challengeData || []).find((c) => c.id === id) || null;
 }
@@ -1072,6 +1096,40 @@ function scoreStripHtml(ch) {
     </div>`;
 }
 
+// What a missed day costs outside the app. The score is a number on a card and
+// settles itself; this is money in a jar, so it has to say what is owed and
+// give you somewhere to say you have paid it.
+function forfeitStripHtml(ch) {
+  const f = ch.forfeit;
+  if (!f || !f.enabled) return "";
+  const unit = escapeHtml(f.unit);
+  const stake = f.at_stake
+    ? `<p class="score-stake">${f.at_stake} ${unit} if you don't finish today</p>`
+    : "";
+  const tally = `${f.days_missed} day${f.days_missed === 1 ? "" : "s"} missed × ${f.amount}`
+    + (f.paid ? ` · ${f.paid} ${unit} paid` : "");
+  if (f.owed > 0) {
+    return `
+      <div class="forfeit-strip">
+        <div class="score-head">
+          <span class="forfeit-value">${f.owed} ${unit}</span>
+          <span class="score-label">Owed</span>
+          <button type="button" class="btn-small forfeit-pay" data-challenge="${ch.id}">Paid up</button>
+        </div>
+        <p class="challenge-progress">${tally}</p>
+        ${stake}
+      </div>`;
+  }
+  // "Nothing owed" reads two ways — never missed a day, or missed and settled
+  // — and telling those apart is most of the point of keeping a tab.
+  const clear = f.owed < 0
+    ? `${-f.owed} ${unit} in credit — paid for a day that was backfilled afterwards`
+    : f.days_missed
+    ? `Nothing owed · ${tally}`
+    : `Nothing owed · ${f.amount} ${unit} a day missed`;
+  return `<div class="forfeit-strip"><p class="challenge-progress">${clear}</p>${stake}</div>`;
+}
+
 function challengeCardHtml(ch) {
   const items = (ch.items || [])
     .map(
@@ -1130,6 +1188,7 @@ function challengeCardHtml(ch) {
         <span class="pill pill-streak">🔥 ${ch.streak}</span>
       </div>
       ${scoreStripHtml(ch)}
+      ${forfeitStripHtml(ch)}
       ${body}
       ${empty}
       <div class="week-dots">${dots}</div>
@@ -1360,6 +1419,13 @@ function syncChallengeRepsLabel() {
 
 // Card actions are delegated: the cards are rebuilt on every render.
 document.getElementById("challenge-cards").addEventListener("click", async (e) => {
+  // Guarded ahead of the row buttons, the same shape as the routine ▶ above:
+  // this one sits inside the card but means something else entirely.
+  const pay = e.target.closest(".forfeit-pay");
+  if (pay) {
+    payForfeit(Number(pay.dataset.challenge));
+    return;
+  }
   const btn = e.target.closest(".ch-edit, .ch-items, .ch-history");
   if (!btn) return;
   const id = Number(btn.dataset.challenge);
@@ -1522,6 +1588,44 @@ function setScoringFields(scoring) {
   syncScoringFields();
 }
 
+const FORFEIT_NOTE =
+  "Money into a jar, reps owed — whatever you have agreed with yourself. A due " +
+  "day you miss adds the stake to a tab you settle with Paid up on the card; " +
+  "today is never charged while it is still open, and rest days are free.";
+
+function syncForfeitFields() {
+  const on = document.getElementById("challenge-edit-forfeit").value === "on";
+  document.getElementById("challenge-edit-forfeit-fields").hidden = !on;
+}
+document.getElementById("challenge-edit-forfeit").addEventListener("change", syncForfeitFields);
+
+function setForfeitFields(forfeit) {
+  document.getElementById("challenge-edit-forfeit").value =
+    forfeit && forfeit.enabled ? "on" : "off";
+  document.getElementById("challenge-edit-forfeit-amount").value =
+    forfeit && forfeit.amount != null ? forfeit.amount : 10;
+  document.getElementById("challenge-edit-forfeit-unit").value =
+    (forfeit && forfeit.unit) || "kr";
+  // Same warning as the score's, for the same reason: the tab opens today, and
+  // someone expecting last month's misses to be on it should learn that here.
+  const since = forfeit && forfeit.since;
+  document.getElementById("challenge-edit-forfeit-note").textContent = FORFEIT_NOTE + (
+    since
+      ? ` Owing since ${fmtDate(since)}.`
+      : " The tab opens the day you switch this on — days before it are not charged for."
+  );
+  syncForfeitFields();
+}
+
+function readForfeitFields() {
+  const on = document.getElementById("challenge-edit-forfeit").value === "on";
+  return {
+    forfeit_enabled: on,
+    forfeit_amount: document.getElementById("challenge-edit-forfeit-amount").value,
+    forfeit_unit: document.getElementById("challenge-edit-forfeit-unit").value,
+  };
+}
+
 function readScoringFields() {
   const on = document.getElementById("challenge-edit-scoring").value === "on";
   return {
@@ -1535,6 +1639,7 @@ function openChallengeEditor(ch) {
   delete document.getElementById("challenge-edit-form").dataset.repeatOf;
   setScheduleFields(ch && ch.schedule);
   setScoringFields(ch && ch.scoring);
+  setForfeitFields(ch && ch.forfeit_settings);
   document.getElementById("challenge-edit-title").textContent = ch ? "Edit challenge" : "New challenge";
   document.getElementById("challenge-edit-id").value = ch ? ch.id : "";
   document.getElementById("challenge-edit-name").value = ch ? ch.name : "";
@@ -1561,6 +1666,7 @@ document.getElementById("challenge-edit-form").addEventListener("submit", async 
     end_date: document.getElementById("challenge-edit-end").value,
     ...readScheduleFields(),
     ...readScoringFields(),
+    ...readForfeitFields(),
   };
   const url = repeatOf
     ? `api/challenges/${repeatOf}/repeat`
@@ -1752,9 +1858,11 @@ async function openChallengeRepeat(sourceId) {
   }
   openChallengeEditor(null);
   setScheduleFields(src.schedule);
-  // The repeat inherits how the original was scored; the server opens it a
-  // fresh ledger starting on the new run's first day.
+  // The repeat inherits how the original was scored and what it forfeits; the
+  // server opens both a fresh ledger starting on the new run's first day, so
+  // what is owed on this run stays on this run.
   setScoringFields(src.scoring);
+  setForfeitFields(src.forfeit_settings);
   document.getElementById("challenge-edit-title").textContent = `Repeat · ${src.name}`;
   document.getElementById("challenge-edit-name").value = src.name;
   document.getElementById("challenge-edit-start").value = todayISO();
@@ -1845,6 +1953,23 @@ function scoreLedgerHtml(score) {
     <p class="challenge-progress">${score.points_per_day} a day kept · ${score.penalty_per_miss} a day missed${since}</p>`;
 }
 
+// The tab, on Trends. Charged and paid rather than just the balance: "owes
+// nothing" is a different fact from "has never owed anything", and only one of
+// them is worth being pleased about.
+function forfeitLedgerHtml(f) {
+  if (!f || !f.enabled) return "";
+  const unit = escapeHtml(f.unit);
+  const since = f.since ? ` · owing since ${escapeHtml(fmtDate(f.since))}` : "";
+  const balance = f.owed > 0
+    ? `${f.owed} ${unit} owed`
+    : f.owed < 0
+    ? `${-f.owed} ${unit} in credit`
+    : "nothing owed";
+  return `<p class="challenge-progress">Forfeit · ${balance} — `
+    + `${f.days_missed} day${f.days_missed === 1 ? "" : "s"} missed × ${f.amount} `
+    + `= ${f.charged} ${unit}, ${f.paid} ${unit} paid${since}</p>`;
+}
+
 function challengeStatsHtml(st) {
   const period = st.end_date
     ? `${fmtDate(st.start_date)} – ${fmtDate(st.end_date)}`
@@ -1922,6 +2047,7 @@ function challengeStatsHtml(st) {
         ${score ? `<div class="mini-stat"><span class="mini-value${score.score < 0 ? " score-down" : ""}">${scoreText(score.score)}</span><span class="mini-label">Score</span></div>` : ""}
       </div>
       ${scoreLedgerHtml(score)}
+      ${forfeitLedgerHtml(st.forfeit)}
       <p class="challenge-progress">${st.days_complete} of ${st.days_elapsed} ${schedule ? "due " : ""}days${st.pending_today ? " · today still open" : ""}${schedule ? ` · ${escapeHtml(schedule)}` : ""}</p>
 
       <figure class="chart-figure">

@@ -395,6 +395,27 @@
           it is still open, and rest days are worth nothing either way.
         </p>
       </div>
+      <label class="full-label">Forfeit
+        <select id="challenge-edit-forfeit">
+          <option value="off">Off</option>
+          <option value="on">Owe something for a missed day</option>
+        </select>
+      </label>
+      <div id="challenge-edit-forfeit-fields" hidden>
+        <div class="field-row">
+          <label>A missed day costs
+            <input type="number" id="challenge-edit-forfeit-amount" min="0" max="10000" value="10">
+          </label>
+          <label>In
+            <input type="text" id="challenge-edit-forfeit-unit" maxlength="12" value="kr"
+                   placeholder="kr, reps, …">
+          </label>
+        </div>
+        <p class="sheet-subtext" id="challenge-edit-forfeit-note">
+          Money into a jar, reps owed — whatever you have agreed with yourself.
+          It runs up a tab you settle with <strong>Paid up</strong> on the card.
+        </p>
+      </div>
       <div class="form-actions">
         <button type="button" class="btn-secondary" id="challenge-edit-delete" hidden>Archive</button>
         <button type="submit" class="btn-primary">Save</button>
