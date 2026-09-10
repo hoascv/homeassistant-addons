@@ -23,6 +23,17 @@ import app as et
 UTC = timezone.utc
 LOCAL = et.LOCAL_TZ
 
+# The pure-function tests below pass an explicit `now_local` and can use any
+# date they like. The ones that go through an endpoint cannot: those windows
+# are measured from the real clock — the live card only reconciles against
+# cloud records from the last seven days — so a fixture pinned to a calendar
+# date silently ages out of the window it was written to sit inside. This one
+# was pinned to 2026-09-01 and started failing on 2026-09-10, with nothing in
+# the app having changed. Two days back is recent enough for every window the
+# endpoints ask about and still safely in the past.
+SESSION_DAY = datetime.now(UTC).replace(
+    hour=7, minute=15, second=0, microsecond=0) - timedelta(days=2)
+
 
 def _utc(text):
     return datetime.fromisoformat(text).replace(tzinfo=UTC)
@@ -443,7 +454,8 @@ def test_a_cloud_only_session_reaches_the_history_endpoint(client, conn, set_opt
         "INSERT INTO easee_cloud_sessions "
         "(charger_id, connected_at, disconnected_at, energy_kwh, fetched_at) "
         "VALUES (?, ?, ?, ?, ?)",
-        ("EH1", "2026-09-01T07:15:00Z", "2026-09-01T09:10:00Z", 20.58, "2026-09-01T18:00:00Z"),
+        ("EH1", SESSION_DAY.isoformat(), (SESSION_DAY + timedelta(minutes=115)).isoformat(),
+         20.58, (SESSION_DAY + timedelta(hours=11)).isoformat()),
     )
     conn.commit()
 
@@ -477,23 +489,32 @@ def _sampled_session_rows(conn, charger_id="EH1"):
     20.06 by 09:05, unplugged before the next poll."""
     energies = [(0, 0.0), (5, 1.0), (60, 11.0), (110, 20.06)]
     for minutes, kwh in energies:
-        ts = (datetime(2026, 9, 1, 7, 15, tzinfo=UTC) + timedelta(minutes=minutes)).isoformat()
+        ts = (SESSION_DAY + timedelta(minutes=minutes)).isoformat()
         conn.execute(
             "INSERT INTO easee_samples (ts_utc, charger_id, status, session_energy_kwh, "
             "total_power_w, fetched_at) VALUES (?, ?, ?, ?, ?, ?)",
             (ts, charger_id, "CHARGING", kwh, 11000, ts))
-    end = datetime(2026, 9, 1, 9, 20, tzinfo=UTC).isoformat()
+    end = (SESSION_DAY + timedelta(minutes=125)).isoformat()
     conn.execute(
         "INSERT INTO easee_samples (ts_utc, charger_id, status, session_energy_kwh, "
         "total_power_w, fetched_at) VALUES (?, ?, ?, ?, ?, ?)",
         (end, charger_id, "DISCONNECTED", 0.0, 0, end))
 
 
-def _cloud_row(conn, energy=20.58, disconnected="2026-09-01T09:10:00Z"):
+def _cloud_row(conn, energy=20.58, disconnected=-1):
+    """Easee's own record of the same charge `_sampled_session_rows` describes.
+
+    `disconnected` defaults to the sentinel rather than to None: None is a
+    meaningful value here — a charge still plugged in — and a default of None
+    would leave no way to ask for one.
+    """
+    if disconnected == -1:
+        disconnected = (SESSION_DAY + timedelta(minutes=115)).isoformat()
     conn.execute(
         "INSERT INTO easee_cloud_sessions (charger_id, connected_at, disconnected_at, "
         "energy_kwh, fetched_at) VALUES (?, ?, ?, ?, ?)",
-        ("EH1", "2026-09-01T07:15:00Z", disconnected, energy, "2026-09-01T18:00:00Z"))
+        ("EH1", SESSION_DAY.isoformat(), disconnected, energy,
+         (SESSION_DAY + timedelta(hours=11)).isoformat()))
 
 
 def test_the_live_card_shows_the_same_energy_as_the_history(client, conn, set_options):
@@ -521,7 +542,7 @@ def test_a_running_charge_is_left_on_the_live_counter(client, conn, set_options)
     set_options(easee_enabled=True, easee_username="u", easee_password="p",
                 easee_charger_id="EH1")
     for minutes, kwh in ((0, 0.0), (5, 1.0), (60, 11.0)):
-        ts = (datetime(2026, 9, 1, 7, 15, tzinfo=UTC) + timedelta(minutes=minutes)).isoformat()
+        ts = (SESSION_DAY + timedelta(minutes=minutes)).isoformat()
         conn.execute(
             "INSERT INTO easee_samples (ts_utc, charger_id, status, session_energy_kwh, "
             "total_power_w, fetched_at) VALUES (?, ?, ?, ?, ?, ?)",

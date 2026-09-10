@@ -544,6 +544,31 @@ def _now():
     return _dt(2026, 8, 24, 12, 0, tzinfo=electricityapp.LOCAL_TZ)
 
 
+def _recent_charge(conn, charger_id="EH1", price=1.2):
+    """The same charge as `_charge`, dated two days ago instead of last August.
+
+    The tests around this one hand the code an explicit `_now()` and can sit in
+    August forever. A test that goes through the *endpoint* cannot: the history
+    route asks for the last 30 days measured from the real clock, so a fixture
+    pinned to a calendar date quietly falls out of the window it was written to
+    sit inside. This one had until roughly 2026-10-10 before it started failing
+    on nothing at all.
+    """
+    from datetime import date as _date, timedelta as _td
+
+    day = _date.today() - _td(days=2)
+    for offset in (-1, 0, 1):
+        d = (day + _td(days=offset)).isoformat()
+        for hour in range(24):
+            for minute in (0, 15, 30, 45):
+                _seed_price(conn, f"{d}T{hour:02d}:{minute:02d}:00", spot=price)
+    for i, kwh in enumerate((0.0, 6.0)):
+        _seed_easee_sample(conn, f"{day.isoformat()}T{8 + i:02d}:00:00+00:00",
+                           session_energy_kwh=kwh, charger_id=charger_id)
+    _seed_easee_sample(conn, f"{day.isoformat()}T10:00:00+00:00", session_energy_kwh=6.0,
+                       status="DISCONNECTED", power_w=0.0, charger_id=charger_id)
+
+
 def test_history_lists_each_charge_separately(conn):
     _seed_flat_month(conn)
     _charge(conn, 20, 8, [0.0, 3.0, 6.0])
@@ -672,8 +697,7 @@ def test_daily_rollup_sums_two_charges_on_one_day(conn):
 
 def test_history_route_shape(conn, client, set_options):
     set_options(easee_enabled=True, easee_username="u", easee_password="p", easee_charger_id="EH1")
-    _seed_flat_month(conn)
-    _charge(conn, 20, 8, [0.0, 6.0])
+    _recent_charge(conn)
     conn.commit()
     data = client.get("/api/easee/history?days=30").get_json()
     assert data["enabled"] is True

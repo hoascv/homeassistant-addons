@@ -354,15 +354,25 @@ def test_api_consumption_uses_saveeye_data_with_no_configured_device_serial(clie
         # saveeye_device_serial intentionally left unset.
     )
     now_local = datetime.now(electricityapp.LOCAL_TZ)
-    hour_start = (now_local - timedelta(hours=2)).replace(minute=0, second=0, microsecond=0)
+    # Two hours back, but never before the start of today: /api/consumption
+    # counts whole local days, so "two hours ago" evaluated at half past
+    # midnight lands in yesterday and falls outside the window being asked
+    # about. The test would then fail on the hour of the day it ran at, which
+    # is a worse thing to own than a slightly fussy fixture.
+    hour_start = max(
+        (now_local - timedelta(hours=2)).replace(minute=0, second=0, microsecond=0),
+        now_local.replace(hour=0, minute=0, second=0, microsecond=0),
+    )
     for minute in (0, 15, 30, 45):
         _seed_price(conn, (hour_start + timedelta(minutes=minute)).replace(tzinfo=None).isoformat(), spot=1.0)
-    _seed_saveeye_sample(
-        conn, hour_start.astimezone(timezone.utc).isoformat(), 1000.0, device_serial="auto-discovered"
-    )
+    # An hour apart in UTC, not in local time. On the morning the clocks go
+    # forward the local hour between them does not exist, and both stamps
+    # convert to the same instant — which the table rightly refuses.
+    first_utc = hour_start.astimezone(timezone.utc)
+    _seed_saveeye_sample(conn, first_utc.isoformat(), 1000.0, device_serial="auto-discovered")
     _seed_saveeye_sample(
         conn,
-        (hour_start + timedelta(hours=1)).astimezone(timezone.utc).isoformat(),
+        (first_utc + timedelta(hours=1)).isoformat(),
         2000.0,
         device_serial="auto-discovered",
     )
