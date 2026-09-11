@@ -331,6 +331,18 @@ Buttons per batch: **Stirred**, **Fed** (once it is ready), and **Binned**.
 Binned asks first, and is recorded separately from fed — a batch lost to mould
 is a different event, and how often it happens is worth being able to find out.
 
+**Closed the wrong tub?** A batch closed in the last 24 hours is listed under
+the tubs with an **Undo** beside it — *Tub 1 · fed today 12:14 · Undo* — which
+puts it straight back where it was, stir history and all. Closing a batch never
+deleted anything; it only marked it, so undoing is a matter of clearing the
+mark. Undoing a feed that kept its liquid takes that jar back too, unless it
+has already seeded another tub — that is something that actually happened, and
+it stays.
+
+After a day the offer goes away. The question it answers is "did I just close
+the wrong one?", and an unbounded list would turn the card into a log; the full
+record is always in **History**.
+
 A batch has three lives, and the row says which one it is in:
 
 | | | |
@@ -442,6 +454,9 @@ keep the liquid.
 When you press **Fed** it asks whether to keep the liquid. Answer yes and a jar
 appears on the card; the next **+ New batch** then offers to seed from it. It
 asks rather than assumes — the jar is in the fridge and only you can see it.
+
+Both answers to that question feed the tub — it is asked after the decision,
+not instead of it, and says so. Backing out of the feed is **Undo**, above.
 
 **The jar is refused from a binned batch.** A batch thrown out for mould is
 exactly the culture you must not carry into the next tub, and that is the one

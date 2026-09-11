@@ -1267,6 +1267,15 @@ img.chicken-avatar {
 .ferment-actions { display: flex; gap: 0.3rem; flex-shrink: 0; }
 /* The jar of saved brine. Quieter than a batch row: it is a standing fact
    rather than a thing to do, until it goes stale and earns the warning. */
+/* Recently closed tubs, with the way back. Quiet: this is a safety net, not
+   part of the daily rhythm, and it should not compete with the tubs that are
+   actually going. */
+.ferment-closed { margin-top: 0.6rem; }
+.ferment-closed-row {
+  display: flex; align-items: center; gap: 0.6rem;
+  padding: 0.3rem 0.1rem; font-size: 0.8rem; color: var(--text-muted);
+}
+.ferment-closed-text { flex: 1; min-width: 0; }
 .ferment-starter { display: flex; align-items: center; flex-wrap: wrap; gap: 0.4rem;
   font-size: 0.78rem; padding: 0.45rem 0.6rem; margin-bottom: 0.6rem;
   border-radius: 8px; background: var(--bg); }

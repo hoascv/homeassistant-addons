@@ -294,6 +294,61 @@ def close_batch(conn, batch_id, outcome, now=None, save_liquid=False):
         save_starter(conn, batch_id, now=now)
 
 
+# How long a closed batch stays on the card offering to come back. Long enough
+# to cover "that was the wrong tub" noticed over the washing up, short enough
+# that the card is about what is fermenting rather than what used to be.
+REOPEN_WINDOW_HOURS = 24
+
+
+def closed_recently(conn, now=None, hours=REOPEN_WINDOW_HOURS,
+                    stir_hours=DEFAULT_STIR_HOURS, max_age_days=DEFAULT_MAX_AGE_DAYS):
+    """Batches closed within the last `hours`, newest first.
+
+    What the undo is offered on. Bounded by time rather than by count because
+    the question it answers — "did I just close the wrong one?" — stops being
+    asked after a day, and an unbounded list would turn the card into a log.
+    """
+    now = now or datetime.datetime.now()
+    cutoff = now - datetime.timedelta(hours=hours)
+    out = []
+    for batch in batches(conn, include_closed=True, now=now, stir_hours=stir_hours,
+                         max_age_days=max_age_days):
+        closed = _parse(batch.get("closed_at"))
+        if closed is None or closed < cutoff:
+            continue
+        out.append(batch)
+    out.sort(key=lambda b: b.get("closed_at") or "", reverse=True)
+    return out
+
+
+def reopen_batch(conn, batch_id, now=None):
+    """Put a closed batch back in the rotation — the tap you did not mean.
+
+    Closing only ever marked the batch, so this is a matter of clearing the
+    mark: nothing was thrown away, whatever the card looked like afterwards.
+
+    The jar the close may have filled goes with it, when it came from this
+    batch and has not been poured into anything yet. Undoing a feed that kept
+    its brine should leave neither a closed batch nor a jar you never saved —
+    and a jar already used to seed the next tub is a real thing that happened,
+    so that one stays.
+    """
+    row = conn.execute(
+        "SELECT closed_at FROM ferment_batches WHERE id = ?", (batch_id,)).fetchone()
+    if row is None:
+        raise ValueError("no such batch")
+    if row["closed_at"] is None:
+        raise ValueError("that batch is already going")
+    conn.execute(
+        "UPDATE ferment_batches SET closed_at = NULL, outcome = NULL WHERE id = ?",
+        (batch_id,),
+    )
+    conn.execute(
+        "DELETE FROM ferment_starter WHERE from_batch_id = ? AND used_at IS NULL",
+        (batch_id,),
+    )
+
+
 def _state(row, now, max_age_days=DEFAULT_MAX_AGE_DAYS):
     """Where a batch is in its life, worked out from the clock.
 
@@ -354,6 +409,9 @@ def batches(conn, include_closed=False, now=None, stir_hours=DEFAULT_STIR_HOURS,
             "generation": row["generation"],
             "state": state,
             "outcome": row["outcome"],
+            # When it left the rotation, which is what the undo window is
+            # measured from. NULL for everything still going.
+            "closed_at": row["closed_at"],
             "ready_at": ready_at.isoformat() if ready_at else None,
             "use_by": use_by.isoformat() if use_by else None,
             # Truncated, never rounded to nearest. The card floors this to say
@@ -542,6 +600,10 @@ def summary(conn, birds, now=None, stir_hours=DEFAULT_STIR_HOURS,
     open_batches = batches(conn, now=now, stir_hours=stir_hours, max_age_days=max_age_days)
     return {
         "batches": open_batches,
+        # Recently closed, so the card can offer to put one back. A tub closed
+        # by mistake is otherwise gone from the screen with no way back.
+        "closed_recently": closed_recently(conn, now=now, stir_hours=stir_hours,
+                                           max_age_days=max_age_days),
         "starter": current_starter(conn, now=now),
         "open": len(open_batches),
         "ready": sum(1 for b in open_batches if b["feed_due"]),

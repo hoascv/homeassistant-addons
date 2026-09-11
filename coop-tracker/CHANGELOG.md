@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.64.0
+
+- **A tub closed by mistake can be put back.** Fed and Binned are one tap on a
+  card you are holding in a coop, and until now the tub simply vanished. Any
+  batch closed in the last 24 hours is listed under the tubs with an **Undo**:
+  *Tub 1 · fed today 12:14 · Undo*. It comes back exactly as it was, stir
+  history and all — closing never deleted anything, it only marked the batch,
+  so undoing clears the mark.
+- **Undoing a feed that kept its liquid takes the jar back with it.** A jar
+  from a batch that, once undone, was never fed has no business in the fridge.
+  One that has already seeded another tub stays: that happened.
+- After a day the offer goes. It answers "did I just close the wrong one?", and
+  that question stops being asked; History still has everything.
+- **The keep-the-liquid question no longer reads like a way out.** It is asked
+  after the decision to feed, and both answers close the tub — so it now says
+  so, and points at Undo for the case where you meant neither.
+
 ## 1.63.0
 
 - **The tubs come first on the Feed page.** Fermented feed sat below Flock

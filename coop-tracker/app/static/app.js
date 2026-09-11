@@ -3471,6 +3471,7 @@ function renderFerment(data) {
       + `hens is about ${data.suggested_grams} g of dry feed.`;
 
   renderStarter(data);
+  renderClosedRecently(data);
 
   document.getElementById("ferment-batches").innerHTML = data.batches.map((b) => {
     const since = b.hours_since_stir == null ? "—"
@@ -3509,6 +3510,27 @@ function renderFerment(data) {
           <button type="button" class="btn-small${b.spent ? "" : " btn-quiet"}" data-close="${b.id}"
             data-outcome="discarded" title="Threw it away">Binned</button>
         </div>
+      </div>`;
+  }).join("");
+}
+
+// Tubs closed in the last day. Nothing is ever deleted here — closing marks a
+// batch — so the only thing standing between a mis-tap and the tub coming back
+// was somewhere to say so.
+function renderClosedRecently(data) {
+  const host = document.getElementById("ferment-closed");
+  const rows = data.closed_recently || [];
+  host.hidden = !rows.length;
+  if (!rows.length) { host.innerHTML = ""; return; }
+  host.innerHTML = rows.map((b) => {
+    const what = b.outcome === "discarded" ? "binned" : "fed";
+    // fmtTime, the same wording the rest of the page uses for a moment in the
+    // last day or two: "Today 14:05".
+    const when = b.closed_at ? fmtTime(b.closed_at) : "";
+    return `
+      <div class="ferment-closed-row">
+        <span class="ferment-closed-text">${escapeHtml(b.container)} · ${what}${when ? ` ${escapeHtml(when.toLowerCase())}` : ""}</span>
+        <button type="button" class="btn-small btn-quiet" data-reopen="${b.id}">Undo</button>
       </div>`;
   }).join("");
 }
@@ -3629,14 +3651,28 @@ document.getElementById("ferment-batches").addEventListener("click", async (even
       && !confirm("Throw this batch away? It will be recorded as binned.")) return;
   // Only ever asked on a fed batch. Liquid from a binned one is the culture you
   // are binning it to be rid of, so the question is not offered there at all.
+  // Worded so Cancel cannot be read as backing out of the feed: it is asked
+  // *after* the decision to feed, and both answers close the tub. Undo, on the
+  // card underneath, is what backing out actually looks like.
   const saveLiquid = close.dataset.outcome === "fed" && confirm(
     "Keep the liquid to start the next batch?\n\n"
     + "Drain the brine into a jar, bin the wet grain, rinse the tub. "
-    + "The next batch is then ready in two days instead of three.");
+    + "The next batch is then ready in two days instead of three.\n\n"
+    + "OK keeps the liquid · Cancel throws it out. "
+    + "Either way the tub is fed — Undo on the card puts it back.");
   renderFerment(await fetch(`api/ferment/batches/${close.dataset.close}/close`, {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ outcome: close.dataset.outcome, save_liquid: saveLiquid }),
   }).then((r) => r.json()));
+});
+
+// Its own listener: the strip sits outside #ferment-batches, so a click in it
+// never reaches the handler for the tubs themselves.
+document.getElementById("ferment-closed").addEventListener("click", async (event) => {
+  const reopen = event.target.closest("[data-reopen]");
+  if (!reopen) return;
+  renderFerment(await fetch(`api/ferment/batches/${reopen.dataset.reopen}/reopen`,
+                            { method: "POST" }).then((r) => r.json()));
 });
 
 document.getElementById("ferment-new").addEventListener("click", async () => {

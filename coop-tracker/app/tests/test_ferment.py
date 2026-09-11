@@ -1251,3 +1251,91 @@ def test_the_row_opens_its_own_stirs(client=None):
 def test_a_late_gap_is_the_only_coloured_thing_in_the_log():
     css = _static("style.css")
     assert ".stir-late" in css
+
+
+# --- undoing a close ----------------------------------------------------------
+#
+# One tap on a card held in a coop takes a tub off the screen, and until this
+# existed there was no way back from it. Nothing is ever deleted — closing marks
+# a batch — so the undo only has to clear the mark.
+
+
+def test_a_closed_batch_can_be_put_back(conn):
+    batch_id = ferment.start_batch(conn, "Tub 1", now=NOW)
+    ferment.close_batch(conn, batch_id, ferment.FED, now=_hours(72))
+    assert ferment.batches(conn, now=_hours(73)) == []
+
+    ferment.reopen_batch(conn, batch_id)
+    [back] = ferment.batches(conn, now=_hours(73))
+    assert back["id"] == batch_id
+    assert back["outcome"] is None
+    assert back["closed_at"] is None
+
+
+def test_undoing_a_feed_takes_back_the_jar_it_filled(conn):
+    """Undo the feed and the brine you never poured goes with it — otherwise
+    the fridge holds a jar from a batch that, as far as the app is concerned,
+    was never fed."""
+    batch_id = ferment.start_batch(conn, "Tub 1", now=NOW)
+    ferment.close_batch(conn, batch_id, ferment.FED, now=_hours(72), save_liquid=True)
+    assert ferment.current_starter(conn, now=_hours(73)) is not None
+
+    ferment.reopen_batch(conn, batch_id)
+    assert ferment.current_starter(conn, now=_hours(73)) is None
+
+
+def test_a_jar_already_used_survives_the_undo(conn):
+    """It seeded a tub that exists. That happened, whatever is undone here."""
+    first = ferment.start_batch(conn, "Tub 1", now=NOW)
+    ferment.close_batch(conn, first, ferment.FED, now=_hours(72), save_liquid=True)
+    ferment.start_batch(conn, "Tub 2", now=_hours(73), use_starter=True)
+
+    ferment.reopen_batch(conn, first)
+    used = conn.execute(
+        "SELECT used_at FROM ferment_starter WHERE from_batch_id = ?", (first,)
+    ).fetchone()
+    assert used is not None and used["used_at"] is not None
+
+
+def test_a_batch_that_is_already_going_cannot_be_reopened(conn):
+    batch_id = ferment.start_batch(conn, "Tub 1", now=NOW)
+    with pytest.raises(ValueError, match="already going"):
+        ferment.reopen_batch(conn, batch_id)
+
+
+def test_reopening_something_that_is_not_there_is_refused(conn):
+    with pytest.raises(ValueError, match="no such batch"):
+        ferment.reopen_batch(conn, 999)
+
+
+def test_only_the_last_day_of_closures_is_offered_back(conn):
+    """The card asks "did I just close the wrong one?", and that question stops
+    being asked after a day. An unbounded list would make it a log."""
+    old = ferment.start_batch(conn, "Tub old", now=NOW)
+    recent = ferment.start_batch(conn, "Tub recent", now=NOW)
+    ferment.close_batch(conn, old, ferment.FED, now=_hours(10))
+    ferment.close_batch(conn, recent, ferment.FED, now=_hours(80))
+
+    offered = ferment.closed_recently(conn, now=_hours(81))
+    assert [b["container"] for b in offered] == ["Tub recent"]
+
+
+def test_the_undo_round_trips_through_the_routes(client, set_options):
+    set_options(ferment_enabled=True, flock_isabrown_count=5)
+    started = client.post("/api/ferment/batches",
+                          json={"container": "Tub 1", "grams": 675}).get_json()
+    batch_id = started["batches"][0]["id"]
+    closed = client.post(f"/api/ferment/batches/{batch_id}/close",
+                         json={"outcome": "fed"}).get_json()
+    assert closed["open"] == 0
+    # And the card is told about it, which is what puts Undo on screen.
+    assert [b["id"] for b in closed["closed_recently"]] == [batch_id]
+
+    back = client.post(f"/api/ferment/batches/{batch_id}/reopen").get_json()
+    assert back["open"] == 1
+    assert back["closed_recently"] == []
+    assert back["batches"][0]["id"] == batch_id
+
+    again = client.post(f"/api/ferment/batches/{batch_id}/reopen")
+    assert again.status_code == 400
+    assert "already going" in again.get_json()["error"]

@@ -82,7 +82,7 @@ except ImportError as e:
     SKLEARN_AVAILABLE = False
     SKLEARN_ERROR = str(e)
 
-APP_VERSION = "1.63.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.64.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("COOP_DB_PATH", "/data/coop.db")
 OPTIONS_PATH = os.environ.get("COOP_OPTIONS_PATH", "/data/options.json")
@@ -1449,6 +1449,24 @@ def api_close_batch(batch_id):
     try:
         ferment.close_batch(conn, batch_id, (data.get("outcome") or "").strip(),
                             save_liquid=bool(data.get("save_liquid")))
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    conn.commit()
+    return jsonify(_ferment_payload(conn))
+
+
+@app.route("/api/ferment/batches/<int:batch_id>/reopen", methods=["POST"])
+def api_reopen_batch(batch_id):
+    """Undo closing a batch.
+
+    Closing is one tap on a card you are holding in a coop, and the tub does
+    not come back by itself. Nothing was deleted to begin with, so this only
+    clears the mark — and takes back the jar the close filled, if that jar is
+    still sitting there unused.
+    """
+    conn = get_db()
+    try:
+        ferment.reopen_batch(conn, batch_id)
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
     conn.commit()
