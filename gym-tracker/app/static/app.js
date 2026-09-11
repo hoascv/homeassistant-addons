@@ -1523,6 +1523,16 @@ function syncScheduleFields() {
   const kind = document.getElementById("challenge-edit-kind").value;
   document.getElementById("challenge-edit-interval-field").hidden = kind !== "interval";
   document.getElementById("challenge-edit-weekdays-field").hidden = kind !== "weekdays";
+  // Revealed with no day on, the row describes a schedule that means "never",
+  // and the only thing that said so was the server refusing the save in its own
+  // words afterwards. Today is the one day you certainly have in mind when you
+  // reach for this, so it starts there — visible, and one tap from anything
+  // else.
+  if (kind === "weekdays" && !document.querySelector("#challenge-edit-weekdays [data-day].on")) {
+    const today = (new Date().getDay() + 6) % 7;   // JS counts from Sunday; we count from Monday
+    const button = document.querySelector(`#challenge-edit-weekdays [data-day="${today}"]`);
+    if (button) button.classList.add("on");
+  }
 }
 document.getElementById("challenge-edit-kind").addEventListener("change", syncScheduleFields);
 
@@ -1668,6 +1678,13 @@ document.getElementById("challenge-edit-form").addEventListener("submit", async 
     ...readScoringFields(),
     ...readForfeitFields(),
   };
+  // Said here rather than letting the server say it: turning every day off is
+  // easy, and "schedule_weekdays must name at least one day (0=Mon…6=Sun)" is
+  // the API explaining its own field names to someone who was tapping buttons.
+  if (payload.schedule_kind === "weekdays" && !payload.schedule_weekdays) {
+    result.textContent = "Pick at least one day of the week for this schedule.";
+    return;
+  }
   const url = repeatOf
     ? `api/challenges/${repeatOf}/repeat`
     : id

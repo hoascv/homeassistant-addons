@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.55.1
+
+- **Switching a challenge to certain weekdays no longer fails to save.** The
+  day row appeared with nothing selected, which is a schedule meaning "never" —
+  and the only thing that said so was the save being refused afterwards, in the
+  API's own words: *schedule_weekdays must name at least one day (0=Mon…6=Sun)*.
+  Today starts selected now, visible before you save and one tap from anything
+  else.
+- Turning every day off deliberately says *Pick at least one day of the week
+  for this schedule* instead, which is the same refusal in words meant for
+  somebody tapping buttons.
+
 ## 1.55.0
 
 - **A missed day can now cost you something real.** A challenge can carry a
