@@ -139,7 +139,7 @@ SCHEMAS = {
         "garmin_daily": (
             "day string, sleep_seconds long, sleep_deep_seconds long, "
             "sleep_light_seconds long, sleep_rem_seconds long, "
-            "sleep_awake_seconds long, sleep_score long, stress_avg long, "
+            "sleep_awake_seconds long, stress_avg long, "
             "stress_max long, body_battery_high long, body_battery_low long, "
             "body_battery_charged long, body_battery_drained long, "
             "resting_hr long, synced_at string"

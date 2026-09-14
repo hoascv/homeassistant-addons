@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.16.1
+
+- **`garmin_daily` no longer types a `sleep_score` column.** Goal Tracker 1.56.0
+  dropped it — the watch never sent one, so it only ever held null — and a read
+  schema naming a field the payload no longer carries just materialises a column
+  of nulls. Nothing was lost: every historical value in it was already null. The
+  merge itself needed no change, because `data` is stored as JSON text and the
+  Delta schema does not follow the add-on's columns.
+
 ## 2.16.0
 
 - New notebook, **`notebooks/ingest_network_traffic.ipynb`**: reads the
