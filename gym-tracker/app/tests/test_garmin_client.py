@@ -214,37 +214,19 @@ def test_sleep_stages_and_resting_hr_are_flattened():
     fields = garmin_client._sleep_fields(client, "2026-08-23")
     assert fields["sleep_seconds"] == 27000
     assert fields["sleep_deep_seconds"] == 5400
-    assert fields["sleep_score"] == 81
+    assert "sleep_score" not in fields
     assert fields["resting_hr"] == 48
 
 
-def test_a_device_that_reports_no_sleep_score_still_reports_the_durations():
-    """The documented case: 22 fields of durations and no `sleepScores` key
-    anywhere. Losing the durations too would be the wrong trade."""
-    client = _Client(sleep={"dailySleepDTO": {"sleepTimeSeconds": 27000}})
+def test_a_sleep_score_in_the_payload_is_ignored_rather_than_stored():
+    """Even an account that sends one gets no column for it. The field was
+    dropped, so reading it back would resurrect a column nothing writes."""
+    client = _Client(sleep={
+        "dailySleepDTO": {"sleepTimeSeconds": 27000, "sleepScores": {"overall": {"value": 81}}},
+    })
     fields = garmin_client._sleep_fields(client, "2026-08-23")
     assert fields["sleep_seconds"] == 27000
-    assert fields["sleep_score"] is None
-
-
-def test_a_sleep_score_outside_nought_to_a_hundred_is_rejected():
-    """A sentinel like -1 graphed as a score would be worse than a gap."""
-    client = _Client(sleep={"dailySleepDTO": {"sleepScores": {"overall": {"value": 255}}}})
-    assert garmin_client._sleep_fields(client, "2026-08-23")["sleep_score"] is None
-
-
-def test_a_sleep_score_at_the_top_level_is_read_too():
-    """Some accounts carry it beside the DTO rather than inside it."""
-    assert garmin_client._sleep_score({"sleepScores": {"overall": {"value": 70}}}) == 70
-
-
-@pytest.mark.parametrize("payload", [
-    {"dailySleepDTO": {"sleepScores": "not a dict"}},
-    {"dailySleepDTO": {"sleepScores": {"overall": "not a dict"}}},
-    {},
-])
-def test_an_unexpected_sleep_score_shape_is_no_score(payload):
-    assert garmin_client._sleep_score(payload) is None
+    assert "sleep_score" not in fields
 
 
 def test_sleep_that_raises_costs_only_sleep():
@@ -399,9 +381,8 @@ def test_the_sleep_diagnostic_reports_shape_not_content():
     assert out["day"] == "2026-08-23"
     assert "dailySleepDTO" in out["top_level_keys"]
     assert out["dto_keys"] == ["sleepTimeSeconds"]
-    assert out["sleep_scores_keys"] is None
-    assert out["parsed_score"] is None
-    assert out["sleep_scores_overall"] is None
+    assert "sleep_scores_keys" not in out
+    assert "parsed_score" not in out
 
 
 def test_the_sleep_diagnostic_reports_a_failing_call_rather_than_raising():

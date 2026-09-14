@@ -111,24 +111,6 @@ def _num(value):
         return None
 
 
-# Not every device produces a sleep score. On an account whose sleep response
-# carries 22 fields of durations, stages and timestamps, there is no
-# `sleepScores` key at all — in the DTO, at the top level, or on the daily
-# summary. So it is attempted at the one documented path and otherwise left
-# empty, rather than hunted for.
-def _sleep_score(payload):
-    dto = payload.get("dailySleepDTO") or {}
-    for source in (dto, payload):
-        scores = source.get("sleepScores")
-        if isinstance(scores, dict):
-            overall = scores.get("overall")
-            if isinstance(overall, dict):
-                value = _num(overall.get("value"))
-                if value is not None and 0 <= value <= 100:
-                    return value
-    return None
-
-
 def _sleep_fields(client, day):
     try:
         data = client.get_sleep_data(day) or {}
@@ -143,9 +125,11 @@ def _sleep_fields(client, day):
         "sleep_light_seconds": _num(dto.get("lightSleepSeconds")),
         "sleep_rem_seconds": _num(dto.get("remSleepSeconds")),
         "sleep_awake_seconds": _num(dto.get("awakeSleepSeconds")),
-        "sleep_score": _sleep_score(data),
-        # Reported alongside sleep and worth more than the score for tracking
-        # recovery: an actual measurement rather than a vendor index.
+        # No sleep score. This watch's sleep response carries no `sleepScores`
+        # key anywhere — not in the DTO, not at the top level, not on the daily
+        # summary — so the column only ever held NULL and has been dropped.
+        # Resting HR arrives in the same response and is worth more anyway: an
+        # actual measurement rather than a vendor index.
         "resting_hr": _num(data.get("restingHeartRate")),
     }
 
@@ -288,20 +272,14 @@ def _body_battery_fields(client, day, summary=None):
 
 
 def diagnose_sleep(client, day):
-    """What the sleep response actually contains, for when the score is empty.
-    Reports the shape, not the payload."""
+    """Which sleep fields the response actually carries, for when a duration or
+    a stage comes back empty. Reports the shape, not the payload."""
     out = {"day": day}
     try:
         data = client.get_sleep_data(day) or {}
         dto = data.get("dailySleepDTO") or {}
-        scores = dto.get("sleepScores")
         out["top_level_keys"] = sorted(k for k in data) if isinstance(data, dict) else None
         out["dto_keys"] = sorted(k for k in dto) if isinstance(dto, dict) else None
-        out["sleep_scores_keys"] = sorted(k for k in scores) if isinstance(scores, dict) else None
-        out["sleep_scores_overall"] = (
-            scores.get("overall") if isinstance(scores, dict) else None
-        )
-        out["parsed_score"] = _sleep_score(data)
     except Exception as e:  # noqa: BLE001
         out["error"] = str(e)
     try:
@@ -309,7 +287,6 @@ def diagnose_sleep(client, day):
         out["summary_sleep_keys"] = sorted(
             k for k in summary if "leep" in k
         ) if isinstance(summary, dict) else None
-        out["parsed_score_from_summary"] = _sleep_score(summary)
     except Exception as e:  # noqa: BLE001
         out["summary_error"] = str(e)
     return out

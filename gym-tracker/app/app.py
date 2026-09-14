@@ -20,7 +20,7 @@ from flask import Flask, Response, g, jsonify, render_template, request, send_fi
 import garmin_client
 import meals
 
-APP_VERSION = "1.55.1"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.56.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("GYM_DB_PATH", "/data/gym.db")
 OPTIONS_PATH = os.environ.get("GYM_OPTIONS_PATH", "/data/options.json")
@@ -758,7 +758,6 @@ def init_db():
             sleep_light_seconds INTEGER,
             sleep_rem_seconds INTEGER,
             sleep_awake_seconds INTEGER,
-            sleep_score INTEGER,
             stress_avg INTEGER,
             stress_max INTEGER,
             body_battery_high INTEGER,
@@ -1032,6 +1031,15 @@ def _migrate_columns(conn):
         conn.execute("ALTER TABLE change_log ADD COLUMN actor TEXT")
 
     daily_cols = {row[1] for row in conn.execute("PRAGMA table_info(garmin_daily)")}
+    if "sleep_score" in daily_cols:
+        # Dropped rather than left to sit empty. This watch's sleep response
+        # carries no sleepScores key at all, so the column never held anything
+        # but NULL, and a column that can only ever be empty is worse than no
+        # column: it reads as a metric that stopped working. Nothing is lost —
+        # SQLite has had DROP COLUMN since 3.35 and the bookworm base is well
+        # past that.
+        conn.execute("ALTER TABLE garmin_daily DROP COLUMN sleep_score")
+        daily_cols.discard("sleep_score")
     if "resting_hr" not in daily_cols:
         conn.execute("ALTER TABLE garmin_daily ADD COLUMN resting_hr INTEGER")
     if "steps" not in daily_cols:
@@ -1415,12 +1423,8 @@ GARMIN_PROBE_ATTEMPTS = 3
 # of them is chased like a hole, so a metric that starts working (or arrives
 # late from the watch) fills in across the history rather than only in the
 # refresh window.
-# Deliberately without sleep_score. The diagnostics settled it: the sleep
-# response carries no sleepScores key at all — not in the DTO, not at the top
-# level, not on the daily summary — so no device that answers like this will
-# ever fill it, and listing it here would have the backfill re-asking about
-# two months of days forever. resting_hr is listed, because it arrives in the
-# same response and is therefore worth chasing for days stored without it.
+# resting_hr is listed because it arrives in the same response as sleep and is
+# therefore worth chasing for days stored without it.
 # steps is listed for that reason too: it rides in the same summary as Body
 # Battery, so days already stored have it empty through no fault of the watch,
 # and this is what fills it in backwards. A day Garmin genuinely has nothing
@@ -1430,7 +1434,9 @@ GARMIN_PROBE_ATTEMPTS = 3
 #
 # Floors are deliberately absent. They need an altimeter, and a watch without
 # one would have every day it ever recorded marked incomplete over a number it
-# is not built to produce — the sleep score's mistake, one sensor along.
+# is not built to produce. That was the sleep score's mistake — it was listed
+# here, this watch never reported one, and the backfill re-asked about two
+# months of days forever. The column is gone now; the lesson is not.
 GARMIN_DAY_METRICS = (
     "sleep_seconds", "resting_hr", "stress_avg", "body_battery_high", "steps",
     "distance_m",

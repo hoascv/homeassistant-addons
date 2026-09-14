@@ -739,10 +739,11 @@ The diagnostic also reports what the daily summary says about **steps**, and
 the summary's other key names — useful for seeing whether a field your watch
 reports could be worth collecting.
 
-Note that not every Garmin device reports a **sleep score** — some send no such
-field at all. Where it isn't available it simply stays empty and the add-on
-stops asking. **Resting heart rate** comes from the same data and is usually the
-more useful recovery number anyway.
+Note that **sleep score is not collected**. Not every Garmin device produces
+one, and this one doesn't — its sleep response carries no such field anywhere —
+so the column was dropped rather than left sitting empty for good. **Resting
+heart rate** comes from the same response and is the more useful recovery
+number anyway. The sleep durations and stages are unaffected.
 
 This is the only feature that contacts an external service. It uses Garmin's
 unofficial API, so an occasional sync error (shown in the sheet) is normal;

@@ -896,7 +896,7 @@ class _SleepClient:
         return self._summary
 
 
-def test_sleep_score_from_the_documented_shape():
+def test_a_sleep_score_in_the_payload_is_not_stored():
     client = _SleepClient({
         "dailySleepDTO": {
             "sleepTimeSeconds": 27000,
@@ -905,12 +905,12 @@ def test_sleep_score_from_the_documented_shape():
     })
     fields = gymapp.garmin_client._sleep_fields(client, "2026-07-30")
     assert fields["sleep_seconds"] == 27000
-    assert fields["sleep_score"] == 82
+    assert "sleep_score" not in fields
 
 
-def test_a_device_that_reports_no_sleep_score_yields_none():
-    """The real shape from a device that doesn't produce one: 22 fields of
-    durations, stages and timestamps, and no sleepScores anywhere."""
+def test_the_real_shape_from_this_watch_still_yields_every_duration():
+    """22 fields of durations, stages and timestamps, and no sleepScores
+    anywhere — the shape that made the column pointless."""
     client = _SleepClient({
         "dailySleepDTO": {
             "sleepTimeSeconds": 30540, "deepSleepSeconds": 1980,
@@ -923,7 +923,7 @@ def test_a_device_that_reports_no_sleep_score_yields_none():
         "sleepStress": [{"value": 20}],
     })
     fields = gymapp.garmin_client._sleep_fields(client, "2026-07-30")
-    assert fields["sleep_score"] is None
+    assert "sleep_score" not in fields
     assert fields["sleep_seconds"] == 30540 and fields["sleep_rem_seconds"] == 10680
 
 
@@ -936,24 +936,43 @@ def test_resting_heart_rate_comes_from_the_sleep_response():
     )["resting_hr"] is None
 
 
-def test_a_duration_is_never_mistaken_for_a_score():
-    # Nothing score-shaped: the durations must not be scavenged as one.
-    fields = gymapp.garmin_client._sleep_fields(
-        _SleepClient({"dailySleepDTO": {"sleepTimeSeconds": 27000, "deepSleepSeconds": 5400}}),
-        "2026-07-30",
+def test_the_sleep_score_column_is_gone(conn):
+    """It only ever held NULL on this watch, so it was dropped outright."""
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(garmin_daily)")}
+    assert "sleep_score" not in cols
+    assert {"sleep_seconds", "sleep_deep_seconds", "sleep_rem_seconds"} <= cols
+
+
+def test_a_database_that_still_has_the_sleep_score_column_loses_it(db_path):
+    """The upgrade path: an install carrying the column is migrated out of it,
+    and the nights it was sitting beside survive untouched."""
+    import sqlite3
+
+    conn = sqlite3.connect(db_path)
+    conn.execute("ALTER TABLE garmin_daily ADD COLUMN sleep_score INTEGER")
+    conn.execute(
+        "INSERT INTO garmin_daily (day, sleep_seconds, sleep_score) VALUES (?, ?, ?)",
+        ("2026-07-30", 27000, None),
     )
-    assert fields["sleep_seconds"] == 27000
-    assert fields["sleep_score"] is None
+    conn.commit()
+    conn.close()
+
+    gymapp.init_db()  # what a restart on the new version does
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(garmin_daily)")}
+    assert "sleep_score" not in cols
+    row = conn.execute(
+        "SELECT sleep_seconds FROM garmin_daily WHERE day = '2026-07-30'"
+    ).fetchone()
+    assert row["sleep_seconds"] == 27000
+    conn.close()
 
 
-def test_a_day_is_not_re_chased_for_a_sleep_score_alone(conn, monkeypatch):
-    """A day holding everything but its sleep score is left alone.
-
-    The score does not arrive at all for some devices, and a metric that marks
-    a day incomplete puts it back on the backfill list — which would have the
-    sync re-asking Garmin about two months of days forever for something that
-    may not exist.
-    """
+def test_a_day_is_not_re_chased_for_a_metric_the_watch_never_sends(conn, monkeypatch):
+    """A day holding every metric the watch does produce is left alone, rather
+    than going back on the backfill list forever over one it does not."""
     from datetime import date, timedelta
 
     old_day = (date.today() - timedelta(days=9)).isoformat()

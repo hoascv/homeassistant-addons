@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.56.0
+
+- **Sleep score is gone, rather than permanently empty.** This watch's sleep
+  response carries no `sleepScores` field anywhere — not in the DTO, not at the
+  top level, not on the daily summary — so the column could only ever hold
+  nothing. A column that can only be empty is worse than no column: it reads as
+  a metric that broke. It is dropped from `garmin_daily` on the next start, and
+  the add-on no longer looks for the field.
+- **The nights themselves are untouched.** Durations, stages, resting heart
+  rate, stress and Body Battery all carry on exactly as before, and existing
+  rows keep every one of those values across the migration.
+- The Garmin diagnostic drops its four score-shaped lines and reports what the
+  sleep response *does* contain, which is what it was useful for.
+
 ## 1.55.1
 
 - **Switching a challenge to certain weekdays no longer fails to save.** The
