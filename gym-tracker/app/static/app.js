@@ -922,6 +922,10 @@ function renderWeightChart(logs, goal, forecast, opts) {
 let challengeData = [];
 // Which challenge the items sheet is editing.
 let challengeItemsFor = null;
+// The item ids in the order the sheet is currently showing them. A move swaps
+// two entries here and sends the whole list, so the request says what the
+// order should be rather than what changed.
+let challengeItemOrder = [];
 
 async function loadChallenge() {
   try { challengeData = await fetchJSON("api/challenges"); } catch (e) { return; }
@@ -1314,8 +1318,9 @@ async function loadChallengeItems() {
   let items;
   const qs = challengeItemsFor ? `?challenge_id=${challengeItemsFor}` : "";
   try { items = await fetchJSON(`api/challenge/items${qs}`); } catch (e) { return; }
+  challengeItemOrder = items.map((it) => it.id);
   list.innerHTML = items
-    .map((it) => {
+    .map((it, index) => {
       const icon = it.item_type === "supplement" ? "💊" : "🏋️";
       // Editable target (exercise) or dose (supplement), inline.
       const editField =
@@ -1344,6 +1349,7 @@ async function loadChallengeItems() {
             <span class="ci-icon">${icon}</span>
             <span class="ci-name">${escapeHtml(it.name)}</span>
             ${editField}
+            ${reorderHtml(it, index, items.length)}
             ${moveSelectHtml(it)}
             <button type="button" class="list-del ci-del" data-id="${it.id}" aria-label="Remove">✕</button>
           </div>
@@ -1351,6 +1357,20 @@ async function loadChallengeItems() {
         </li>`;
     })
     .join("");
+}
+
+// Offered only inside one challenge: opened for all of them, the sheet lists
+// items from several and there is no single order to rearrange. The end of the
+// list is a disabled arrow rather than a missing one, so the row keeps its
+// shape as it travels.
+function reorderHtml(it, index, total) {
+  if (!challengeItemsFor || total < 2) return "";
+  return `<span class="ci-order">
+      <button type="button" class="ci-move-up" data-id="${it.id}" ${index === 0 ? "disabled" : ""}
+              aria-label="Move up">↑</button>
+      <button type="button" class="ci-move-down" data-id="${it.id}" ${index === total - 1 ? "disabled" : ""}
+              aria-label="Move down">↓</button>
+    </span>`;
 }
 
 // Offered only when there is somewhere to move to.
@@ -1765,6 +1785,25 @@ document.getElementById("challenge-items-list").addEventListener("click", async 
     loadChallengeItems();
   } catch (err) { toast(err.message); }
 });
+document.getElementById("challenge-items-list").addEventListener("click", async (e) => {
+  const arrow = e.target.closest(".ci-move-up, .ci-move-down");
+  if (!arrow || arrow.disabled) return;
+  const from = challengeItemOrder.indexOf(Number(arrow.dataset.id));
+  const to = from + (arrow.classList.contains("ci-move-up") ? -1 : 1);
+  if (from < 0 || to < 0 || to >= challengeItemOrder.length) return;
+  const order = challengeItemOrder.slice();
+  [order[from], order[to]] = [order[to], order[from]];
+  try {
+    await fetchJSON(`api/challenges/${challengeItemsFor}/items/order`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ item_ids: order }),
+    });
+    loadChallengeItems();
+    loadChallenge();
+  } catch (err) { toast(err.message); }
+});
+
 document.getElementById("challenge-items-list").addEventListener("click", async (e) => {
   const clear = e.target.closest(".ci-joined-clear");
   if (!clear) return;

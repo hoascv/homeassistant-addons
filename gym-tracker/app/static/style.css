@@ -564,6 +564,14 @@ p.tpl-meta { margin: 0 0 0.6rem; white-space: normal; }
 .items-list li { gap: 0.5rem; }
 .ci-icon { flex-shrink: 0; }
 .ci-name { flex: 1; min-width: 0; font-size: 0.9rem; font-weight: 600; }
+.ci-order { display: flex; flex-direction: column; gap: 0.1rem; flex-shrink: 0; }
+.ci-order button {
+  border: 1px solid var(--border); background: var(--surface-2); color: var(--text);
+  font-size: 0.7rem; line-height: 1; cursor: pointer; padding: 0.15rem 0.35rem;
+  border-radius: 5px;
+}
+/* The end of the list, still occupying its place so rows don't shuffle sideways. */
+.ci-order button:disabled { opacity: 0.35; cursor: default; }
 .ci-edit-reps { width: 4.5rem; flex: 0 0 auto; }
 .ci-edit-dose { width: 6rem; flex: 0 0 auto; }
 .row-actions { display: flex; align-items: center; gap: 0.4rem; flex-shrink: 0; }

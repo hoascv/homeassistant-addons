@@ -165,3 +165,27 @@ def test_each_tick_says_which_meals_were_skipped():
     assert 'createElementNS(NS, "title")' in js
     assert "skipped ${names}" in js
 
+
+
+def test_the_reorder_arrows_are_wired_to_their_handler():
+    """The arrows are rendered into a template string and picked up again by a
+    delegated listener, so the class name is written twice and nothing but a
+    text comparison notices when the two drift apart. A typo here is an arrow
+    that renders, highlights on tap, and does nothing at all."""
+    js = _read(os.path.join(STATIC, "app.js"))
+    rendered = set(re.findall(r'class="(ci-move-up|ci-move-down)"', js))
+    assert rendered == {"ci-move-up", "ci-move-down"}, (
+        f"reorderHtml renders {sorted(rendered)}, not both arrows"
+    )
+    assert '.closest(".ci-move-up, .ci-move-down")' in js, (
+        "no delegated listener picks up the arrows the renderer emits"
+    )
+
+
+def test_the_reorder_arrows_have_a_style():
+    """They sit in a flex row of inputs; unstyled buttons stretch it."""
+    css = _read(os.path.join(STATIC, "style.css"))
+    assert ".ci-order {" in css, ".ci-order has no rule"
+    assert ".ci-order button:disabled" in css, (
+        "the end-of-list arrows are shown disabled, which needs a style to read as disabled"
+    )

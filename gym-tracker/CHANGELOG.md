@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.57.0
+
+- **A challenge's items can be put in the order you actually do them.** Open
+  **Edit items** and each row carries **↑** and **↓**. Until now the only order
+  available was the order things were added in, which is fine until you add a
+  warm-up to a session you have been doing for a month and it lands underneath
+  the working sets — where a card meant to be read top to bottom now lies about
+  the session.
+- **Reordering keeps every tick.** The alternative people were left with was
+  deleting the items above and adding them back, which starts them as new items
+  and takes their history with them. Moving a row changes its position and
+  nothing else: the days it has already earned stay earned.
+- The whole order is sent as one request, so a reorder either happens or does
+  not — a connection dropped mid-move cannot leave a list nobody ordered. The
+  arrows at the top and bottom of the list are shown disabled rather than
+  hidden, so a row keeps its shape as it travels.
+- The **Edit items** sheet opened for *all* challenges still has no arrows:
+  it lists items from several challenges at once, and there is no single order
+  to rearrange.
+
 ## 1.56.0
 
 - **Sleep score is gone, rather than permanently empty.** This watch's sleep

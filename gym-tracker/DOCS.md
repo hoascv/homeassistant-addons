@@ -450,6 +450,18 @@ different facts and only one of them is worth being pleased about.
 challenge: the same items, the same length, beginning today, with the dates
 editable before it is created. The original keeps its own record.
 
+**Putting the items in order.** Each row in **Edit items** has **↑** and **↓**.
+A card is read top to bottom, so the order should be the order you do them in —
+a warm-up above the working sets, the accessory work under them. Without this
+the only order was the order you added things in, and a warm-up added to a
+session you have been running for a month lands at the bottom.
+
+Moving a row keeps everything else about the item, ticks included. That matters
+because the alternative — deleting what sits above it and adding it back —
+creates *new* items, and the days they had already earned stay with the ones you
+deleted. Opened for all challenges at once, the sheet has no arrows: it is
+showing items from several challenges, and they have no single order.
+
 **Edit items** also lets you **move** an item to another challenge. The days you
 already ticked stay with the challenge you earned them in — a move ends the
 item's membership there and starts a new one in the destination, so neither

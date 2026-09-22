@@ -20,7 +20,7 @@ from flask import Flask, Response, g, jsonify, render_template, request, send_fi
 import garmin_client
 import meals
 
-APP_VERSION = "1.56.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.57.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("GYM_DB_PATH", "/data/gym.db")
 OPTIONS_PATH = os.environ.get("GYM_OPTIONS_PATH", "/data/options.json")
@@ -5563,6 +5563,61 @@ def api_move_challenge_item(item_id):
     )
     db.commit()
     return jsonify({"status": "moved", "id": cur.lastrowid})
+
+
+@app.route("/api/challenges/<int:challenge_id>/items/order", methods=["POST"])
+def api_reorder_challenge_items(challenge_id):
+    """Set the order of one challenge's items, as a whole list in one write.
+
+    The order matters because a card is a script for the session: a warm-up
+    belongs above the working sets, and until now the only order available was
+    the order things happened to be added in.
+
+    The whole list is sent rather than a move-this-one-up request, for the same
+    reason the routine editor sends all its steps: N requests make the reorder
+    non-atomic, and a connection dropped halfway leaves a list nobody asked
+    for.
+
+    It must name exactly the challenge's active items — none missing, none
+    twice, nothing from another challenge. A partial list would have to invent
+    positions for whatever it left out, and every rule for doing that is a
+    guess at what the caller meant.
+    """
+    data = request.get_json(force=True, silent=True) or {}
+    db = get_db()
+    if db.execute(
+        "SELECT 1 FROM challenges WHERE id = ? AND archived = 0", (challenge_id,)
+    ).fetchone() is None:
+        return jsonify({"error": "no such challenge"}), 404
+
+    raw = data.get("item_ids")
+    if not isinstance(raw, list):
+        return jsonify({"error": "item_ids must be a list"}), 400
+    try:
+        ordered = [int(i) for i in raw]
+    except (TypeError, ValueError):
+        return jsonify({"error": "item_ids must be a list of item ids"}), 400
+
+    current = [
+        row["id"] for row in db.execute(
+            "SELECT id FROM challenge_items WHERE challenge_id = ? AND archived = 0 "
+            "ORDER BY sort_order ASC, id ASC",
+            (challenge_id,),
+        )
+    ]
+    if sorted(ordered) != sorted(current):
+        return jsonify({
+            "error": "item_ids must name each of this challenge's items exactly once"
+        }), 400
+
+    stamp = _now_ts()
+    for order, item_id in enumerate(ordered):
+        db.execute(
+            "UPDATE challenge_items SET sort_order = ?, updated_at = ? WHERE id = ?",
+            (order, stamp, item_id),
+        )
+    db.commit()
+    return jsonify(_active_challenge_items(db, challenge_id))
 
 
 @app.route("/api/challenge/items/<int:item_id>", methods=["DELETE"])
