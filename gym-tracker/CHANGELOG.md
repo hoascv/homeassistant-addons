@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.59.1
+
+- **The change feed stops crediting your whole history to a migration.** Every
+  change is recorded with who made it, and the upgrade that first added that
+  column left existing rows empty — deliberately, since those changes predate
+  the record. But the commit ending a migration stamps every unattributed row
+  with its own name, and a column added moments earlier is empty on the entire
+  table, so the lot was marked *migration*. They now read **unknown**, which is
+  what they are. Only the attribution was ever wrong; no change was lost or
+  altered.
+
 ## 1.59.0
 
 - **An exercise now says how long it has been taking you.** Open an exercise's

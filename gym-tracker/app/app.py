@@ -20,7 +20,7 @@ from flask import Flask, Response, g, jsonify, render_template, request, send_fi
 import garmin_client
 import meals
 
-APP_VERSION = "1.59.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.59.1"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("GYM_DB_PATH", "/data/gym.db")
 OPTIONS_PATH = os.environ.get("GYM_OPTIONS_PATH", "/data/options.json")
@@ -1026,9 +1026,20 @@ def _migrate_columns(conn):
 
     change_cols = {row[1] for row in conn.execute("PRAGMA table_info(change_log)")}
     if "actor" not in change_cols:
-        # Left null on existing rows: those changes genuinely predate the
-        # record, and guessing an actor for them would be inventing history.
+        # Those changes genuinely predate the record, so they are marked
+        # 'unknown' — the same value the connection class uses for any path
+        # that does not say who it is.
+        #
+        # Not left null, even though null reads as the natural "no idea": the
+        # commit that ends this migration stamps every null-actor row with its
+        # own actor, and a column added a moment earlier is null on the whole
+        # table. Leaving them null therefore attributed the entire history to
+        # 'migration' — precisely the invented history this avoids. The
+        # stamping is right about rows written inside its own transaction and
+        # cannot tell them from rows a new column just emptied, so the
+        # migration has to put these beyond its reach itself.
         conn.execute("ALTER TABLE change_log ADD COLUMN actor TEXT")
+        conn.execute("UPDATE change_log SET actor = 'unknown' WHERE actor IS NULL")
 
     daily_cols = {row[1] for row in conn.execute("PRAGMA table_info(garmin_daily)")}
     if "sleep_score" in daily_cols:
@@ -4212,16 +4223,14 @@ def api_exercise_timing(exercise_id):
                 if i == 0:
                     entry["why"] = "first in the session"
                 else:
-                    try:
-                        gap = (
-                            datetime.fromisoformat(row["ts"])
-                            - datetime.fromisoformat(session[i - 1]["ts"])
-                        ).total_seconds() / 60
-                    except (ValueError, TypeError):
-                        gap = None
-                    if gap is None:
-                        entry["why"] = "unreadable timestamp"
-                    elif gap * 60 < MIN_TIMED_GAP_SECONDS:
+                    # Both timestamps parse: _session_groups drops any row it
+                    # could not read before a session is built, so there is no
+                    # unreadable-timestamp case to handle here.
+                    gap = (
+                        datetime.fromisoformat(row["ts"])
+                        - datetime.fromisoformat(session[i - 1]["ts"])
+                    ).total_seconds() / 60
+                    if gap * 60 < MIN_TIMED_GAP_SECONDS:
                         # Not only an identical timestamp: two rows ticked six
                         # seconds apart are the same act, and six seconds is not
                         # an exercise. Counted as a measurement it drags the
