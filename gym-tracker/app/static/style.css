@@ -564,6 +564,26 @@ p.tpl-meta { margin: 0 0 0.6rem; white-space: normal; }
 .items-list li { gap: 0.5rem; }
 .ci-icon { flex-shrink: 0; }
 .ci-name { flex: 1; min-width: 0; font-size: 0.9rem; font-weight: 600; }
+/* What was actually lifted, on a ticked row. Indented under the label so the
+   row still reads as one item, and tabular so a column of weights lines up. */
+.ci-effort-row {
+  display: flex; gap: 0.4rem; flex-basis: 100%; margin: 0.35rem 0 0.1rem 1.75rem;
+}
+.ci-effort-wrap { position: relative; display: inline-flex; align-items: center; }
+.ci-effort {
+  width: 5.2rem; padding-right: 2.1rem; font-variant-numeric: tabular-nums;
+}
+/* The unit sits inside the field, so the number is never ambiguous. */
+.ci-effort-unit {
+  position: absolute; right: 0.5rem; font-size: 0.72rem; color: var(--text-muted);
+  pointer-events: none;
+}
+.ci-effort.is-bad { border-color: var(--danger); }
+/* Spinners steal width from a field this narrow and are useless on a phone. */
+.ci-effort::-webkit-outer-spin-button,
+.ci-effort::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.ci-effort { -moz-appearance: textfield; }
+
 .ci-order { display: flex; flex-direction: column; gap: 0.1rem; flex-shrink: 0; }
 .ci-order button {
   border: 1px solid var(--border); background: var(--surface-2); color: var(--text);

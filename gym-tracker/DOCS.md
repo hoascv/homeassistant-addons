@@ -471,6 +471,26 @@ Tapping an item you've already ticked asks before clearing it — the tick is th
 day's credit, and for an exercise it also removes the workout that ticking
 logged. Ticking is immediate; only undoing asks.
 
+**Recording what you actually lifted.** A ticked exercise shows two small
+fields, **kg** and **reps**. They go into the workout the tick already created,
+so there is nothing extra to log and nothing to keep in sync.
+
+Ticking does not wait for them. The row goes green on the tap, and the numbers
+are for afterwards — while the next set is being loaded, or at the end of the
+session. Leaving them empty is fine.
+
+- The **kg** field starts at the last weight that exercise was loaded with,
+  shown greyed as a suggestion. It is a placeholder, not a value: an untouched
+  field records nothing, so last week's weight is never filed as today's.
+- The **reps** field starts at the item's target. A plain tap still records the
+  target — it is the best guess there is — but a session where you got 6 instead
+  of 8 now says 6. Before 1.58.0 it said 8.
+- Clearing a field and tabbing out sets it back to "not recorded".
+- Supplements have no fields, and neither do routines: a routine's work is its
+  steps and its seconds, which it already logs itself.
+
+The fields save when you leave them or press Enter, not on every keystroke.
+
 **Editing a workout the challenge logged.** You can change any of it, including
 the exercise. Changing the **exercise** or the **date** takes that entry out of
 the challenge's hands and makes it an ordinary manual workout — it has to,
@@ -661,15 +681,34 @@ workout on the watch — this reads Garmin's all-day heart rate and takes the
 part that lines up with your exercise.
 
 Exercises logged within **90 minutes** of each other count as one **session**,
-and the heart rate is read over the whole session rather than per exercise —
-otherwise five exercises logged after one workout would give five overlapping
-windows over the same period. Every exercise in the session reports the
-session's reading.
+which is what the Sessions card groups and what frames the whole reading.
 
-The window **ends when you log the last exercise**, so log as you finish. It
-starts by running back from the first exercise by its **duration** if it has
-one, otherwise by **garmin_hr_window_minutes** (default 30). Ticking a
-challenge item counts as logging it, and records the moment you ticked.
+**Each exercise gets its own heart rate**, read over the stretch between the
+previous log and its own. You log an exercise as you finish it, so that gap *is*
+the exercise that sat between them — which means a session of six exercises
+reports six readings rather than one repeated six times. Ticking a challenge
+item counts as logging it, and records the moment you ticked.
+
+Three rules keep that from inventing anything:
+
+- The **first exercise of a session** has nothing before it, so it keeps the
+  original rule: back by its own **duration** if it has one, otherwise by
+  **garmin_hr_window_minutes** (default 30).
+- Exercises logged **in the same second** share one window. They were ticked
+  together, and nothing in the data says which of them the preceding minutes
+  belonged to.
+- A window never reaches back further than **garmin_hr_window_minutes**. An hour
+  between two logs is a break, not an hour-long set, and averaging the break in
+  would drag every reading down toward resting.
+
+If an exercise's own stretch holds too few samples to read — a quick gap between
+two ticks, or the watch off the wrist for it — the **session's** reading stands
+in rather than the entry going without. Each entry records which of the two it
+holds, because a per-exercise reading and a session reading are not comparable.
+
+Readings taken before 1.58.0 were session-wide. The sync re-reads them a few
+days of history at a time, so older entries become per-exercise on their own
+over the following syncs.
 
 The **Sessions** card on Trends lists your recent sessions with the exercises
 in each, how long it ran, the reps and the heart rate.

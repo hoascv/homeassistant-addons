@@ -1,5 +1,38 @@
 # Changelog
 
+## 1.58.0
+
+- **Ticking an exercise can now record what you actually lifted.** A ticked row
+  shows two small fields — **kg** and **reps** — and what you type goes into the
+  workout the tick already logged. Ticking itself is unchanged: one tap, the row
+  goes green immediately, and the numbers are filled in after, while the next
+  set is being loaded. Leave them empty and nothing is lost that was not already
+  being lost.
+- **The weight field starts at the last weight that exercise saw**, as a
+  placeholder rather than a value — so a session is confirm-or-nudge instead of
+  retyping the same number every week, and an untouched field never claims
+  today's load was last week's.
+- **The reps you did are no longer overwritten by the reps you planned.** Until
+  now a tick copied the item's target, so a programme written 3×8 logged 3×8
+  whatever happened on the day. The target is still what a plain tap records —
+  it is the best guess available — but a different number now survives.
+- **Heart rate is read per exercise instead of per session.** You log each
+  exercise as you finish it, so the stretch between one tick and the next *is*
+  the exercise that sat between them. A session of six exercises used to report
+  one heart rate six times; it now reports six. Squat and lateral raise were
+  never the same effort and the database no longer says they were.
+- Three rules keep that honest: the first exercise of a session keeps the old
+  rule (back by its own duration, or `garmin_hr_window_minutes`); exercises
+  ticked in the same second share a window, because nothing in the data says
+  which of them the preceding minutes belonged to; and no window reaches back
+  further than `garmin_hr_window_minutes`, so a long gap between ticks is read
+  as a break rather than a very long set.
+- **Readings taken the old way are re-read, once.** The Garmin sync works back
+  through your history a few days per sync and recomputes them per exercise. If
+  an exercise's own stretch holds too few samples to read, the session reading
+  stands in rather than the entry losing its heart rate — and each row now
+  records which of the two it holds, because the two are not comparable.
+
 ## 1.57.0
 
 - **A challenge's items can be put in the order you actually do them.** Open

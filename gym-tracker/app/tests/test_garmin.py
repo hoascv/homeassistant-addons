@@ -751,11 +751,16 @@ def test_default_horizon_does_not_reach_beyond_sixty_days(conn, monkeypatch):
 # --- Sessions ---------------------------------------------------------------
 
 
-def test_one_heart_rate_window_covers_the_whole_session(conn, monkeypatch):
+def test_each_exercise_gets_the_window_since_the_one_before_it(conn, monkeypatch):
+    """Since 1.58.0 an exercise reports its own stretch, not the session's.
+
+    You log as you finish, so the gap between two logs is the exercise that sat
+    between them — and a session of three no longer reports one number three
+    times. Before this, every row here read 150/136.
+    """
     from datetime import date
 
     day = date.today().isoformat()
-    # Three exercises logged over 20 minutes: one session, one window.
     a = _log_exercise(conn, f"{day}T18:45:00", duration_sec=15 * 60)
     b = _log_exercise(conn, f"{day}T18:55:00")
     c = _log_exercise(conn, f"{day}T19:05:00")
@@ -768,14 +773,135 @@ def test_one_heart_rate_window_covers_the_whole_session(conn, monkeypatch):
     gymapp._garmin_do_sync(conn)
 
     rows = {r["id"]: r for r in conn.execute(
-        "SELECT id, hr_avg, hr_max, session_start, session_end FROM workout_logs"
+        "SELECT id, hr_avg, hr_max, hr_scope, session_start, session_end FROM workout_logs"
     )}
-    # Session runs 18:30 (15 min before the first) to 19:05 (the last log).
+    # The session extent is unchanged — it still frames the whole thing, and the
+    # Sessions card still reads it.
     assert rows[a]["session_start"] == f"{day}T18:30:00"
     assert rows[a]["session_end"] == f"{day}T19:05:00"
-    # Every exercise in it reports the session's heart rate, not its own slice.
-    assert rows[a]["hr_max"] == rows[b]["hr_max"] == rows[c]["hr_max"] == 150
-    assert rows[a]["hr_avg"] == round((120 + 141 + 150 + 132) / 4)
+
+    # The first entry keeps the original rule: back by its own duration.
+    assert rows[a]["hr_max"] == 141
+    assert rows[a]["hr_avg"] == round((120 + 141) / 2)
+    # The others run from the previous log to their own.
+    assert rows[b]["hr_max"] == 150
+    assert rows[b]["hr_avg"] == round((141 + 150) / 2)
+    assert rows[c]["hr_max"] == 150
+    assert rows[c]["hr_avg"] == round((150 + 132) / 2)
+    # Three different readings, which is the whole point.
+    assert len({rows[a]["hr_avg"], rows[b]["hr_avg"], rows[c]["hr_avg"]}) == 3
+    assert {rows[i]["hr_scope"] for i in (a, b, c)} == {"exercise"}
+    # Nothing outside the session leaked in.
+    assert 70 not in (rows[a]["hr_max"], rows[b]["hr_max"], rows[c]["hr_max"])
+
+
+def test_exercises_logged_in_the_same_second_share_one_window(conn, monkeypatch):
+    """Two rows with one timestamp were ticked together, and nothing in the data
+    says which of them the preceding minutes belonged to."""
+    from datetime import date
+
+    day = date.today().isoformat()
+    first = _log_exercise(conn, f"{day}T18:45:00", duration_sec=15 * 60)
+    b = _log_exercise(conn, f"{day}T19:05:00")
+    c = _log_exercise(conn, f"{day}T19:05:00")
+    _patch_hr(monkeypatch, {day: _hr_series(day, [
+        ("18:35", 120), ("18:45", 141), ("18:55", 150), ("19:05", 132),
+    ])})
+
+    gymapp._garmin_do_sync(conn)
+
+    rows = {r["id"]: r for r in conn.execute(
+        "SELECT id, hr_avg, hr_max, hr_scope FROM workout_logs")}
+    assert rows[b]["hr_avg"] == rows[c]["hr_avg"]
+    assert rows[b]["hr_max"] == rows[c]["hr_max"] == 150
+    assert rows[b]["hr_scope"] == rows[c]["hr_scope"] == "exercise"
+    # And the shared window is still their own stretch, not the whole session.
+    assert rows[b]["hr_avg"] != rows[first]["hr_avg"]
+
+
+def test_a_long_gap_between_logs_is_a_break_not_a_long_exercise(conn, monkeypatch, set_options):
+    """A window never reaches back further than garmin_hr_window_minutes.
+
+    Averaging an hour of sitting into the set that followed it would drag every
+    reading toward resting.
+    """
+    from datetime import date
+
+    set_options(garmin_hr_window_minutes=10)
+    day = date.today().isoformat()
+    first = _log_exercise(conn, f"{day}T18:00:00", duration_sec=5 * 60)
+    late = _log_exercise(conn, f"{day}T19:00:00")
+    _patch_hr(monkeypatch, {day: _hr_series(day, [
+        ("17:57", 130), ("18:00", 134),
+        ("18:20", 60), ("18:30", 58), ("18:40", 59),   # the break, which must not count
+        ("18:52", 140), ("18:58", 148),
+    ])})
+
+    gymapp._garmin_do_sync(conn)
+
+    rows = {r["id"]: r for r in conn.execute(
+        "SELECT id, hr_avg, hr_max FROM workout_logs")}
+    # 18:50–19:00 only: the ten minutes before the log, not the hour since the
+    # previous one.
+    assert rows[late]["hr_avg"] == round((140 + 148) / 2)
+    assert rows[late]["hr_max"] == 148
+    assert rows[first]["hr_max"] == 134
+
+
+def test_an_exercise_with_too_few_samples_falls_back_to_the_session(conn, monkeypatch):
+    """A short gap between two ticks can hold no samples at all. The session
+    reading is what earlier versions would have given, so it stands in rather
+    than the entry losing its heart rate — and hr_scope says which it is."""
+    from datetime import date
+
+    day = date.today().isoformat()
+    a = _log_exercise(conn, f"{day}T18:45:00", duration_sec=15 * 60)
+    quick = _log_exercise(conn, f"{day}T18:45:30")
+    _patch_hr(monkeypatch, {day: _hr_series(day, [
+        ("18:35", 120), ("18:40", 150), ("18:44", 141),
+    ])})
+
+    gymapp._garmin_do_sync(conn)
+
+    rows = {r["id"]: r for r in conn.execute(
+        "SELECT id, hr_avg, hr_max, hr_scope FROM workout_logs")}
+    assert rows[quick]["hr_avg"] is not None, "a reading was dropped rather than fallen back"
+    assert rows[quick]["hr_scope"] == "session"
+    assert rows[quick]["hr_max"] == 150          # the session's own window
+    assert rows[a]["hr_scope"] == "exercise"
+
+
+def test_readings_taken_the_old_way_are_re_read_per_exercise(conn, monkeypatch):
+    """The upgrade path: rows already carrying a session-wide reading are read
+    again, once, and stamped so they are never re-read after that."""
+    from datetime import date
+
+    day = date.today().isoformat()
+    a = _log_exercise(conn, f"{day}T18:45:00", duration_sec=15 * 60)
+    b = _log_exercise(conn, f"{day}T18:55:00")
+    # Exactly what 1.57.0 left behind: one reading on both rows, no scope.
+    conn.execute(
+        "UPDATE workout_logs SET hr_avg = 136, hr_max = 150, hr_samples = 4, hr_scope = NULL")
+    conn.commit()
+    _patch_hr(monkeypatch, {day: _hr_series(day, [
+        ("18:35", 120), ("18:45", 141), ("18:55", 150),
+    ])})
+
+    gymapp._garmin_do_sync(conn)
+
+    rows = {r["id"]: r for r in conn.execute(
+        "SELECT id, hr_avg, hr_max, hr_scope FROM workout_logs")}
+    assert rows[a]["hr_max"] == 141, "the old session-wide reading was left in place"
+    assert rows[b]["hr_max"] == 150
+    assert rows[a]["hr_scope"] == rows[b]["hr_scope"] == "exercise"
+
+    # And a second sync leaves them alone: a stamped row is no longer a candidate.
+    calls = []
+    original = gymapp.garmin_client.fetch_heart_rate_series
+    monkeypatch.setattr(gymapp.garmin_client, "fetch_heart_rate_series",
+                        lambda client, d: (calls.append(d), original(client, d))[1])
+    gymapp._garmin_do_sync(conn)
+    assert calls == [], f"re-read a row that was already per-exercise: {calls}"
 
 
 def test_exercises_far_apart_are_separate_sessions(conn, monkeypatch):

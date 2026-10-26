@@ -1026,8 +1026,90 @@ function renderChallenge(list) {
       '<section class="card"><p class="empty-state">No challenges running. Create one to start a streak.</p></section>';
     return;
   }
+  // Ticking an item reloads the card, and the kg field is typed into in the
+  // seconds right after the tick — so the reload lands mid-number. Keep what is
+  // being typed, and the cursor with it.
+  const live = activeEffortField();
   host.innerHTML = running.map(challengeCardHtml).join("");
+  restoreEffortField(live);
 }
+
+// --- What was actually lifted ----------------------------------------------
+// The tick stays one tap: it goes green immediately and these fields are filled
+// in after, while the next set is being loaded. Nothing here blocks the tick.
+
+function activeEffortField() {
+  const field = document.activeElement;
+  if (!field || !field.classList || !field.classList.contains("ci-effort")) return null;
+  return { item: field.dataset.item, field: field.dataset.field, value: field.value,
+           start: field.selectionStart, end: field.selectionEnd };
+}
+
+function restoreEffortField(live) {
+  if (!live) return;
+  const field = document.querySelector(
+    `.ci-effort[data-item="${live.item}"][data-field="${live.field}"]`);
+  if (!field) return;
+  field.value = live.value;
+  field.focus();
+  try { field.setSelectionRange(live.start, live.end); } catch (e) { /* not selectable */ }
+}
+
+// A ticked exercise gets two fields. Not a supplement (nothing to weigh) and
+// not a routine (its work is its steps and seconds, not sets of a weight).
+function effortFieldsHtml(it) {
+  if (it.item_type !== "exercise" || it.is_routine || !it.done_today) return "";
+  const logged = it.logged || {};
+  const kg = logged.weight_kg != null ? logged.weight_kg : "";
+  const reps = logged.reps != null ? logged.reps : "";
+  // The last weight this exercise saw is a suggestion, so it sits in the
+  // placeholder — visible, but never submitted as though it were today's fact.
+  const hint = it.last_weight_kg != null ? it.last_weight_kg : "kg";
+  return `
+    <div class="ci-effort-row" data-for="${it.id}">
+      <label class="ci-effort-wrap">
+        <input type="number" class="ci-effort" data-item="${it.id}" data-field="weight_kg"
+               value="${kg}" placeholder="${hint}" step="0.5" min="0" max="1000"
+               inputmode="decimal" aria-label="Weight in kilograms">
+        <span class="ci-effort-unit">kg</span>
+      </label>
+      <label class="ci-effort-wrap">
+        <input type="number" class="ci-effort" data-item="${it.id}" data-field="reps"
+               value="${reps}" placeholder="${it.target_reps != null ? it.target_reps : "reps"}"
+               step="1" min="0" inputmode="numeric" aria-label="Reps actually done">
+        <span class="ci-effort-unit">reps</span>
+      </label>
+    </div>`;
+}
+
+// Saved on change, which is blur or Enter — not on every keystroke, so a weight
+// typed as "8" then "82.5" is one write rather than three.
+document.getElementById("challenge-cards").addEventListener("change", async (e) => {
+  const field = e.target.closest(".ci-effort");
+  if (!field) return;
+  const raw = field.value.trim();
+  const body = { item_id: Number(field.dataset.item) };
+  // An emptied field means "not recorded", which is a null rather than a skip.
+  body[field.dataset.field] = raw === "" ? null : Number(raw);
+  try {
+    await fetchJSON("api/challenge/logged", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    field.classList.remove("is-bad");
+    // Keep the caches honest without a re-render that would steal focus.
+    const found = findChallengeItem(Number(field.dataset.item));
+    if (found) {
+      found.item.logged = found.item.logged || {};
+      found.item.logged[field.dataset.field] = raw === "" ? null : Number(raw);
+    }
+    refreshWorkoutViews();
+  } catch (err) {
+    field.classList.add("is-bad");
+    toast(err.message);
+  }
+});
 
 // "yesterday" beats a date for the day just gone: it is the one the score most
 // often just moved on, and reading a date to work out whether it means today is
@@ -1149,6 +1231,7 @@ function challengeCardHtml(ch) {
                      data-item="${it.id}" aria-label="Start this routine"
                      title="Count me through it">▶</button>`
           : ""}
+        ${effortFieldsHtml(it)}
       </li>`
     )
     .join("");
@@ -1223,6 +1306,10 @@ document.getElementById("challenge-cards").addEventListener("click", (e) => {
     openRoutinePlayer(Number(play.dataset.exercise), Number(play.dataset.item));
     return;
   }
+  // The kg/reps fields sit inside the row, which is otherwise tappable — so a
+  // tap meant for a number would otherwise ask to un-tick the item. Same guard
+  // shape as ▶ above.
+  if (e.target.closest(".ci-effort-row")) return;
   const el = e.target.closest(".challenge-item");
   if (!el) return;
   const found = findChallengeItem(Number(el.dataset.id));

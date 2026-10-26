@@ -20,7 +20,7 @@ from flask import Flask, Response, g, jsonify, render_template, request, send_fi
 import garmin_client
 import meals
 
-APP_VERSION = "1.57.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.58.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("GYM_DB_PATH", "/data/gym.db")
 OPTIONS_PATH = os.environ.get("GYM_OPTIONS_PATH", "/data/options.json")
@@ -1114,6 +1114,20 @@ def _migrate_columns(conn):
         conn.execute("ALTER TABLE workout_logs ADD COLUMN session_start TEXT")
         conn.execute("ALTER TABLE workout_logs ADD COLUMN session_end TEXT")
 
+    if "hr_scope" not in workout_cols:
+        # How an entry's heart rate was read. 'exercise' means the window
+        # between its own tick and the one before it; 'session' means the
+        # whole-session window, which was the only rule before 1.58.0.
+        #
+        # The two are not comparable — a session reading is the same number on
+        # every exercise in it — so the column exists to say which one a row
+        # holds rather than leaving a mixed column nobody can reason about.
+        # Existing readings are stamped 'session', which is what they are; the
+        # Garmin sync re-reads them per exercise as it works back through the
+        # history.
+        conn.execute("ALTER TABLE workout_logs ADD COLUMN hr_scope TEXT")
+        conn.execute("UPDATE workout_logs SET hr_scope = 'session' WHERE hr_avg IS NOT NULL")
+
     if "joined_on" not in item_cols:
         # An explicit "part of the challenge from this day", for when the
         # inferred one is wrong — usually because the item predates creation
@@ -1550,6 +1564,14 @@ def _garmin_upsert_activity(conn, a):
 # How far back logged exercises are chased for heart rate, and how many times
 # each is re-asked about before it waits for the watch to upload again.
 GARMIN_HR_BACKFILL_DAYS = 21
+# How far back the one-off re-read of session-wide readings reaches. Wider than
+# the backfill window because it is catching up on history rather than chasing
+# a watch that has not uploaded yet, and self-limiting: a row re-read per
+# exercise is stamped and never looked at again.
+GARMIN_HR_RESCOPE_DAYS = 180
+# Days of history re-read per sync. One Garmin heart-rate call per day, so an
+# unbounded pass would turn a routine sync into a hundred requests.
+GARMIN_HR_RESCOPE_DAYS_PER_SYNC = 8
 GARMIN_HR_ATTEMPTS = 3
 # Fewer samples than this in the window is noise, not a heart rate.
 GARMIN_HR_MIN_SAMPLES = 2
@@ -1615,6 +1637,55 @@ def _hr_window(row, default_minutes):
     return end - timedelta(seconds=int(seconds)), end
 
 
+def _exercise_windows(session, default_minutes):
+    """Per-exercise heart-rate windows for one session: {row_id: (start, end)}.
+
+    You log an exercise as you finish it, so the stretch between the previous
+    tick and this one *is* the exercise that sat between them. That makes the
+    gaps between ticks real boundaries, and a session of six exercises ticked
+    twenty minutes apart holds six different heart rates rather than one
+    repeated six times.
+
+    Three rules keep it honest:
+
+    * The **first** entry of a session has no predecessor, so it keeps the
+      original rule — back by its own duration, or by the configured default.
+    * Entries sharing a timestamp **share a window**. Two exercises ticked in
+      the same second were ticked together, and nothing in the data can say
+      which of them the preceding minutes belonged to.
+    * A window never reaches back further than `default_minutes`. A two-hour
+      gap between ticks is a break, not a two-hour exercise, and averaging the
+      break into it would drag every reading toward resting.
+    """
+    stamps = []
+    for row in session:
+        try:
+            at = datetime.fromisoformat(row["ts"])
+        except (ValueError, TypeError):
+            continue
+        if not stamps or stamps[-1][0] != at:
+            stamps.append((at, [row]))
+        else:
+            stamps[-1][1].append(row)
+    if not stamps:
+        return {}
+
+    cap = timedelta(minutes=default_minutes)
+    windows = {}
+    for i, (at, rows) in enumerate(stamps):
+        if i == 0:
+            first = rows[0]
+            seconds = first["duration_sec"] if first["duration_sec"] else default_minutes * 60
+            start = at - timedelta(seconds=int(seconds))
+        else:
+            start = max(stamps[i - 1][0], at - cap)
+        if start >= at:
+            continue  # no measurable stretch; the caller falls back
+        for row in rows:
+            windows[row["id"]] = (start, at)
+    return windows
+
+
 def _hr_summary(series, start, end):
     """avg / max / min over the samples inside [start, end]."""
     lo, hi = start.timestamp(), end.timestamp()
@@ -1637,14 +1708,23 @@ def _garmin_hr_candidates(conn, today):
     only an upload can turn an empty window into real samples.
     """
     since = (today - timedelta(days=GARMIN_HR_BACKFILL_DAYS)).isoformat()
+    rescope_since = (today - timedelta(days=GARMIN_HR_RESCOPE_DAYS)).isoformat()
     return conn.execute(
         "SELECT id, ts, duration_sec, hr_attempts, hr_upload FROM workout_logs "
         # ts_exact = 0 means the time is a midday placeholder, so there is no
         # real window to read a heart rate from. Filling one in would be
         # inventing data.
-        "WHERE hr_avg IS NULL AND ts_exact = 1 AND substr(ts, 1, 10) >= ? "
-        "ORDER BY ts DESC LIMIT 200",
-        (since,),
+        "WHERE ts_exact = 1 AND ("
+        #   a reading that was never taken, within the usual backfill window
+        "  (hr_avg IS NULL AND substr(ts, 1, 10) >= ?)"
+        #   or one taken under the old session-wide rule, which is re-read per
+        #   exercise. This reaches back further than the backfill window
+        #   because it is a one-off pass over history, and it stops on its own:
+        #   once a row is stamped 'exercise' it stops matching.
+        "  OR (hr_avg IS NOT NULL AND COALESCE(hr_scope, 'session') <> 'exercise'"
+        "      AND substr(ts, 1, 10) >= ?)"
+        ") ORDER BY ts DESC LIMIT 200",
+        (since, rescope_since),
     ).fetchall()
 
 
@@ -1666,7 +1746,11 @@ def _garmin_sync_heart_rates(conn, client, today, device_upload):
             continue
         wanted.setdefault(row["ts"][:10], set()).add(row["id"])
 
-    for day, ids in wanted.items():
+    # Newest first, and only a few days of history per sync: each day costs one
+    # heart-rate call, and the re-read of older sessions must not turn a routine
+    # sync into a hundred requests.
+    for day in sorted(wanted, reverse=True)[:GARMIN_HR_RESCOPE_DAYS_PER_SYNC]:
+        ids = wanted[day]
         # Sessions are built from every exercise logged that day, not only the
         # ones missing a heart rate, so a session's extent is the real one.
         for session in _session_groups(_exact_workouts_on(conn, day)):
@@ -1678,30 +1762,43 @@ def _garmin_sync_heart_rates(conn, client, today, device_upload):
                 continue
             if day not in by_day:
                 by_day[day] = garmin_client.fetch_heart_rate_series(client, day)
-            summary = _hr_summary(by_day[day], *extent)
-            placeholders = ",".join("?" for _ in member_ids)
+            series = by_day[day]
+            session_summary = _hr_summary(series, *extent)
             start_iso = extent[0].isoformat(timespec="seconds")
             end_iso = extent[1].isoformat(timespec="seconds")
-            if summary:
-                # Written to every exercise in the session: they share the
-                # window, so they share the reading.
-                conn.execute(
-                    f"UPDATE workout_logs SET hr_avg = ?, hr_max = ?, hr_min = ?, hr_samples = ?, "
-                    f"hr_synced_at = ?, hr_attempts = hr_attempts + 1, hr_upload = ?, "
-                    f"session_start = ?, session_end = ? WHERE id IN ({placeholders})",
-                    (
-                        summary["hr_avg"], summary["hr_max"], summary["hr_min"], summary["hr_samples"],
-                        datetime.now().isoformat(timespec="seconds"), device_upload,
-                        start_iso, end_iso, *member_ids,
-                    ),
-                )
-                filled += len(member_ids)
-            else:
-                conn.execute(
-                    f"UPDATE workout_logs SET hr_attempts = hr_attempts + 1, hr_upload = ?, "
-                    f"session_start = ?, session_end = ? WHERE id IN ({placeholders})",
-                    (device_upload, start_iso, end_iso, *member_ids),
-                )
+            windows = _exercise_windows(session, window_minutes)
+
+            for row in session:
+                window = windows.get(row["id"])
+                summary = _hr_summary(series, *window) if window else None
+                scope = "exercise"
+                if summary is None:
+                    # Too few samples in this exercise's own stretch — a short
+                    # gap between ticks, or a watch that was off the wrist for
+                    # it. The session reading is what the previous versions
+                    # would have given, so fall back to it rather than drop a
+                    # reading, and say which one this is.
+                    summary, scope = session_summary, "session"
+                if summary:
+                    conn.execute(
+                        "UPDATE workout_logs SET hr_avg = ?, hr_max = ?, hr_min = ?, "
+                        "hr_samples = ?, hr_scope = ?, hr_synced_at = ?, "
+                        "hr_attempts = hr_attempts + 1, hr_upload = ?, "
+                        "session_start = ?, session_end = ? WHERE id = ?",
+                        (
+                            summary["hr_avg"], summary["hr_max"], summary["hr_min"],
+                            summary["hr_samples"], scope,
+                            datetime.now().isoformat(timespec="seconds"), device_upload,
+                            start_iso, end_iso, row["id"],
+                        ),
+                    )
+                    filled += 1
+                else:
+                    conn.execute(
+                        "UPDATE workout_logs SET hr_attempts = hr_attempts + 1, hr_upload = ?, "
+                        "session_start = ?, session_end = ? WHERE id = ?",
+                        (device_upload, start_iso, end_iso, row["id"]),
+                    )
     return filled
 
 
@@ -2299,6 +2396,11 @@ def _active_challenge_items(conn, challenge_id=None):
         "e.is_routine, e.routine_rounds, "
         "(SELECT COALESCE(SUM(rs.seconds), 0) FROM routine_steps rs"
         " WHERE rs.exercise_id = e.id) * e.routine_rounds AS routine_seconds, "
+        # What this exercise was last loaded with, whoever logged it. The weight
+        # field starts here, so a session is confirm-or-nudge rather than retyping
+        # the same number every week.
+        "(SELECT w.weight_kg FROM workout_logs w WHERE w.exercise_id = e.id "
+        " AND w.weight_kg IS NOT NULL ORDER BY w.ts DESC, w.id DESC LIMIT 1) AS last_weight_kg, "
         "s.name AS supplement_name, i.updated_at AS image_v "
         "FROM challenge_items ci "
         "LEFT JOIN exercises e ON e.id = ci.exercise_id "
@@ -2686,8 +2788,33 @@ def _challenge_item_view(r):
         "routine_rounds": _row_value(r, "routine_rounds", 1),
         "routine_seconds": _row_value(r, "routine_seconds"),
         "dose": r["dose"],
+        "last_weight_kg": _row_value(r, "last_weight_kg"),
         "name": name,
         "label": label,
+    }
+
+
+def _logged_effort_on(conn, item_ids, day):
+    """{item_id: {sets, reps, weight_kg}} for the workouts today's ticks created.
+
+    Keyed on the day the session was *done* rather than the day it counts for,
+    which is where `_record_completion` files it — a day kept in advance logs
+    its workout under today.
+    """
+    if not item_ids:
+        return {}
+    placeholders = ",".join("?" for _ in item_ids)
+    rows = conn.execute(
+        f"SELECT w.challenge_item_id AS item_id, w.sets, w.reps, w.weight_kg "
+        f"FROM workout_logs w "
+        f"JOIN challenge_completions cc ON cc.item_id = w.challenge_item_id "
+        f"  AND cc.day = ? AND COALESCE(cc.done_on, cc.day) = substr(w.ts, 1, 10) "
+        f"WHERE w.source = 'challenge' AND w.challenge_item_id IN ({placeholders})",
+        (day, *item_ids),
+    )
+    return {
+        r["item_id"]: {"sets": r["sets"], "reps": r["reps"], "weight_kg": r["weight_kg"]}
+        for r in rows
     }
 
 
@@ -4147,8 +4274,12 @@ def _challenge_view(conn, ch):
     today = date.today()
     today_iso = today.isoformat()
     done_today = by_day.get(today_iso, set())
+    logged = _logged_effort_on(conn, ids, today_iso)
     for i in items:
         i["done_today"] = i["id"] in done_today
+        # What today's tick actually recorded, so the row's fields show the
+        # stored numbers rather than re-suggesting the target over them.
+        i["logged"] = logged.get(i["id"])
 
     last_7 = []
     for offset in range(6, -1, -1):
@@ -5174,8 +5305,50 @@ def _completion_stamp(day):
     return (now.isoformat(timespec="seconds") if today else f"{day}T12:00:00"), (1 if today else 0)
 
 
+MAX_LOGGED_WEIGHT_KG = 1000
+
+
+def _logged_effort(data, fallback):
+    """(sets, reps, weight_kg) from a request — what was done, not what was planned.
+
+    Each is optional, and an absent key means "leave this alone", taking its
+    value from `fallback`. What that should be depends on the caller, and the
+    two are not the same thing:
+
+    * **Ticking** falls back to the item's target, so a plain tap records
+      exactly what it always did.
+    * **Amending** falls back to what is already stored. The two fields each
+      send one key on their own change event, so reading an absent key as the
+      target would reset the reps every time a weight was typed — the same data
+      loss editing an item's reps used to cause to its sets.
+
+    An explicit null clears the value, which is how a field emptied in the UI
+    gets back to "not recorded".
+    """
+    def num(key, cast, lo, hi, fallback):
+        if key not in data:
+            return fallback
+        raw = data.get(key)
+        if raw is None or (isinstance(raw, str) and not raw.strip()):
+            return None
+        try:
+            value = cast(raw)
+        except (TypeError, ValueError):
+            raise ValueError(f"{key} must be a number")
+        if not lo <= value <= hi:
+            raise ValueError(f"{key} must be between {lo:g} and {hi:g}")
+        return value
+
+    return (
+        num("sets", int, 0, 999, fallback["sets"]),
+        num("reps", int, 0, 99999, fallback["reps"]),
+        num("weight_kg", float, 0, MAX_LOGGED_WEIGHT_KG, fallback["weight_kg"]),
+    )
+
+
 def _record_completion(
-    db, item, day, done_on=None, duration_sec=None, sets=None, reps=None, notes=None
+    db, item, day, done_on=None, duration_sec=None, sets=None, reps=None, notes=None,
+    weight_kg=None,
 ):
     """Tick an item for a day, and log the workout it stands for.
 
@@ -5220,9 +5393,11 @@ def _record_completion(
             (item["id"], logged),
         )
         cur = db.execute(
-            "INSERT INTO workout_logs (ts, exercise_id, sets, reps, duration_sec, notes, "
-            "source, challenge_item_id, ts_exact) VALUES (?, ?, ?, ?, ?, ?, 'challenge', ?, ?)",
-            (ts, item["exercise_id"], sets, reps, duration_sec, notes, item["id"], ts_exact),
+            "INSERT INTO workout_logs (ts, exercise_id, sets, reps, weight_kg, duration_sec, "
+            "notes, source, challenge_item_id, ts_exact) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, 'challenge', ?, ?)",
+            (ts, item["exercise_id"], sets, reps, weight_kg, duration_sec, notes,
+             item["id"], ts_exact),
         )
         workout_id = cur.lastrowid
     return ts, ts_exact, workout_id
@@ -5295,15 +5470,95 @@ def api_challenge_toggle():
     else:
         # An exercise item ticked off also lands in the workout log; a timed one
         # logs the hold, so the entry means the same thing as one logged by hand.
+        #
+        # What was *actually* done may be sent with the tick, and otherwise the
+        # item's target stands in — which is what every version before 1.58.0
+        # recorded unconditionally. A target is a plan, so a session where the
+        # reps fell short used to be logged as though it had not.
+        try:
+            sets, reps, weight = _logged_effort(data, {
+                "sets": item["target_sets"],
+                "reps": item["target_reps"],
+                # A target carries no load, and the last session's weight is a
+                # suggestion for the field — never a fact about today.
+                "weight_kg": None,
+            })
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
         _record_completion(
             db, item, day, done_on=done_on,
-            sets=item["target_sets"],
-            reps=item["target_reps"],
+            sets=sets, reps=reps, weight_kg=weight,
             duration_sec=_row_value(item, "target_seconds"),
         )
         done = True
     db.commit()
     return jsonify({"status": "ok", "done": done, "streak": _challenge_streak(db)})
+
+
+@app.route("/api/challenge/logged", methods=["PUT"])
+def api_update_logged_effort():
+    """Amend what a tick recorded — the sets, reps and weight actually done.
+
+    Separate from the tick itself because ticking has to stay one tap: the row
+    goes green immediately, and the numbers are filled in after, while the
+    next set is being loaded. So this edits the workout the tick already
+    created rather than creating anything.
+
+    It will not invent a workout for an un-ticked day. Numbers without a tick
+    would be a session that never happened.
+    """
+    data = request.get_json(force=True, silent=True) or {}
+    try:
+        item_id = int(data.get("item_id"))
+    except (TypeError, ValueError):
+        return jsonify({"error": "item_id is required"}), 400
+    db = get_db()
+    item = db.execute(
+        "SELECT id, item_type, exercise_id, target_sets, target_reps "
+        "FROM challenge_items WHERE id = ? AND archived = 0",
+        (item_id,),
+    ).fetchone()
+    if item is None:
+        return jsonify({"error": "no such challenge item"}), 404
+    if item["item_type"] != "exercise" or not item["exercise_id"]:
+        return jsonify({"error": "only an exercise item logs sets, reps and weight"}), 400
+
+    day = (data.get("day") or "").strip() or date.today().isoformat()
+    try:
+        date.fromisoformat(day)
+    except ValueError:
+        return jsonify({"error": "day must be YYYY-MM-DD"}), 400
+    tick = db.execute(
+        "SELECT COALESCE(done_on, day) AS logged FROM challenge_completions "
+        "WHERE item_id = ? AND day = ?",
+        (item_id, day),
+    ).fetchone()
+    if tick is None:
+        return jsonify({"error": "tick the item first — there is no session to add numbers to"}), 404
+
+    stored = db.execute(
+        "SELECT sets, reps, weight_kg FROM workout_logs "
+        "WHERE source = 'challenge' AND challenge_item_id = ? AND substr(ts, 1, 10) = ?",
+        (item_id, tick["logged"]),
+    ).fetchone()
+    if stored is None:
+        return jsonify({"error": "the tick has no workout behind it"}), 404
+    try:
+        sets, reps, weight = _logged_effort(data, {
+            "sets": stored["sets"], "reps": stored["reps"], "weight_kg": stored["weight_kg"],
+        })
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+    cur = db.execute(
+        "UPDATE workout_logs SET sets = ?, reps = ?, weight_kg = ? "
+        "WHERE source = 'challenge' AND challenge_item_id = ? AND substr(ts, 1, 10) = ?",
+        (sets, reps, weight, item_id, tick["logged"]),
+    )
+    db.commit()
+    if cur.rowcount == 0:
+        return jsonify({"error": "the tick has no workout behind it"}), 404
+    return jsonify({"status": "updated", "sets": sets, "reps": reps, "weight_kg": weight})
 
 
 @app.route("/api/challenge/items", methods=["GET"])

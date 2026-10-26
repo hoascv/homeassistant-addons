@@ -189,3 +189,44 @@ def test_the_reorder_arrows_have_a_style():
     assert ".ci-order button:disabled" in css, (
         "the end-of-list arrows are shown disabled, which needs a style to read as disabled"
     )
+
+
+def test_the_effort_fields_are_wired_to_their_handler():
+    """The kg/reps inputs are rendered into a template string and picked up again
+    by a delegated listener, so the class name is written twice and only a text
+    comparison notices when the two drift apart."""
+    js = _read(os.path.join(STATIC, "app.js"))
+    assert 'class="ci-effort"' in js, "effortFieldsHtml renders no .ci-effort input"
+    assert '.closest(".ci-effort")' in js, "no listener picks up the effort fields"
+    assert "api/challenge/logged" in js, "the fields never reach the amend endpoint"
+
+
+def test_the_effort_fields_do_not_trigger_the_tick():
+    """They sit inside the row, which is otherwise tappable — without a guard,
+    a tap meant for the weight asks to un-tick the item instead."""
+    js = _read(os.path.join(STATIC, "app.js"))
+    click = js.index('document.getElementById("challenge-cards").addEventListener("click"')
+    body = js[click:click + 1200]
+    guard = body.find('.closest(".ci-effort-row")')
+    item = body.find('.closest(".challenge-item")')
+    assert guard != -1, "the click handler has no guard for the effort fields"
+    assert guard < item, "the guard runs after the row lookup, so the tick still fires"
+
+
+def test_a_focused_effort_field_survives_the_card_reloading():
+    """Ticking reloads the card, and the weight is typed in the seconds right
+    after the tick — so the reload lands mid-number."""
+    js = _read(os.path.join(STATIC, "app.js"))
+    render = js.index("function renderChallenge(")
+    body = js[render:js.index("function activeEffortField", render)]
+    assert "activeEffortField()" in body and "restoreEffortField(" in body, (
+        "renderChallenge replaces innerHTML without preserving a focused field"
+    )
+    assert body.index("activeEffortField()") < body.index("host.innerHTML = running"), (
+        "the field is snapshotted after the re-render has already destroyed it"
+    )
+
+
+def test_the_effort_fields_have_a_style():
+    css = _read(os.path.join(STATIC, "style.css"))
+    assert ".ci-effort-row" in css and ".ci-effort-unit" in css
