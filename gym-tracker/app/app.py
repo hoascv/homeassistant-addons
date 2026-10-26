@@ -20,7 +20,7 @@ from flask import Flask, Response, g, jsonify, render_template, request, send_fi
 import garmin_client
 import meals
 
-APP_VERSION = "1.58.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.58.1"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("GYM_DB_PATH", "/data/gym.db")
 OPTIONS_PATH = os.environ.get("GYM_OPTIONS_PATH", "/data/options.json")
@@ -4102,7 +4102,7 @@ def api_sessions():
     since = (date.today() - timedelta(days=days - 1)).isoformat()
     rows = db.execute(
         "SELECT w.id, w.ts, w.duration_sec, w.sets, w.reps, w.hr_avg, w.hr_max, w.hr_min, "
-        "w.session_start, w.session_end, e.name AS exercise_name "
+        "w.hr_samples, w.session_start, w.session_end, e.name AS exercise_name "
         "FROM workout_logs w JOIN exercises e ON e.id = w.exercise_id "
         "WHERE w.ts_exact = 1 AND substr(w.ts, 1, 10) >= ? ORDER BY w.ts ASC, w.id ASC",
         (since,),
@@ -4124,7 +4124,18 @@ def api_sessions():
                 )
             except (ValueError, TypeError):
                 minutes = None
-            hr = next((r for r in session if r["hr_avg"] is not None), None)
+            # Since 1.58.0 each exercise carries its own reading, so "the first
+            # one that has a heart rate" is the warm-up's — the lowest number in
+            # the session — wearing the session's label. Aggregate instead: the
+            # peak is the highest peak, and the average is weighted by how many
+            # samples each reading was taken from, so a two-sample exercise does
+            # not count as much as a twenty-sample one.
+            read = [r for r in session if r["hr_avg"] is not None]
+            weights = [(r["hr_samples"] or 1) for r in read]
+            hr_avg = round(
+                sum(r["hr_avg"] * w for r, w in zip(read, weights)) / sum(weights)
+            ) if read else None
+            hr_max = max((r["hr_max"] for r in read if r["hr_max"] is not None), default=None)
             out.append(
                 {
                     "day": day,
@@ -4141,10 +4152,8 @@ def api_sessions():
                         for r in session
                     ],
                     "reps": sum((r["sets"] or 1) * (r["reps"] or 0) for r in session),
-                    # One reading for the session: every exercise in it shares
-                    # the same window, so they share the same numbers.
-                    "hr_avg": hr["hr_avg"] if hr else None,
-                    "hr_max": hr["hr_max"] if hr else None,
+                    "hr_avg": hr_avg,
+                    "hr_max": hr_max,
                 }
             )
     out.sort(key=lambda x: x["start"], reverse=True)

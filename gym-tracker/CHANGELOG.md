@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.58.1
+
+- **The Sessions card stops reporting your warm-up's heart rate as the whole
+  session's.** It took the first reading it found, which was correct while every
+  exercise in a session shared one — and wrong the moment 1.58.0 gave each
+  exercise its own, because the first one is usually the warm-up and so the
+  lowest number of the session. The peak is now the highest peak in the session,
+  and the average is weighted by how many samples each reading came from.
+
 ## 1.58.0
 
 - **Ticking an exercise can now record what you actually lifted.** A ticked row

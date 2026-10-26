@@ -1325,3 +1325,49 @@ def test_floors_alone_never_mark_a_day_incomplete():
     number it cannot produce."""
     assert "floors_up" not in gymapp.GARMIN_DAY_METRICS
     assert "floors_goal" not in gymapp.GARMIN_DAY_METRICS
+
+
+def test_the_sessions_card_does_not_report_the_warm_up_as_the_session(conn, client, monkeypatch):
+    """Regression, 1.58.1.
+
+    When every exercise shared one reading, "the first entry that has a heart
+    rate" *was* the session's. Per-exercise readings made that the warm-up's
+    number — the lowest in the session — wearing the session's label.
+    """
+    from datetime import date
+
+    day = date.today().isoformat()
+    _log_exercise(conn, f"{day}T18:45:00", duration_sec=15 * 60)   # the warm-up
+    _log_exercise(conn, f"{day}T19:05:00")
+    _log_exercise(conn, f"{day}T19:20:00")
+    _patch_hr(monkeypatch, {day: _hr_series(day, [
+        ("18:35", 92), ("18:45", 96),      # warm-up: easy
+        ("18:55", 150), ("19:05", 158),    # working set
+        ("19:12", 143), ("19:20", 150),
+    ])})
+    gymapp._garmin_do_sync(conn)
+
+    session = client.get("/api/sessions").get_json()[0]
+
+    assert session["hr_max"] == 158, "the session peak is the highest peak in it"
+    assert session["hr_avg"] > 96, (
+        f"the session average ({session['hr_avg']}) is the warm-up's reading"
+    )
+    # Sample-weighted across the three readings, not a plain mean of means.
+    readings = [r["hr_avg"] for r in conn.execute(
+        "SELECT hr_avg FROM workout_logs ORDER BY ts")]
+    assert min(readings) < session["hr_avg"] <= max(readings)
+
+
+def test_a_session_with_no_heart_rate_still_renders(conn, client, monkeypatch):
+    """The aggregate must not divide by zero when the watch gave nothing."""
+    from datetime import date
+
+    day = date.today().isoformat()
+    _log_exercise(conn, f"{day}T18:45:00", duration_sec=15 * 60)
+    _patch_hr(monkeypatch, {day: []})
+    gymapp._garmin_do_sync(conn)
+
+    session = client.get("/api/sessions").get_json()[0]
+
+    assert session["hr_avg"] is None and session["hr_max"] is None
