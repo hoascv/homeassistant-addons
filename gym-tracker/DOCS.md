@@ -711,7 +711,33 @@ days of history at a time, so older entries become per-exercise on their own
 over the following syncs.
 
 The **Sessions** card on Trends lists your recent sessions with the exercises
-in each, how long it ran, the reps and the heart rate.
+in each, how long it ran, the reps and the heart rate — its peak being the
+highest of the session, and its average weighted across the exercises in it.
+
+### Time per session
+
+An exercise's history — tap it in the 🏋️ Library, or **Log a set** from its row
+— opens with **Time per session**: the last eight sessions as bars, the latest
+and the average, and a line saying whether it is drifting (*taking longer —
+about 2.2 min more each session*).
+
+It is worked out from your tick times: the stretch from the previous exercise
+you logged to this one. That works because you log as you finish, and it is the
+only timing the app has — but it **includes your rest and your setup**, so it is
+not time under load. Read it as a pace, not a stopwatch. What makes it useful
+anyway is that it is measured the same way every week, so the comparison holds
+even though the number itself is generous.
+
+Two things carry no measurement, and the card says which:
+
+- The **first exercise of a session** has nothing before it.
+- Exercises logged **within a minute** of each other were ticked together — one
+  tap down a list rather than two exercises — so the time between them belongs
+  to neither.
+
+A drift is only claimed with **three or more** measured sessions and at least a
+minute per session of slope. Below that it says *holding steady*, or *too few to
+say*.
 
 If your watch hasn't uploaded yet there's simply no heart rate on the entry —
 never a zero — and a later sync fills it in, up to 21 days back.

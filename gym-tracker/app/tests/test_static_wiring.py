@@ -230,3 +230,30 @@ def test_a_focused_effort_field_survives_the_card_reloading():
 def test_the_effort_fields_have_a_style():
     css = _read(os.path.join(STATIC, "style.css"))
     assert ".ci-effort-row" in css and ".ci-effort-unit" in css
+
+
+def test_the_timing_strip_is_wired():
+    """It lives in the workouts sheet and is filled only when that sheet is
+    filtered to one exercise."""
+    ids = _template_ids()
+    assert "exercise-timing" in ids, "the template has nowhere to put the timing strip"
+    js = _read(os.path.join(STATIC, "app.js"))
+    assert "loadExerciseTiming(" in js
+    assert "/timing" in js, "the strip never calls the timing endpoint"
+
+
+def test_the_timing_strip_keeps_its_caveat():
+    """The number measures rest and setup too. Showing it without saying so
+    turns a generous estimate into a claim about time under load."""
+    js = _read(os.path.join(STATIC, "app.js"))
+    start = js.index("async function loadExerciseTiming")
+    body = js[start:js.index("async function loadWorkoutHistory", start)]
+    assert "includes your rest and setup" in body, (
+        "the timing strip renders minutes with no indication of what they measure"
+    )
+
+
+def test_the_timing_strip_has_a_style():
+    css = _read(os.path.join(STATIC, "style.css"))
+    for rule in (".timing-bars", ".timing-bar-fill", ".timing-note"):
+        assert rule in css, f"{rule} has no style"

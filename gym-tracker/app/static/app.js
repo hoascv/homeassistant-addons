@@ -2853,6 +2853,7 @@ async function openWorkoutSheet(exerciseId) {
   syncWorkoutMeasureFields();
   openSheet("workout-backdrop");
   loadWorkoutHistory(exerciseId);
+  loadExerciseTiming(exerciseId);
 }
 
 document.getElementById("workout-form").addEventListener("submit", async (e) => {
@@ -2920,6 +2921,58 @@ function workoutSummary(w) {
     bits.push(`♥ ${w.hr_avg} avg${w.hr_max != null ? ` · ${w.hr_max} max` : ""}`);
   }
   return bits.join(" ");
+}
+
+// How long this exercise has been taking, across the sessions it appears in.
+// Only shown for a single exercise — a pace needs one exercise to be about —
+// and always labelled as including rest, because that is what it measures.
+async function loadExerciseTiming(exerciseId) {
+  const host = document.getElementById("exercise-timing");
+  if (!exerciseId) { host.hidden = true; host.innerHTML = ""; return; }
+  let t;
+  try { t = await fetchJSON(`api/exercises/${exerciseId}/timing`); }
+  catch (e) { host.hidden = true; return; }
+
+  if (!t.measured) {
+    // Say why there is nothing rather than showing an empty box: "first in the
+    // session" is a real answer, and a common one for an opening lift.
+    const why = (t.sessions || []).find((s) => s.why);
+    host.innerHTML = `<p class="timing-none">No pace yet for ${escapeHtml(t.name)}${
+      why ? ` — ${escapeHtml(why.why)}` : ""}.</p>`;
+    host.hidden = false;
+    return;
+  }
+
+  const bars = t.sessions
+    .filter((s) => s.minutes !== null)
+    .slice(0, 8)
+    .reverse();
+  const peak = Math.max(...bars.map((s) => s.minutes));
+  const trend = t.trend_minutes_per_session;
+  // Only call it a drift when there is a fitted slope and it is worth a minute
+  // or more per session; anything under that is noise on a four-point fit.
+  const verdict = trend === null
+    ? `${t.measured} session${t.measured === 1 ? "" : "s"} measured`
+    : trend >= 1
+    ? `taking longer — about ${trend.toFixed(1)} min more each session`
+    : trend <= -1
+    ? `getting quicker — about ${Math.abs(trend).toFixed(1)} min less each session`
+    : "holding steady";
+
+  host.innerHTML = `
+    <h3 class="subhead">Time per session</h3>
+    <p class="timing-verdict">${escapeHtml(verdict)}</p>
+    <div class="timing-bars">
+      ${bars.map((s) => `
+        <div class="timing-bar" title="${escapeHtml(s.day)} · ${s.minutes} min">
+          <div class="timing-bar-fill" style="height:${Math.max(6, (s.minutes / peak) * 100)}%"></div>
+          <span class="timing-bar-val">${s.minutes}</span>
+        </div>`).join("")}
+    </div>
+    <p class="timing-note">Latest ${t.last_minutes} min · average ${t.mean_minutes} min.
+      Measured from the previous exercise you logged to this one, so it
+      <strong>includes your rest and setup</strong> — not time under load.</p>`;
+  host.hidden = false;
 }
 
 async function loadWorkoutHistory(exerciseId) {

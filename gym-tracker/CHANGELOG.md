@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.59.0
+
+- **An exercise now says how long it has been taking you.** Open an exercise's
+  history — tap it in the 🏋️ Library, or **Log a set** from its row — and above
+  the entries sits **Time per session**: the last eight sessions as bars, the
+  latest and average, and whether it is drifting. *Taking longer — about 2.2 min
+  more each session* is the sort of thing it says.
+- **It is measured from your tick times**, the stretch from the previous
+  exercise you logged to this one. That is the only timing this app has, and it
+  works because you log as you finish — but it **includes your rest and your
+  setup**, so it is not time under load. The card says so every time it shows a
+  number, because a generous estimate presented bare would read as a precise one.
+- **Two cases carry no measurement, and say which.** The first exercise of a
+  session has nothing before it, and exercises ticked within a minute of each
+  other were one act rather than two — someone tapping down a list, not resting
+  and lifting again. Both are shown with the reason instead of being averaged in.
+- **A trend needs three measured sessions.** A slope through two points is
+  arithmetic, not evidence, and anything under a minute per session is reported
+  as holding steady rather than dressed up as a drift.
+
 ## 1.58.1
 
 - **The Sessions card stops reporting your warm-up's heart rate as the whole

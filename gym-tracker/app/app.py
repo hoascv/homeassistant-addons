@@ -20,7 +20,7 @@ from flask import Flask, Response, g, jsonify, render_template, request, send_fi
 import garmin_client
 import meals
 
-APP_VERSION = "1.58.1"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.59.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("GYM_DB_PATH", "/data/gym.db")
 OPTIONS_PATH = os.environ.get("GYM_OPTIONS_PATH", "/data/options.json")
@@ -4160,6 +4160,106 @@ def api_sessions():
     return jsonify(out)
 
 
+@app.route("/api/exercises/<int:exercise_id>/timing")
+def api_exercise_timing(exercise_id):
+    """How long this exercise has been taking, session by session.
+
+    Derived from the tick times, because that is all there is: the stretch from
+    the previous log to this one. You log as you finish, so that stretch is the
+    exercise — **including** its rest and its setup. It is not time under load
+    and the UI says so; what makes it worth reading anyway is that it is
+    measured the same way every week, so the comparison holds even though the
+    absolute number is generous.
+
+    Two cases carry no measurement and are returned marked rather than
+    silently dropped:
+
+    * the **first** exercise of a session has nothing before it;
+    * exercises logged **within a minute** of each other were ticked together,
+      so the time between them belongs to neither.
+    """
+    db = get_db()
+    ex = db.execute(
+        "SELECT id, name FROM exercises WHERE id = ?", (exercise_id,)
+    ).fetchone()
+    if ex is None:
+        return jsonify({"error": "no such exercise"}), 404
+    try:
+        days = max(1, min(365, int(request.args.get("days", 120))))
+    except (TypeError, ValueError):
+        days = 120
+    since = (date.today() - timedelta(days=days - 1)).isoformat()
+
+    # Every exercise in the window, not just this one: the predecessor that
+    # bounds the window is usually a different exercise.
+    rows = db.execute(
+        "SELECT w.id, w.ts, w.exercise_id FROM workout_logs w "
+        "WHERE w.ts_exact = 1 AND substr(w.ts, 1, 10) >= ? ORDER BY w.ts ASC, w.id ASC",
+        (since,),
+    ).fetchall()
+    by_day = defaultdict(list)
+    for row in rows:
+        by_day[row["ts"][:10]].append(row)
+
+    out = []
+    for day in sorted(by_day):
+        for session in _session_groups(by_day[day]):
+            for i, row in enumerate(session):
+                if row["exercise_id"] != exercise_id:
+                    continue
+                entry = {"day": day, "at": row["ts"][11:16], "minutes": None,
+                         "why": None}
+                if i == 0:
+                    entry["why"] = "first in the session"
+                else:
+                    try:
+                        gap = (
+                            datetime.fromisoformat(row["ts"])
+                            - datetime.fromisoformat(session[i - 1]["ts"])
+                        ).total_seconds() / 60
+                    except (ValueError, TypeError):
+                        gap = None
+                    if gap is None:
+                        entry["why"] = "unreadable timestamp"
+                    elif gap * 60 < MIN_TIMED_GAP_SECONDS:
+                        # Not only an identical timestamp: two rows ticked six
+                        # seconds apart are the same act, and six seconds is not
+                        # an exercise. Counted as a measurement it drags the
+                        # whole trend — one such gap took a squat's fit from
+                        # "steady" to "+7 minutes a session".
+                        entry["why"] = "ticked together with the one before it"
+                    else:
+                        entry["minutes"] = round(gap, 1)
+                out.append(entry)
+
+    measured = [e for e in out if e["minutes"] is not None]
+    # Fitted against session order rather than the calendar: the question is
+    # whether it is taking longer each time you do it, and the gaps between
+    # sessions are not even.
+    trend = None
+    if len(measured) >= 3:
+        xs = list(range(len(measured)))
+        ys = [e["minutes"] for e in measured]
+        n = len(xs)
+        xbar, ybar = sum(xs) / n, sum(ys) / n
+        sxx = sum((x - xbar) ** 2 for x in xs)
+        if sxx:
+            trend = round(
+                sum((x - xbar) * (y - ybar) for x, y in zip(xs, ys)) / sxx, 2
+            )
+    return jsonify({
+        "exercise_id": exercise_id,
+        "name": ex["name"],
+        "sessions": list(reversed(out)),   # newest first, as the sheet reads
+        "measured": len(measured),
+        "mean_minutes": round(sum(e["minutes"] for e in measured) / len(measured), 1)
+                        if measured else None,
+        "last_minutes": measured[-1]["minutes"] if measured else None,
+        "trend_minutes_per_session": trend,
+        "includes_rest": True,
+    })
+
+
 @app.route("/api/workouts", methods=["POST"])
 def api_add_workout():
     data = request.get_json(force=True, silent=True) or {}
@@ -5315,6 +5415,9 @@ def _completion_stamp(day):
 
 
 MAX_LOGGED_WEIGHT_KG = 1000
+# Below this, two logs are one act rather than two exercises — someone tapping
+# down a list, not resting and lifting again.
+MIN_TIMED_GAP_SECONDS = 60
 
 
 def _logged_effort(data, fallback):

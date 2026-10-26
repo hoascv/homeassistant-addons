@@ -564,6 +564,29 @@ p.tpl-meta { margin: 0 0 0.6rem; white-space: normal; }
 .items-list li { gap: 0.5rem; }
 .ci-icon { flex-shrink: 0; }
 .ci-name { flex: 1; min-width: 0; font-size: 0.9rem; font-weight: 600; }
+/* Time per session for one exercise. A column of bars rather than a chart: it
+   is eight numbers answering one question, and a chart would overstate them. */
+.timing-strip { margin: 0.4rem 0 0.9rem; }
+.timing-verdict { font-weight: 600; font-size: 0.95rem; margin: 0.1rem 0 0.5rem; }
+.timing-bars {
+  display: flex; align-items: flex-end; gap: 0.3rem; height: 4.5rem;
+  padding: 0.3rem 0; overflow-x: auto;
+}
+.timing-bar {
+  flex: 1 1 0; min-width: 1.6rem; height: 100%;
+  display: flex; flex-direction: column; justify-content: flex-end; align-items: center;
+  gap: 0.2rem;
+}
+.timing-bar-fill {
+  width: 100%; background: var(--accent); border-radius: 3px 3px 0 0; min-height: 3px;
+}
+.timing-bar-val {
+  font-size: 0.65rem; color: var(--text-muted); font-variant-numeric: tabular-nums;
+}
+/* The caveat travels with the number: it measures rest and setup too. */
+.timing-note { font-size: 0.76rem; color: var(--text-muted); line-height: 1.5; margin: 0.3rem 0 0; }
+.timing-none { font-size: 0.85rem; color: var(--text-muted); margin: 0.2rem 0 0; }
+
 /* What was actually lifted, on a ticked row. Indented under the label so the
    row still reads as one item, and tabular so a column of weights lines up. */
 .ci-effort-row {
