@@ -254,6 +254,11 @@
       </div>
       <div class="field-row">
         <label>Date<input type="date" id="workout-form-date"></label>
+        <!-- Only offered when editing: it corrects when something happened, and
+             a new entry already stamps the moment it was logged. -->
+        <label id="workout-form-time-wrap" hidden>Time
+          <input type="time" id="workout-form-time" step="60">
+        </label>
         <label>Note<input type="text" id="workout-form-notes" placeholder="optional"></label>
       </div>
       <div class="form-actions">

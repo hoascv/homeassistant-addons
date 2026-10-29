@@ -2814,6 +2814,8 @@ function resetWorkoutForm() {
   document.getElementById("workout-form-duration").value = "";
   document.getElementById("workout-form-notes").value = "";
   document.getElementById("workout-form-date").value = todayISO();
+  document.getElementById("workout-form-time").value = "";
+  document.getElementById("workout-form-time-wrap").hidden = true;
   document.getElementById("workout-title").textContent = "Log a set";
   document.getElementById("workout-form-save").textContent = "Save set";
 }
@@ -2867,6 +2869,7 @@ document.getElementById("workout-form").addEventListener("submit", async (e) => 
     duration_sec: document.getElementById("workout-form-duration").value,
     notes: document.getElementById("workout-form-notes").value,
     date: document.getElementById("workout-form-date").value,
+    time: document.getElementById("workout-form-time").value,
   };
   try {
     if (id) {
@@ -2878,9 +2881,13 @@ document.getElementById("workout-form").addEventListener("submit", async (e) => 
       // Say so when an edit takes a row out of the challenge's hands, rather
       // than letting the user discover it by un-ticking later and finding the
       // workout still there.
-      toast(res && res.detached_from_challenge
-        ? "Workout updated — no longer linked to the challenge."
-        : "Workout updated.");
+      // Two things worth saying out loud: an edit that takes a row out of the
+      // challenge's hands, and a heart rate that has gone to be read again —
+      // otherwise it looks like correcting the time deleted it.
+      const notes = [];
+      if (res && res.detached_from_challenge) notes.push("no longer linked to the challenge");
+      if (res && res.heart_rate_will_be_reread) notes.push("heart rate will be read again on the next sync");
+      toast(notes.length ? `Workout updated — ${notes.join("; ")}.` : "Workout updated.");
     } else {
       await fetchJSON("api/workouts", {
         method: "POST",
@@ -3027,6 +3034,12 @@ document.getElementById("workout-history").addEventListener("click", async (e) =
     document.getElementById("workout-form-duration").value = w.duration_sec != null ? w.duration_sec : "";
     document.getElementById("workout-form-notes").value = w.notes || "";
     document.getElementById("workout-form-date").value = w.ts.slice(0, 10);
+    // Correcting the time is what re-reads the heart rate, so it is offered
+    // whenever a real one was recorded. A midday placeholder is not a time
+    // anybody chose, so the field opens empty rather than suggesting 12:00.
+    document.getElementById("workout-form-time-wrap").hidden = false;
+    document.getElementById("workout-form-time").value =
+      w.ts_exact ? w.ts.slice(11, 16) : "";
     // Setting .value in script does not fire `change`, so the reps/duration
     // fields would otherwise keep whatever shape the previously selected
     // exercise needed — a timed workout opening with a reps box, or the other

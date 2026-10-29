@@ -710,6 +710,17 @@ Readings taken before 1.58.0 were session-wide. The sync re-reads them a few
 days of history at a time, so older entries become per-exercise on their own
 over the following syncs.
 
+**If you logged it late.** The window ends at the tick, so an exercise done at
+the gym and ticked an hour later from home gets a reading of your sitting room.
+Edit the workout and set the **Time** to when you actually did it: the heart
+rate is cleared and read again over the corrected window on the next sync, and
+the toast says so rather than leaving you wondering where the number went.
+
+Correcting only the time keeps the challenge tick — it is the same exercise on
+the same day. Moving an entry to a *different day* still detaches it from the
+challenge, as it always has. A time in the future is refused, and a time you
+state replaces the midday placeholder on a backfilled entry.
+
 The **Sessions** card on Trends lists your recent sessions with the exercises
 in each, how long it ran, the reps and the heart rate — its peak being the
 highest of the session, and its average weighted across the exercises in it.

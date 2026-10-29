@@ -257,3 +257,32 @@ def test_the_timing_strip_has_a_style():
     css = _read(os.path.join(STATIC, "style.css"))
     for rule in (".timing-bars", ".timing-bar-fill", ".timing-note"):
         assert rule in css, f"{rule} has no style"
+
+
+def test_the_time_field_is_wired():
+    """It corrects when something happened, which is what re-reads the heart
+    rate — so a field the handler never receives is a feature that silently
+    does nothing."""
+    assert "workout-form-time" in _template_ids()
+    js = _read(os.path.join(STATIC, "app.js"))
+    assert 'getElementById("workout-form-time").value' in js
+    assert re.search(r"time:\s*document\.getElementById\(\"workout-form-time\"\)", js), (
+        "the time field is never put in the request body"
+    )
+
+
+def test_the_time_field_is_hidden_on_a_new_entry():
+    """A new workout already stamps the moment it was logged; offering to set
+    the time there invites a correction to something nobody got wrong."""
+    js = _read(os.path.join(STATIC, "app.js"))
+    assert 'getElementById("workout-form-time-wrap").hidden = true' in js
+    assert 'getElementById("workout-form-time-wrap").hidden = false' in js
+
+
+def test_a_re_read_heart_rate_is_announced():
+    """Correcting the time clears the reading. Without a word about it, the
+    heart rate looks like it was deleted by the edit."""
+    js = _read(os.path.join(STATIC, "app.js"))
+    assert "heart_rate_will_be_reread" in js, (
+        "the UI never tells the user the reading is coming back"
+    )

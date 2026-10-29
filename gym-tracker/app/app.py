@@ -20,7 +20,7 @@ from flask import Flask, Response, g, jsonify, render_template, request, send_fi
 import garmin_client
 import meals
 
-APP_VERSION = "1.59.1"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.60.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("GYM_DB_PATH", "/data/gym.db")
 OPTIONS_PATH = os.environ.get("GYM_OPTIONS_PATH", "/data/options.json")
@@ -1389,14 +1389,41 @@ def _opt_float(data, key):
         raise ValueError(key)
 
 
-def _redate_ts(existing_ts, existing_exact, day):
+def _redate_ts(existing_ts, existing_exact, day, time_of_day=None):
     """Work out the timestamp for an edited entry. Returns (ts, exact, error).
 
     Changing the date re-resolves the timestamp; leaving it alone keeps the
     original, so editing a note on something logged at 07:41 today doesn't
     quietly restamp it with the time you did the editing.
+
+    A **time** may be given too, and it is the one way to correct when something
+    happened. It exists because the heart-rate window ends at the moment an
+    exercise was logged: tick the last exercise of a session an hour after
+    leaving the gym and the window covers the drive home, which produces a
+    confident number about the wrong half-hour. Nothing but the person who was
+    there can know, so there has to be a way to say.
+
+    A stated time is exact by definition — somebody is telling us when it was —
+    so it clears the midday placeholder a backfilled entry carries.
     """
     day = (day or "").strip()
+    time_of_day = (time_of_day or "").strip()
+    base = day or (existing_ts or "")[:10]
+
+    if time_of_day:
+        try:
+            at = dtime.fromisoformat(time_of_day)
+        except ValueError:
+            return None, None, "time must be HH:MM"
+        try:
+            stamp = datetime.combine(date.fromisoformat(base), at)
+        except ValueError:
+            return None, None, "date must be YYYY-MM-DD"
+        if stamp > datetime.now():
+            # A window cannot be read over minutes that have not happened.
+            return None, None, "that time is in the future"
+        return stamp.isoformat(timespec="seconds"), 1, None
+
     if not day or day == (existing_ts or "")[:10]:
         return existing_ts, existing_exact, None
     ts, exact, err = _resolve_ts(day)
@@ -4330,7 +4357,9 @@ def api_update_workout(workout_id):
         weight = _opt_float(data, "weight_kg")
     except ValueError as e:
         return jsonify({"error": f"{e} must be a number"}), 400
-    ts, ts_exact, err = _redate_ts(existing["ts"], existing["ts_exact"], data.get("date"))
+    ts, ts_exact, err = _redate_ts(
+        existing["ts"], existing["ts_exact"], data.get("date"), data.get("time")
+    )
     if err:
         return jsonify({"error": err}), 400
     notes = (data.get("notes") or "").strip() or None
@@ -4351,6 +4380,20 @@ def api_update_workout(workout_id):
     ):
         source, challenge_item_id, detached = "manual", None, True
 
+    # A heart rate is a reading of a particular stretch of clock. Move the
+    # timestamp and it is a reading of the wrong one, so it is given up rather
+    # than carried across — along with the attempt count, so the next sync
+    # treats the entry as never having been asked about and reads the window
+    # the corrected time actually names.
+    rewindow = ts != existing["ts"]
+    if rewindow:
+        db.execute(
+            "UPDATE workout_logs SET hr_avg = NULL, hr_max = NULL, hr_min = NULL, "
+            "hr_samples = NULL, hr_scope = NULL, hr_synced_at = NULL, hr_attempts = 0, "
+            "hr_upload = NULL, session_start = NULL, session_end = NULL WHERE id = ?",
+            (workout_id,),
+        )
+
     db.execute(
         "UPDATE workout_logs SET ts = ?, ts_exact = ?, exercise_id = ?, sets = ?, reps = ?,"
         " weight_kg = ?, duration_sec = ?, notes = ?, source = ?, challenge_item_id = ?"
@@ -4359,7 +4402,13 @@ def api_update_workout(workout_id):
          source, challenge_item_id, workout_id),
     )
     db.commit()
-    return jsonify({"status": "updated", "detached_from_challenge": detached})
+    return jsonify({
+        "status": "updated",
+        "detached_from_challenge": detached,
+        # So the UI can say the reading is coming back rather than leaving a
+        # heart rate that silently vanished.
+        "heart_rate_will_be_reread": bool(rewindow),
+    })
 
 
 @app.route("/api/workouts/<int:workout_id>", methods=["DELETE"])

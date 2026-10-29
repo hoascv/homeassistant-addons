@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.60.0
+
+- **A workout's time can be corrected, and its heart rate is read again.** Every
+  heart rate is read over the stretch of clock ending when you logged the
+  exercise, which is right as long as you log as you finish. Tick the last
+  exercise of a session an hour after leaving the gym and the window covers the
+  journey home — a confident number about entirely the wrong half-hour. Editing a
+  workout now offers a **Time** alongside the date.
+- **Moving the time gives up the reading rather than carrying it across**, and
+  resets the attempt count so the next Garmin sync treats the entry as never
+  having been asked about. The toast says the reading is coming back, so a
+  corrected entry does not look like one whose heart rate was deleted.
+- **Correcting only the time keeps the challenge tick.** It is the same exercise
+  on the same day, which is not a claim you did something else. Moving an entry
+  to a different day still detaches it, exactly as before.
+- A stated time is exact by definition, so it also replaces the midday
+  placeholder a backfilled entry carries. A time in the future is refused:
+  a window cannot be read over minutes that have not happened.
+
 ## 1.59.1
 
 - **The change feed stops crediting your whole history to a migration.** Every
