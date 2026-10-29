@@ -259,6 +259,28 @@ labels, which read *Plank · 1m 30s* or *3 × 45s*.
 (*1×60* for a minute's plank), it's moved across automatically the first time
 this version runs.
 
+### Training sessions — how long it took
+
+The card above your challenges is a clock. Press **Start training** when you
+begin; it counts upward, and shows how much you have logged so far. Press
+**Finish** at the end — or just tick the last thing due, and it closes itself.
+The card then shows that session's length and your average.
+
+**Why press anything at all.** A session's length used to be worked out as the
+first exercise's tick minus **garmin_hr_window_minutes** — in other words, an
+assumed thirty minutes before the first thing you logged. A start you press is a
+measurement, and it is the only thing that can include a warm-up done before the
+first tick.
+
+It also sharpens the heart rate. The first exercise of a session has nothing
+before it to bound its window, so it reached back by that same guess; it now
+runs from where training actually began. A session left open since the morning
+is ignored for this rather than stretching one window across the whole day.
+
+Starting a session while one is still open **closes the old one**. A session left
+open overnight is a forgotten one, and making you tidy it up before you can
+train would be the wrong way round.
+
 ### Routines — being counted through it
 
 Some exercises aren't one number. *30 seconds of jumping jacks, 15 seconds' rest,
@@ -633,13 +655,28 @@ so treat extra rounds as a bonus rather than something to record.
 
 ## Reminders
 
-Goal Tracker can send three notifications through a Home Assistant **notify
+Goal Tracker can send four notifications through a Home Assistant **notify
 service** (e.g. a mobile-app notification), all configured on the add-on's
 **Configuration** tab:
 
 - **Challenge reminder** — a daily nudge at `challenge_reminder_time`. It
   only fires if you haven't already completed the whole challenge that day.
   Off by default.
+- **Unfinished training** — the one that is not tied to the clock. Switch on
+  `training_reminder_enabled`, and when a training session is **part-ticked**
+  and nothing has been logged for `training_reminder_idle_minutes` (default
+  25), it asks whether you're still going: *Rebuild — Session C — 4 of 7
+  ticked. Still going, or log the rest now?* Off by default.
+
+  It is deliberately hard to annoy you with. It needs a session you started, it
+  needs something actually outstanding, and it speaks **once per session** — so
+  a long rest produces one message, not a stream. A session with nothing ticked
+  at all is left to the challenge reminder above; that isn't a session you
+  walked away from, it's one you haven't begun.
+
+  Why it exists: the heart-rate window ends when you log an exercise, so the
+  cost of finishing a session and logging it from the sofa an hour later is a
+  reading of your sofa. This arrives while you're still at the gym.
 - **Weigh-in reminder** — fires at `weighin_reminder_time`, either every day or
   once a week, depending on `weighin_reminder_weekday`. Skipped if you already
   logged a weight that day. Off by default.

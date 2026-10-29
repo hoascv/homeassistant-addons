@@ -1,5 +1,34 @@
 # Changelog
 
+## 1.61.0
+
+- **A training clock, above the challenge cards.** Press **Start training** when
+  you begin and it counts upward; press **Finish** when you are done, or just
+  tick the last thing due and it closes itself. The card shows your last
+  session's length and your average.
+- **The duration is now measured rather than guessed.** A session's length used
+  to be the first exercise's tick *minus* `garmin_hr_window_minutes` — a assumed
+  thirty minutes before the first thing you logged, which also meant a warm-up
+  done beforehand fell outside the session entirely.
+- **The same start sharpens the heart rate.** The first exercise of a session
+  had nothing before it to bound its window, so it reached back by that same
+  guess. It now runs from where training actually began, which both excludes
+  the quiet half-hour before you started and includes the warm-up you did after.
+  A start left open since the morning is ignored rather than stretching one
+  window across the day.
+- **A reminder for a session you walked away from.** New
+  **training_reminder_enabled**: when a session is part-ticked and nothing has
+  been logged for **training_reminder_idle_minutes** (default 25), it asks
+  whether you are still going — *Rebuild — Session C — 4 of 7 ticked. Still
+  going, or log the rest now?*
+- It is deliberately hard to annoy you with: it needs a session you started, it
+  needs something actually outstanding, and it speaks **once per session**, so a
+  long rest produces one message rather than a stream. A session with nothing
+  ticked at all is left to the existing fixed-time reminder.
+- Starting a session while one is still open closes the old one rather than
+  refusing. A session left open overnight is a forgotten one, and making you
+  tidy it up before you can train is the wrong way round.
+
 ## 1.60.0
 
 - **A workout's time can be corrected, and its heart rate is read again.** Every

@@ -1351,6 +1351,9 @@ document.getElementById("challenge-cards").addEventListener("click", (e) => {
       // workout rows (real ids, ordering) the optimistic pass approximated.
       loadChallenge();
       refreshWorkoutViews();
+      // The tick that finishes everything due also ends the session, so the
+      // clock has to hear about it.
+      loadTraining();
     })
     .catch(() => {
       applyChallengeToggle(item, !nextDone, found.challenge);
@@ -1397,6 +1400,75 @@ function refreshWorkoutViews() {
   const backdrop = document.getElementById("workout-backdrop");
   if (backdrop && backdrop.classList.contains("open")) loadWorkoutHistory(workoutFilterExerciseId);
 }
+
+// --- The training clock -----------------------------------------------------
+// Duration used to be inferred as the first tick minus the configured
+// heart-rate window — a guessed thirty minutes. A start you press is a
+// measurement, and it is what the unfinished-session reminder watches.
+
+let trainingData = null;
+let trainingTimer = null;
+
+async function loadTraining() {
+  try { trainingData = await fetchJSON("api/training"); }
+  catch (e) { return; }
+  renderTraining();
+}
+
+function fmtElapsed(seconds) {
+  const m = Math.floor(seconds / 60), s = seconds % 60;
+  return m >= 60
+    ? `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, "0")}m`
+    : `${m}:${String(s).padStart(2, "0")}`;
+}
+
+function renderTraining() {
+  const state = document.getElementById("training-state");
+  const elapsed = document.getElementById("training-elapsed");
+  const btn = document.getElementById("training-btn");
+  const sub = document.getElementById("training-sub");
+  const cur = trainingData && trainingData.current;
+
+  stopTrainingTimer();
+  if (cur && cur.running) {
+    document.getElementById("training-card").classList.add("is-running");
+    state.textContent = "Training";
+    elapsed.textContent = fmtElapsed(cur.seconds);
+    btn.textContent = "Finish";
+    sub.textContent = `Started ${cur.started_at.slice(11, 16)}` +
+      (cur.exercises_logged ? ` · ${cur.exercises_logged} logged` : " · nothing logged yet");
+    // Counted from the server's own figure, then advanced locally — the clock
+    // keeps running without a request a second.
+    let n = cur.seconds;
+    trainingTimer = setInterval(() => { n += 1; elapsed.textContent = fmtElapsed(n); }, 1000);
+  } else {
+    document.getElementById("training-card").classList.remove("is-running");
+    state.textContent = "Not training";
+    elapsed.textContent = "";
+    btn.textContent = "Start training";
+    const mean = trainingData && trainingData.mean_seconds;
+    const last = (trainingData && trainingData.recent || []).find((r) => !r.running);
+    sub.textContent = last
+      ? `Last session ${fmtElapsed(last.seconds)}` +
+        (mean ? ` · average ${fmtElapsed(mean)}` : "")
+      : "Press start when you begin, so the session's length is measured rather than guessed.";
+  }
+}
+
+function stopTrainingTimer() {
+  if (trainingTimer) { clearInterval(trainingTimer); trainingTimer = null; }
+}
+
+document.getElementById("training-btn").addEventListener("click", async (e) => {
+  const running = trainingData && trainingData.current && trainingData.current.running;
+  e.target.disabled = true;
+  try {
+    await fetchJSON(running ? "api/training/finish" : "api/training/start", { method: "POST" });
+    await loadTraining();
+    if (running) toast("Training finished.");
+  } catch (err) { toast(err.message); }
+  finally { e.target.disabled = false; }
+});
 
 // --- Challenge items management (typed: exercise / supplement) --------------
 
@@ -4297,6 +4369,7 @@ loadMeals();
 loadSkippedDays();
 loadChallenge();
 loadChallengeStats();
+loadTraining();
 loadSessions();
 loadRecentWorkouts();
 loadGarminCard();

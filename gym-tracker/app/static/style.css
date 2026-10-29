@@ -564,6 +564,20 @@ p.tpl-meta { margin: 0 0 0.6rem; white-space: normal; }
 .items-list li { gap: 0.5rem; }
 .ci-icon { flex-shrink: 0; }
 .ci-name { flex: 1; min-width: 0; font-size: 0.9rem; font-weight: 600; }
+/* The training clock. Quiet when idle, and unmistakable when running — it is
+   the one card whose state you need to read from across a gym. */
+.training-card { padding: 0.85rem 1rem; }
+.training-row { display: flex; align-items: center; gap: 0.75rem; }
+.training-main { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 0.6rem; }
+.training-state { font-weight: 600; font-size: 0.95rem; }
+.training-elapsed {
+  font-size: 1.5rem; font-weight: 700; font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em; color: var(--accent);
+}
+.training-sub { font-size: 0.78rem; color: var(--text-muted); margin: 0.3rem 0 0; }
+.training-card.is-running { border-color: var(--accent); background: var(--accent-soft); }
+.training-card.is-running .training-state { color: var(--accent); }
+
 /* Time per session for one exercise. A column of bars rather than a chart: it
    is eight numbers answering one question, and a chart would overstate them. */
 .timing-strip { margin: 0.4rem 0 0.9rem; }

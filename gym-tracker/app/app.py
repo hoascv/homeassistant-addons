@@ -20,7 +20,7 @@ from flask import Flask, Response, g, jsonify, render_template, request, send_fi
 import garmin_client
 import meals
 
-APP_VERSION = "1.60.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.61.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("GYM_DB_PATH", "/data/gym.db")
 OPTIONS_PATH = os.environ.get("GYM_OPTIONS_PATH", "/data/options.json")
@@ -311,6 +311,12 @@ def _access_denied_html(user_id):
 # --- Options getters ---
 
 
+# How long a started session may sit untouched before it asks whether you are
+# still going. Long enough to cover a set and its rest plus a conversation,
+# short enough that the nudge still arrives while you are at the gym.
+TRAINING_IDLE_MINUTES = 25
+
+
 def get_reminders_config():
     opts = _read_options()
     return {
@@ -322,7 +328,20 @@ def get_reminders_config():
         "weighin_time": opts.get("weighin_reminder_time", "08:00"),
         "quote_enabled": bool(opts.get("stoic_quote_enabled", True)),
         "quote_time": opts.get("stoic_quote_time", "07:00"),
+        "training_enabled": bool(opts.get("training_reminder_enabled", False)),
+        "training_idle_minutes": _bounded_int(
+            opts.get("training_reminder_idle_minutes"), TRAINING_IDLE_MINUTES, 5, 180
+        ),
     }
+
+
+def _bounded_int(raw, default, lo, hi):
+    """An option read from options.json, clamped. Anything unreadable falls back
+    to the default rather than taking the add-on down at start-up."""
+    try:
+        return max(lo, min(hi, int(raw)))
+    except (TypeError, ValueError):
+        return default
 
 
 def get_meals_config():
@@ -647,6 +666,35 @@ def init_db():
         )
         """
     )
+    # A stretch of time you called training. Deliberately not linked to a
+    # challenge: it is a window, and which exercises fall inside it is a
+    # question the timestamps already answer. Linking would mean deciding what
+    # a session means when you tick an item from a different challenge during
+    # it, and there is no good answer to that.
+    #
+    # It exists because duration was being inferred — the first exercise's tick
+    # minus the configured heart-rate window, i.e. a guessed thirty minutes
+    # before the first thing you logged. A start you press is a measurement.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS training_sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            started_at TEXT NOT NULL,
+            -- NULL while it is still running. At most one row is ever in that
+            -- state; starting a second closes the first.
+            ended_at TEXT,
+            -- Why it ended: 'finished' pressed, 'auto' when everything due got
+            -- ticked, 'superseded' when a new session started over an open one.
+            ended_by TEXT,
+            notes TEXT,
+            created_at TEXT,
+            updated_at TEXT
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_training_open ON training_sessions(ended_at)"
+    )
     # A challenge is a named set of items you tick off daily. Several can run
     # at once, and one can be time-boxed: start_date/end_date bound the period
     # it counts over, so a 30-day challenge finishes rather than running on.
@@ -845,6 +893,9 @@ TRACKED_TABLES = {
     "garmin_activities": "activity_id",
     "exercise_images": "exercise_id",
     "meal_logs": "id",
+    # Session duration is a figure the lakehouse should be able to report on,
+    # and it is the only place an explicit start time exists.
+    "training_sessions": "id",
 }
 # Never serialised into the feed: a picture is fetched from its own endpoint.
 BLOB_COLUMNS = {("exercise_images", "image")}
@@ -1640,14 +1691,31 @@ def _session_groups(rows, gap_minutes=SESSION_GAP_MINUTES):
     return sessions
 
 
-def _session_extent(session, default_minutes):
+def _session_extent(session, default_minutes, declared_start=None):
     """(start, end) of a session: back from the first exercise by its own
-    duration, forward to when the last one was logged."""
+    duration, forward to when the last one was logged.
+
+    A start somebody pressed replaces the guess, on the same terms as the
+    per-exercise windows — only when it precedes the first tick and is not
+    further back than the configured window, so a session left open since the
+    morning cannot stretch the extent across the day.
+    """
     first, last = session[0], session[-1]
     window = _hr_window(first, default_minutes)
     if window is None:
         return None
     start, _ = window
+    if declared_start:
+        try:
+            at = datetime.fromisoformat(first["ts"])
+        except (ValueError, TypeError):
+            at = None
+        # Used whenever it falls inside the capped window — it may narrow it (a
+        # start pressed after the guess reaches back) or widen it (a warm-up
+        # begun before the first tick). The cap is what rejects a session left
+        # open since the morning.
+        if at and at - timedelta(minutes=default_minutes) <= declared_start < at:
+            start = declared_start
     try:
         end = datetime.fromisoformat(last["ts"])
     except (ValueError, TypeError):
@@ -1675,7 +1743,28 @@ def _hr_window(row, default_minutes):
     return end - timedelta(seconds=int(seconds)), end
 
 
-def _exercise_windows(session, default_minutes):
+def _training_start_for(conn, day):
+    """When training was declared started on `day`, if it was.
+
+    The first exercise of a session has nothing before it, so its window runs
+    back by a guessed default. A start somebody pressed is better than a guess,
+    and it is the only thing that can include a warm-up done before the first
+    tick.
+    """
+    row = conn.execute(
+        "SELECT started_at FROM training_sessions WHERE substr(started_at, 1, 10) = ? "
+        "ORDER BY started_at ASC LIMIT 1",
+        (day,),
+    ).fetchone()
+    if row is None:
+        return None
+    try:
+        return datetime.fromisoformat(row["started_at"])
+    except (ValueError, TypeError):
+        return None
+
+
+def _exercise_windows(session, default_minutes, declared_start=None):
     """Per-exercise heart-rate windows for one session: {row_id: (start, end)}.
 
     You log an exercise as you finish it, so the stretch between the previous
@@ -1686,8 +1775,11 @@ def _exercise_windows(session, default_minutes):
 
     Three rules keep it honest:
 
-    * The **first** entry of a session has no predecessor, so it keeps the
-      original rule — back by its own duration, or by the configured default.
+    * The **first** entry of a session has no predecessor. If training was
+      declared started that day, the window runs from there — a pressed start
+      beats a guess, and it is the only thing that covers a warm-up done before
+      the first tick. Otherwise it keeps the original rule: back by its own
+      duration, or by the configured default.
     * Entries sharing a timestamp **share a window**. Two exercises ticked in
       the same second were ticked together, and nothing in the data can say
       which of them the preceding minutes belonged to.
@@ -1715,6 +1807,11 @@ def _exercise_windows(session, default_minutes):
             first = rows[0]
             seconds = first["duration_sec"] if first["duration_sec"] else default_minutes * 60
             start = at - timedelta(seconds=int(seconds))
+            # Same rule as the session extent: inside the capped window it
+            # replaces the guess, narrowing or widening; outside it is a stale
+            # start and ignored.
+            if declared_start and at - cap <= declared_start < at:
+                start = declared_start
         else:
             start = max(stamps[i - 1][0], at - cap)
         if start >= at:
@@ -1795,7 +1892,8 @@ def _garmin_sync_heart_rates(conn, client, today, device_upload):
             member_ids = [row["id"] for row in session]
             if not ids.intersection(member_ids):
                 continue
-            extent = _session_extent(session, window_minutes)
+            declared = _training_start_for(conn, day)
+            extent = _session_extent(session, window_minutes, declared)
             if extent is None:
                 continue
             if day not in by_day:
@@ -1804,7 +1902,7 @@ def _garmin_sync_heart_rates(conn, client, today, device_upload):
             session_summary = _hr_summary(series, *extent)
             start_iso = extent[0].isoformat(timespec="seconds")
             end_iso = extent[1].isoformat(timespec="seconds")
-            windows = _exercise_windows(session, window_minutes)
+            windows = _exercise_windows(session, window_minutes, declared)
 
             for row in session:
                 window = windows.get(row["id"])
@@ -4124,6 +4222,148 @@ def api_workouts():
     return jsonify(rows)
 
 
+def _all_due_complete(conn, day_iso):
+    """Is everything due on `day_iso` ticked, across every running challenge?
+
+    Rest days and challenges that have not started contribute nothing, so a day
+    where only one challenge is due is complete when that one is.
+    """
+    day = date.fromisoformat(day_iso)
+    due_seen = False
+    for ch in _challenges(conn):
+        items = _active_challenge_items(conn, ch["id"])
+        if _challenge_finished(ch) or not items:
+            continue
+        start, _ = _challenge_day_range(ch, day)
+        if start and day < start:
+            continue
+        if not _challenge_scheduled_on(ch, day):
+            continue
+        due_seen = True
+        done = _completions_by_day(conn, [i["id"] for i in items]).get(day_iso, set())
+        if len(done) < len(items):
+            return False
+    return due_seen
+
+
+def _open_training(conn):
+    """The session still running, if there is one. At most one ever is."""
+    return conn.execute(
+        "SELECT * FROM training_sessions WHERE ended_at IS NULL "
+        "ORDER BY started_at DESC, id DESC LIMIT 1"
+    ).fetchone()
+
+
+def _training_view(conn, row, now=None):
+    if row is None:
+        return None
+    now = now or datetime.now()
+    try:
+        started = datetime.fromisoformat(row["started_at"])
+    except (ValueError, TypeError):
+        return None
+    ended = None
+    if row["ended_at"]:
+        try:
+            ended = datetime.fromisoformat(row["ended_at"])
+        except (ValueError, TypeError):
+            ended = None
+    # Still running: the figure is how long it has been going, which is what the
+    # card shows ticking upward.
+    until = ended or now
+    logged = conn.execute(
+        "SELECT COUNT(*) AS n FROM workout_logs WHERE ts >= ? AND ts <= ?",
+        (row["started_at"], (ended or now).isoformat(timespec="seconds")),
+    ).fetchone()["n"]
+    return {
+        "id": row["id"],
+        "started_at": row["started_at"],
+        "ended_at": row["ended_at"],
+        "ended_by": _row_value(row, "ended_by"),
+        "running": ended is None,
+        "seconds": max(0, int((until - started).total_seconds())),
+        "exercises_logged": logged,
+        "notes": row["notes"],
+    }
+
+
+def _close_training(conn, row, now, ended_by):
+    stamp = now.isoformat(timespec="seconds")
+    conn.execute(
+        "UPDATE training_sessions SET ended_at = ?, ended_by = ?, updated_at = ? WHERE id = ?",
+        (stamp, ended_by, stamp, row["id"]),
+    )
+
+
+@app.route("/api/training")
+def api_training():
+    """The session running now, and the recent ones with their durations."""
+    db = get_db()
+    try:
+        limit = max(1, min(60, int(request.args.get("limit", 14))))
+    except (TypeError, ValueError):
+        limit = 14
+    rows = db.execute(
+        "SELECT * FROM training_sessions ORDER BY started_at DESC, id DESC LIMIT ?",
+        (limit,),
+    ).fetchall()
+    recent = [v for v in (_training_view(db, r) for r in rows) if v]
+    done = [r["seconds"] for r in recent if not r["running"]]
+    return jsonify({
+        "current": _training_view(db, _open_training(db)),
+        "recent": recent,
+        "mean_seconds": round(sum(done) / len(done)) if done else None,
+    })
+
+
+@app.route("/api/training/start", methods=["POST"])
+def api_training_start():
+    """Begin a training session.
+
+    Duration was previously inferred as the first exercise's tick minus the
+    configured heart-rate window — a guessed thirty minutes before the first
+    thing logged. A start you press is a measurement, and it also gives the
+    unfinished-session reminder something definite to watch.
+
+    Starting while one is already open closes the old one rather than refusing:
+    an open session from yesterday is a forgotten one, and making you tidy it
+    up before you can train is the wrong way round.
+    """
+    data = request.get_json(force=True, silent=True) or {}
+    db = get_db()
+    now = datetime.now()
+    superseded = None
+    open_row = _open_training(db)
+    if open_row:
+        _close_training(db, open_row, now, "superseded")
+        superseded = open_row["id"]
+    stamp = now.isoformat(timespec="seconds")
+    cur = db.execute(
+        "INSERT INTO training_sessions (started_at, notes, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?)",
+        (stamp, (data.get("notes") or "").strip() or None, stamp, stamp),
+    )
+    db.commit()
+    row = db.execute("SELECT * FROM training_sessions WHERE id = ?", (cur.lastrowid,)).fetchone()
+    return jsonify({"status": "started", "superseded": superseded,
+                    "current": _training_view(db, row, now)}), 201
+
+
+@app.route("/api/training/finish", methods=["POST"])
+def api_training_finish():
+    """End the running session. Idempotent: nothing open is not an error, since
+    a session can have been closed by finishing everything due."""
+    db = get_db()
+    now = datetime.now()
+    row = _open_training(db)
+    if row is None:
+        return jsonify({"status": "nothing running", "current": None})
+    _close_training(db, row, now, "finished")
+    db.commit()
+    fresh = db.execute("SELECT * FROM training_sessions WHERE id = ?", (row["id"],)).fetchone()
+    return jsonify({"status": "finished", "session": _training_view(db, fresh, now)})
+
+
 @app.route("/api/sessions")
 def api_sessions():
     """Training sessions: exercises logged close together, grouped, with the
@@ -5661,6 +5901,13 @@ def api_challenge_toggle():
             duration_sec=_row_value(item, "target_seconds"),
         )
         done = True
+        # The tick that finishes everything due also ends the training session,
+        # so the common case needs no second press. Only ever closes a session
+        # it could plausibly belong to — one started today.
+        open_row = _open_training(db)
+        if open_row and (open_row["started_at"] or "")[:10] == today.isoformat():
+            if _all_due_complete(db, today.isoformat()):
+                _close_training(db, open_row, datetime.now(), "auto")
     db.commit()
     return jsonify({"status": "ok", "done": done, "streak": _challenge_streak(db)})
 
@@ -6526,6 +6773,70 @@ def _challenge_reminder_tick(now, conn):
         )
 
 
+def _training_reminder_tick(now, conn):
+    """Nudge a session that was started and then left alone.
+
+    This is the reminder that catches the thing a fixed-time one cannot: you
+    ticked four of seven and then stopped, either because you are still between
+    sets or because you left and will log the rest from the sofa — and the
+    second one is how an exercise ends up stamped with the time you got home.
+
+    Quiet by construction. It needs a session you started, something still
+    outstanding, and nothing logged for the configured idle period; and it
+    speaks once per session, so a long rest does not produce a stream of them.
+    """
+    cfg = get_reminders_config()
+    if not (cfg["training_enabled"] and cfg["notify_service"]):
+        return
+    row = _open_training(conn)
+    if row is None:
+        return
+    sent_for = _get_app_state(conn, "training_reminder_last_session")
+    if sent_for == str(row["id"]):
+        return  # already said something about this one
+
+    # Idle is measured from the last thing logged, falling back to the start —
+    # a session where nothing has been ticked yet is idle from when it began.
+    last = conn.execute(
+        "SELECT MAX(ts) AS ts FROM workout_logs WHERE ts >= ?", (row["started_at"],)
+    ).fetchone()["ts"]
+    try:
+        since = datetime.fromisoformat(last or row["started_at"])
+    except (ValueError, TypeError):
+        return
+    if (now - since).total_seconds() < cfg["training_idle_minutes"] * 60:
+        return
+
+    # What is actually outstanding, so the nudge names it rather than asking a
+    # vague question. A challenge not due today owes nothing.
+    outstanding = []
+    today_iso = now.date().isoformat()
+    for ch in _challenges(conn):
+        items = _active_challenge_items(conn, ch["id"])
+        if _challenge_finished(ch) or not items:
+            continue
+        start, _ = _challenge_day_range(ch, now.date())
+        if start and now.date() < start:
+            continue
+        if not _challenge_scheduled_on(ch, now.date()):
+            continue
+        done = _completions_by_day(conn, [i["id"] for i in items]).get(today_iso, set())
+        if len(done) and len(done) < len(items):
+            # Part-done is the signal. Nothing ticked at all is a session that
+            # has not started in earnest; everything ticked needs no nudge.
+            outstanding.append((ch["name"], len(done), len(items)))
+    if not outstanding:
+        return
+
+    _set_app_state(conn, "training_reminder_last_session", str(row["id"]))
+    name, done, total = outstanding[0]
+    extra = f" (+{len(outstanding) - 1} more)" if len(outstanding) > 1 else ""
+    send_notification(
+        f"{name} — {done} of {total} ticked{extra}. Still going, or log the rest now? ⏱",
+        title="Goal Tracker",
+    )
+
+
 def _weighin_reminder_tick(now, conn):
     cfg = get_reminders_config()
     if not (cfg["weighin_enabled"] and cfg["notify_service"]):
@@ -6611,6 +6922,7 @@ def _background_loop():
             try:
                 now = datetime.now()
                 _garmin_sync_tick(now, conn)
+                _training_reminder_tick(now, conn)
                 _challenge_reminder_tick(now, conn)
                 _weighin_reminder_tick(now, conn)
                 _stoic_quote_tick(now, conn)

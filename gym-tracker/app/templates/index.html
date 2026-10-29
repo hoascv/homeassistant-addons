@@ -57,6 +57,19 @@
     <button type="button" class="btn-primary full" id="log-weight-btn">Log weight</button>
   </section>
 
+  <!-- The training clock. Sits above the challenge cards because it frames
+       them: it is the session the ticking belongs to. -->
+  <section class="card training-card" id="training-card">
+    <div class="training-row">
+      <div class="training-main">
+        <span class="training-state" id="training-state">Not training</span>
+        <span class="training-elapsed" id="training-elapsed"></span>
+      </div>
+      <button type="button" class="btn-primary" id="training-btn">Start training</button>
+    </div>
+    <p class="training-sub" id="training-sub"></p>
+  </section>
+
   <!-- Challenges: one card each, built by app.js -->
   <div id="challenge-cards"></div>
   <button type="button" class="btn-secondary full" id="challenge-new-btn">+ New challenge</button>

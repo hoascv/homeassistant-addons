@@ -286,3 +286,42 @@ def test_a_re_read_heart_rate_is_announced():
     assert "heart_rate_will_be_reread" in js, (
         "the UI never tells the user the reading is coming back"
     )
+
+
+def test_the_training_clock_is_wired():
+    ids = _template_ids()
+    for element in ("training-card", "training-state", "training-elapsed",
+                    "training-btn", "training-sub"):
+        assert element in ids, f"the training clock is missing #{element}"
+    js = _read(os.path.join(STATIC, "app.js"))
+    assert "api/training/start" in js and "api/training/finish" in js
+
+
+def test_the_training_clock_is_loaded_at_boot():
+    """Otherwise a session left running yesterday is invisible until something
+    else happens to refresh it."""
+    js = _read(os.path.join(STATIC, "app.js"))
+    assert re.search(r"^loadTraining\(\);", js, re.M), (
+        "loadTraining() is never called in the boot sequence"
+    )
+
+
+def test_ticking_refreshes_the_training_clock():
+    """Ticking the last item due finishes the session server-side, so the card
+    has to hear about it or it keeps counting a session that has ended."""
+    js = _read(os.path.join(STATIC, "app.js"))
+    start = js.index('fetchJSON("api/challenge/toggle"')
+    body = js[start:start + 900]
+    assert "loadTraining()" in body, "a tick never refreshes the clock"
+
+
+def test_the_elapsed_timer_is_cleared_before_being_restarted():
+    """renderTraining runs on every refresh; without clearing, each one leaves
+    another interval behind and the clock accelerates."""
+    js = _read(os.path.join(STATIC, "app.js"))
+    render = js.index("function renderTraining(")
+    body = js[render:js.index("function stopTrainingTimer", render)]
+    assert "stopTrainingTimer()" in body
+    assert body.index("stopTrainingTimer()") < body.index("setInterval"), (
+        "a new interval is started before the old one is cleared"
+    )

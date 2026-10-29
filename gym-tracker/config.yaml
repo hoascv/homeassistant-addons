@@ -1,5 +1,5 @@
 name: "Goal Tracker"
-version: "1.60.0"
+version: "1.61.0"
 slug: "gym-tracker"
 description: "Track a weight/body-fat goal, home workouts, and a daily challenge with reminders"
 url: "https://github.com/hoascv/homeassistant-addons/tree/main/gym-tracker"
@@ -28,6 +28,11 @@ options:
   notify_service: ""
   challenge_reminder_enabled: false
   challenge_reminder_time: "18:00"
+  # Nudges a training session you started and then left alone — part-ticked
+  # and nothing logged for `training_reminder_idle_minutes`. Needs
+  # notify_service, and only ever speaks once per session.
+  training_reminder_enabled: false
+  training_reminder_idle_minutes: 25
   weighin_reminder_enabled: false
   weighin_reminder_weekday: "sunday"
   weighin_reminder_time: "08:00"
@@ -48,6 +53,8 @@ schema:
   notify_service: "str?"
   challenge_reminder_enabled: "bool"
   challenge_reminder_time: "str"
+  training_reminder_enabled: "bool"
+  training_reminder_idle_minutes: "int(5,180)"
   weighin_reminder_enabled: "bool"
   weighin_reminder_weekday: "list(daily|monday|tuesday|wednesday|thursday|friday|saturday|sunday)"
   weighin_reminder_time: "str"

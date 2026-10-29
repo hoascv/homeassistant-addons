@@ -334,3 +334,122 @@ def test_the_famous_misattributions_are_absent():
                  "gem cannot be polished",          # not Seneca, not Confucius
                  "the best revenge is massive"):    # Sinatra, via the internet
         assert fake not in joined, f"misattributed quote present: {fake}"
+
+
+# --- the unfinished-session nudge -------------------------------------------
+# The reminder a fixed-time one cannot be: it only speaks when a session was
+# started, something is still outstanding, and nothing has been logged for a
+# while — which is the shape of having left the gym mid-list.
+
+
+def _item_ids(client):
+    return [i["id"] for c in client.get("/api/challenges").get_json() for i in c["items"]]
+
+
+def _idle(conn, minutes):
+    """Age the open session and everything logged inside it."""
+    stamp = (datetime.now() - timedelta(minutes=minutes)).isoformat(timespec="seconds")
+    conn.execute("UPDATE training_sessions SET started_at = ? WHERE ended_at IS NULL", (stamp,))
+    conn.execute("UPDATE workout_logs SET ts = ?", (stamp,))
+    conn.commit()
+
+
+def _part_done_and_idle(client, conn, minutes=40):
+    """A session started, one item ticked, and nothing since — the shape of
+    having walked out mid-list."""
+    client.post("/api/training/start")
+    client.post("/api/challenge/toggle", json={"item_id": _item_ids(client)[0]})
+    _idle(conn, minutes)
+
+
+def test_training_reminder_nudges_an_idle_part_done_session(client, conn, set_options, fake_ha_server):
+    set_options(notify_service=NOTIFY, training_reminder_enabled=True,
+                training_reminder_idle_minutes=25)
+    _part_done_and_idle(client, conn)
+
+    gymapp._training_reminder_tick(datetime.now(), conn)
+
+    assert len(fake_ha_server) == 1, fake_ha_server
+    assert "ticked" in fake_ha_server[0]["body"]["message"]
+
+
+def test_training_reminder_stays_quiet_while_the_session_is_warm(client, conn, set_options, fake_ha_server):
+    """Five minutes between sets is not abandonment."""
+    set_options(notify_service=NOTIFY, training_reminder_enabled=True,
+                training_reminder_idle_minutes=25)
+    _part_done_and_idle(client, conn, minutes=5)
+
+    gymapp._training_reminder_tick(datetime.now(), conn)
+
+    assert fake_ha_server == []
+
+
+def test_training_reminder_needs_a_session(client, conn, set_options, fake_ha_server):
+    """It is tied to training, not to the clock — no start, no nudge."""
+    set_options(notify_service=NOTIFY, training_reminder_enabled=True,
+                training_reminder_idle_minutes=25)
+    client.post("/api/challenge/toggle", json={"item_id": _item_ids(client)[0]})
+    conn.execute("UPDATE workout_logs SET ts = ?",
+                 ((datetime.now() - timedelta(hours=2)).isoformat(timespec="seconds"),))
+    conn.commit()
+
+    gymapp._training_reminder_tick(datetime.now(), conn)
+
+    assert fake_ha_server == []
+
+
+def test_training_reminder_ignores_a_session_with_nothing_ticked(client, conn, set_options, fake_ha_server):
+    """A session with no ticks at all has not started in earnest — that is the
+    fixed-time reminder's job, not this one's."""
+    set_options(notify_service=NOTIFY, training_reminder_enabled=True,
+                training_reminder_idle_minutes=25)
+    client.post("/api/training/start")
+    _idle(conn, 40)
+
+    gymapp._training_reminder_tick(datetime.now(), conn)
+
+    assert fake_ha_server == []
+
+
+def test_training_reminder_speaks_once_per_session(client, conn, set_options, fake_ha_server):
+    """A long rest must not produce a stream of them."""
+    set_options(notify_service=NOTIFY, training_reminder_enabled=True,
+                training_reminder_idle_minutes=25)
+    _part_done_and_idle(client, conn)
+
+    for _ in range(4):
+        gymapp._training_reminder_tick(datetime.now(), conn)
+
+    assert len(fake_ha_server) == 1
+
+
+def test_training_reminder_may_speak_again_for_a_new_session(client, conn, set_options, fake_ha_server):
+    """Once per session, not once ever."""
+    set_options(notify_service=NOTIFY, training_reminder_enabled=True,
+                training_reminder_idle_minutes=25)
+    _part_done_and_idle(client, conn)
+    gymapp._training_reminder_tick(datetime.now(), conn)
+
+    client.post("/api/training/start")          # a fresh session
+    _idle(conn, 40)
+    gymapp._training_reminder_tick(datetime.now(), conn)
+
+    assert len(fake_ha_server) == 2
+
+
+def test_training_reminder_is_off_unless_switched_on(client, conn, set_options, fake_ha_server):
+    set_options(notify_service=NOTIFY)          # enabled flag absent
+    _part_done_and_idle(client, conn)
+
+    gymapp._training_reminder_tick(datetime.now(), conn)
+
+    assert fake_ha_server == []
+
+
+def test_training_reminder_needs_a_notify_service(client, conn, set_options, fake_ha_server):
+    set_options(training_reminder_enabled=True)   # nowhere to send it
+    _part_done_and_idle(client, conn)
+
+    gymapp._training_reminder_tick(datetime.now(), conn)
+
+    assert fake_ha_server == []
