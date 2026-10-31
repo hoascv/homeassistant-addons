@@ -564,6 +564,13 @@ p.tpl-meta { margin: 0 0 0.6rem; white-space: normal; }
 .items-list li { gap: 0.5rem; }
 .ci-icon { flex-shrink: 0; }
 .ci-name { flex: 1; min-width: 0; font-size: 0.9rem; font-weight: 600; }
+/* A line of explanation under a field whose meaning is not obvious from its
+   label — currently the rolling schedule's interval. */
+.field-hint {
+  font-size: 0.78rem; color: var(--text-muted); line-height: 1.5;
+  margin: 0.3rem 0 0.2rem;
+}
+
 /* The training clock. Quiet when idle, and unmistakable when running — it is
    the one card whose state you need to read from across a gym. */
 .training-card { padding: 0.85rem 1rem; }

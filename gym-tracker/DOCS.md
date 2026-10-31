@@ -376,6 +376,24 @@ the list doesn't rearrange itself between visits. Once you have a handful of
 challenges, most days most of them are resting, and this is what stops the one
 you came to tick sitting at the bottom.
 
+**Every N days after I last did it** — the *rolling* schedule, for something
+you do on a cadence rather than on particular dates. A rotation of gym sessions
+reached whenever you reach the gym is the case it exists for.
+
+It is anchored on your **last completion**, not the calendar. So being a day
+late moves the next one along rather than putting you permanently out of step,
+and a session trained on a Saturday counts exactly as much as one trained on the
+Monday it was "supposed" to be. Unlike *Every N days* — which counts from the
+start date — an interval of **1** is allowed, because "again the day after I did
+it" is a real cadence.
+
+It stays due until you do it, and doing it early still resets the clock.
+
+Worth knowing what adherence then means: the fraction of days you were **up to
+date**, not the fraction of sessions done. Keep the cadence and it reads high; a
+fortnight away is a fortnight of due days, because you were overdue on every one
+of them.
+
 A challenge has a **start date** and an optional **end date**. With an end date
 it is time-boxed: the card shows *day 12 of 30*, and once the end date passes it
 finishes — it drops off Home but keeps its statistics. Leave the end date empty

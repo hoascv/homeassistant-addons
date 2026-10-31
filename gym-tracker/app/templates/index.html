@@ -378,11 +378,17 @@
           <option value="daily">Every day</option>
           <option value="interval">Every N days</option>
           <option value="weekdays">Certain days of the week</option>
+          <option value="rolling">Every N days after I last did it</option>
         </select>
       </label>
       <label class="full-label" id="challenge-edit-interval-field" hidden>Every
-        <input type="number" id="challenge-edit-interval" min="2" max="30" value="2"> days
+        <input type="number" id="challenge-edit-interval" min="1" max="30" value="2"> days
       </label>
+      <p class="field-hint" id="challenge-edit-rolling-hint" hidden>
+        Counted from the last time you finished it, not from the start date — so
+        doing it a day late moves the next one along instead of putting you
+        permanently out of step. Due until you do it.
+      </p>
       <div id="challenge-edit-weekdays-field" hidden>
         <span class="field-label">On these days</span>
         <div class="weekday-picker" id="challenge-edit-weekdays" role="group" aria-label="Days of the week">

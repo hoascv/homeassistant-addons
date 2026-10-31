@@ -325,3 +325,23 @@ def test_the_elapsed_timer_is_cleared_before_being_restarted():
     assert body.index("stopTrainingTimer()") < body.index("setInterval"), (
         "a new interval is started before the old one is cleared"
     )
+
+
+def test_the_rolling_schedule_is_offered_in_the_form():
+    """A schedule the API accepts but the form cannot produce is half-built."""
+    html = _read(os.path.join(TEMPLATES, "index.html"))
+    assert 'value="rolling"' in html, "the schedule picker does not offer rolling"
+    js = _read(os.path.join(STATIC, "app.js"))
+    assert '"rolling"' in js, "readScheduleFields never produces a rolling schedule"
+
+
+def test_the_rolling_schedule_reveals_the_interval_field():
+    """It shares the number field with `interval`; revealed for one and not the
+    other, a rolling challenge would be saved with no cadence."""
+    js = _read(os.path.join(STATIC, "app.js"))
+    sync = js.index("function syncScheduleFields(")
+    body = js[sync:sync + 1200]
+    assert 'kind === "interval" || kind === "rolling"' in body, (
+        "the interval field is not revealed for a rolling schedule"
+    )
+    assert "challenge-edit-rolling-hint" in js, "the hint explaining it is never shown"

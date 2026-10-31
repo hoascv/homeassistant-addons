@@ -1700,8 +1700,17 @@ document.getElementById("challenge-template-list").addEventListener("click", asy
 
 function syncScheduleFields() {
   const kind = document.getElementById("challenge-edit-kind").value;
-  document.getElementById("challenge-edit-interval-field").hidden = kind !== "interval";
+  // Both interval kinds use the same number field; only the meaning differs,
+  // which the hint below it explains.
+  const interval = kind === "interval" || kind === "rolling";
+  document.getElementById("challenge-edit-interval-field").hidden = !interval;
+  document.getElementById("challenge-edit-rolling-hint").hidden = kind !== "rolling";
   document.getElementById("challenge-edit-weekdays-field").hidden = kind !== "weekdays";
+  // `interval` counts from the start date, where 1 is just "daily" spelled
+  // oddly; `rolling` counts from the last completion, where 1 is meaningful.
+  const field = document.getElementById("challenge-edit-interval");
+  field.min = kind === "rolling" ? "1" : "2";
+  if (kind === "interval" && Number(field.value) < 2) field.value = "2";
   // Revealed with no day on, the row describes a schedule that means "never",
   // and the only thing that said so was the server refusing the save in its own
   // words afterwards. Today is the one day you certainly have in mind when you
@@ -1734,7 +1743,7 @@ function setScheduleFields(schedule) {
 
 function readScheduleFields() {
   const kind = document.getElementById("challenge-edit-kind").value;
-  if (kind === "interval") {
+  if (kind === "interval" || kind === "rolling") {
     return { schedule_kind: kind, schedule_interval: document.getElementById("challenge-edit-interval").value };
   }
   if (kind === "weekdays") {

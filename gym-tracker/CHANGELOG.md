@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.62.0
+
+- **A new schedule: every N days after you last did it.** Pick *Every N days
+  after I last did it* when a challenge is something you do on a cadence rather
+  than on particular dates — a rotation of gym sessions reached whenever you
+  reach the gym.
+- **It exists because fixed weekdays were reporting a lie.** A session pinned to
+  Monday and trained on Saturday landed on a day the challenge did not consider
+  due, so the tick counted as neither a hit nor a miss — three challenges read
+  **0% adherence while being trained eleven times between them**. A rolling
+  schedule is anchored on your last completion, so the day you actually train is
+  always a day that counts.
+- **Being late moves the next one along** instead of putting you permanently out
+  of step, which is what the existing *Every N days* does (it counts from the
+  start date). A rolling challenge stays due until you do it, and doing it early
+  still resets the clock.
+- Unlike *Every N days*, an interval of **1** is allowed here: counted from the
+  last completion, "again the day after" is a real cadence rather than "daily"
+  spelled oddly.
+- **What adherence means for one of these:** the fraction of days you were *up
+  to date*, not the fraction of sessions done. A fortnight away is a fortnight
+  of due days, because you were overdue on every one of them.
+
 ## 1.61.0
 
 - **A training clock, above the challenge cards.** Press **Start training** when

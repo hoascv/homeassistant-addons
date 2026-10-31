@@ -1,3 +1,4 @@
+import bisect
 import hmac
 import html
 import importlib.metadata
@@ -20,7 +21,7 @@ from flask import Flask, Response, g, jsonify, render_template, request, send_fi
 import garmin_client
 import meals
 
-APP_VERSION = "1.61.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.62.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("GYM_DB_PATH", "/data/gym.db")
 OPTIONS_PATH = os.environ.get("GYM_OPTIONS_PATH", "/data/options.json")
@@ -2671,7 +2672,7 @@ def _challenge_day_range(ch, today=None):
     return start, last
 
 
-SCHEDULE_KINDS = ("daily", "interval", "weekdays")
+SCHEDULE_KINDS = ("daily", "interval", "weekdays", "rolling")
 
 
 def _parse_weekdays(raw):
@@ -2690,13 +2691,43 @@ def _parse_weekdays(raw):
     return out
 
 
-def _challenge_scheduled_on(ch, day):
+def _challenge_scheduled_on(ch, day, last_done=None):
     """Whether the challenge is due on `day`.
+
+    `last_done` is the last day the challenge was fully completed, and only a
+    **rolling** schedule reads it. The caller supplies it because this function
+    has no database: every other kind answers from the calendar alone, and
+    threading a connection through all of them to serve one would be the wrong
+    trade.
 
     Anything unrecognised falls back to daily: a challenge that quietly stopped
     asking for anything would be worse than one that asks too often.
     """
     kind = (ch.get("schedule_kind") or "daily") if hasattr(ch, "get") else "daily"
+    if kind == "rolling":
+        # "Every N days after you last did it", rather than on fixed dates.
+        #
+        # This exists because a fixed schedule cannot describe a rotation of
+        # sessions done whenever you reach the gym. Pinned to weekdays, a
+        # session trained on Saturday lands on a day the challenge does not
+        # consider due, so it counts as neither hit nor missed — three
+        # challenges reported 0% adherence while being trained regularly.
+        # Anchoring on the last completion instead means the day you actually
+        # train is always a day that counts.
+        try:
+            every = int(ch.get("schedule_interval") or 0)
+        except (TypeError, ValueError):
+            return True
+        if every < 1:
+            return True
+        if last_done is None:
+            # Never done: due from the day it starts, and every day after
+            # until it is.
+            try:
+                return day >= date.fromisoformat(ch["start_date"])
+            except (KeyError, TypeError, ValueError):
+                return True
+        return (day - last_done).days >= every
     if kind == "weekdays":
         wanted = _parse_weekdays(ch.get("schedule_weekdays"))
         return day.weekday() in wanted if wanted else True
@@ -2713,7 +2744,30 @@ def _challenge_scheduled_on(ch, day):
     return True
 
 
-def _challenge_next_due(ch, from_day=None):
+def _last_complete_day(conn, ch, before=None):
+    """The last day every item then in the challenge was ticked, before `before`.
+
+    Only a rolling schedule needs this, and it is the one question that cannot
+    be answered from the calendar — so it is computed on demand rather than
+    carried on every challenge.
+    """
+    membership = _challenge_membership(conn, ch["id"])
+    if not membership:
+        return None
+    by_day = _completions_by_day(conn, [row["id"] for row, _, _ in membership])
+    best = None
+    for iso, done in by_day.items():
+        if before is not None and iso >= before.isoformat():
+            continue
+        members = _members_on(membership, iso)
+        if members and done >= members:
+            day = date.fromisoformat(iso)
+            if best is None or day > best:
+                best = day
+    return best
+
+
+def _challenge_next_due(ch, from_day=None, last_done=None):
     """The next day the challenge is due, or None if it ends first. Looks two
     weeks ahead, which covers every schedule this supports."""
     cursor = (from_day or date.today()) + timedelta(days=1)
@@ -2726,7 +2780,7 @@ def _challenge_next_due(ch, from_day=None):
     for _ in range(14):
         if end and cursor > end:
             return None
-        if _challenge_scheduled_on(ch, cursor):
+        if _challenge_scheduled_on(ch, cursor, last_done):
             return cursor.isoformat()
         cursor += timedelta(days=1)
     return None
@@ -2782,12 +2836,19 @@ def _challenge_days(conn, ch, membership=None):
         return days
     today = date.today().isoformat()
     cursor = start
+    # A rolling schedule's due-ness depends on when it was last completed, so
+    # the walk carries that forward rather than asking the database per day.
+    last_done = None
     while cursor <= last:
         iso = cursor.isoformat()
         members = _members_on(membership, iso)
         done = len(by_day.get(iso, set()) & members)
-        scheduled = _challenge_scheduled_on(ch, cursor)
+        scheduled = _challenge_scheduled_on(ch, cursor, last_done)
         complete = scheduled and bool(members) and done == len(members)
+        if bool(members) and done == len(members):
+            # Recorded even on a day the challenge was not due: doing it early
+            # still resets the clock, which is the whole point of rolling.
+            last_done = cursor
         days.append(
             {
                 "day": iso,
@@ -3011,9 +3072,20 @@ def _challenge_streak(conn, challenge_id=None):
     # its end date — otherwise a challenge that ended on a perfect run would
     # report a streak of zero, today being past it.
     challenge_map = dict(challenge) if challenge else {}
+    # A rolling schedule is due relative to the last completion, and this walk
+    # runs backwards — so the complete days are collected once and bisected,
+    # rather than rescanning the history for every day stepped over.
+    complete_days = sorted(
+        date.fromisoformat(iso) for iso in by_day if complete(iso)
+    )
 
     def due(day):
-        return _challenge_scheduled_on(challenge_map, day)
+        if (challenge_map.get("schedule_kind") or "") != "rolling":
+            return _challenge_scheduled_on(challenge_map, day)
+        i = bisect.bisect_left(complete_days, day)
+        return _challenge_scheduled_on(
+            challenge_map, day, complete_days[i - 1] if i else None
+        )
 
     # Rest days are stepped over: they neither extend the streak nor break it.
     cursor = last
@@ -4237,7 +4309,7 @@ def _all_due_complete(conn, day_iso):
         start, _ = _challenge_day_range(ch, day)
         if start and day < start:
             continue
-        if not _challenge_scheduled_on(ch, day):
+        if not _challenge_scheduled_on(ch, day, _last_complete_day(conn, ch, day)):
             continue
         due_seen = True
         done = _completions_by_day(conn, [i["id"] for i in items]).get(day_iso, set())
@@ -4682,6 +4754,16 @@ def _challenge_view(conn, ch):
     today_iso = today.isoformat()
     done_today = by_day.get(today_iso, set())
     logged = _logged_effort_on(conn, ids, today_iso)
+    # Two different questions, and they take different answers.
+    #
+    # "Was today a day it was due" is settled by what had been done *before*
+    # today — otherwise completing it would retroactively make today a rest
+    # day, and the card would collapse the list you just ticked.
+    #
+    # "When is it next due" is settled by everything done *including* today,
+    # because today's session is exactly what the next one is counted from.
+    last_done_before_today = _last_complete_day(conn, ch, today)
+    last_done = _last_complete_day(conn, ch)
     for i in items:
         i["done_today"] = i["id"] in done_today
         # What today's tick actually recorded, so the row's fields show the
@@ -4696,7 +4778,7 @@ def _challenge_view(conn, ch):
             {
                 "day": d,
                 "complete": bool(ids) and set(ids) <= by_day.get(d, set()),
-                "scheduled": _challenge_scheduled_on(ch, day),
+                "scheduled": _challenge_scheduled_on(ch, day, _last_complete_day(conn, ch, day)),
             }
         )
 
@@ -4743,8 +4825,8 @@ def _challenge_view(conn, ch):
         "today": today_iso,
         "schedule": _schedule_view(ch),
         # Rest days still show the card, with nothing owed.
-        "due_today": _challenge_scheduled_on(ch, today),
-        "next_due": _challenge_next_due(ch, today),
+        "due_today": _challenge_scheduled_on(ch, today, last_done_before_today),
+        "next_due": _challenge_next_due(ch, today, last_done),
         "items": items,
         "streak": _challenge_streak(conn, ch["id"]),
         "complete_today": complete_today,
@@ -5539,16 +5621,19 @@ def _resolve_schedule(data, existing=None):
     kind = (data.get("schedule_kind") or base.get("schedule_kind") or "daily").strip()
     if kind not in SCHEDULE_KINDS:
         return None, None, None, f"schedule_kind must be one of {', '.join(SCHEDULE_KINDS)}"
-    if kind == "interval":
+    if kind in ("interval", "rolling"):
         raw = data.get("schedule_interval", base.get("schedule_interval"))
         try:
             interval = int(raw)
         except (TypeError, ValueError):
             return None, None, None, "schedule_interval must be a number"
-        if not 2 <= interval <= 30:
-            # 1 is just "daily" spelled oddly, and beyond a month it stops
-            # being a habit.
-            return None, None, None, "schedule_interval must be between 2 and 30"
+        # `interval` counts from the start date, so 1 is just "daily" spelled
+        # oddly. `rolling` counts from the last completion, where 1 means
+        # "again the day after you did it" — a real and different thing.
+        low = 1 if kind == "rolling" else 2
+        if not low <= interval <= 30:
+            # Beyond a month it stops being a habit.
+            return None, None, None, f"schedule_interval must be between {low} and 30"
         return kind, interval, None, None
     if kind == "weekdays":
         raw = data.get("schedule_weekdays", base.get("schedule_weekdays"))
@@ -6760,7 +6845,7 @@ def _challenge_reminder_tick(now, conn):
         start, _ = _challenge_day_range(ch, now.date())
         if start and now.date() < start:
             continue
-        if not _challenge_scheduled_on(ch, now.date()):
+        if not _challenge_scheduled_on(ch, now.date(), _last_complete_day(conn, ch, now.date())):
             continue  # a rest day owes nothing
         # Judged for the day being evaluated, which is not necessarily today.
         if not _challenge_complete_on(conn, today_iso, ch["id"]):
@@ -6818,7 +6903,7 @@ def _training_reminder_tick(now, conn):
         start, _ = _challenge_day_range(ch, now.date())
         if start and now.date() < start:
             continue
-        if not _challenge_scheduled_on(ch, now.date()):
+        if not _challenge_scheduled_on(ch, now.date(), _last_complete_day(conn, ch, now.date())):
             continue
         done = _completions_by_day(conn, [i["id"] for i in items]).get(today_iso, set())
         if len(done) and len(done) < len(items):
