@@ -345,3 +345,21 @@ def test_the_rolling_schedule_reveals_the_interval_field():
         "the interval field is not revealed for a rolling schedule"
     )
     assert "challenge-edit-rolling-hint" in js, "the hint explaining it is never shown"
+
+
+def test_finishing_a_trained_session_is_celebrated():
+    """The server says which challenge the session's ticks belonged to; the
+    client has no other way to know, so an unread field is a silent moment."""
+    js = _read(os.path.join(STATIC, "app.js"))
+    assert "training_finished" in js, "the client never reads the finish the server reports"
+    assert "function celebrateTraining(" in js
+
+
+def test_the_training_celebration_uses_the_server_duration():
+    """The client's copy of the session is a snapshot from its last refresh,
+    which mid-session is minutes stale."""
+    js = _read(os.path.join(STATIC, "app.js"))
+    start = js.index("function celebrateTraining(")
+    body = js[start:start + 600]
+    assert "finished.seconds" in body, "the celebration reads a stale local duration"
+    assert "trainingData.current.seconds" not in body

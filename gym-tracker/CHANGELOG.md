@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.63.0
+
+- **Finishing your session now finishes the clock, and says so.** The training
+  clock used to close only when *everything due that day* was ticked — which
+  looked at every challenge except the one you were training. A gym session
+  pinned to Monday and trained on a Saturday is not due, so it was skipped
+  entirely, while two outstanding Kegels and an unticked supplement held the
+  session open. You finished the thing you came to do and nothing noticed.
+- It now follows **what you actually trained**: the session closes when a
+  challenge you ticked at least two items of during it is finished. Whether that
+  challenge was *due* today is irrelevant — you did it, which is the only claim
+  being made.
+- **And it is marked.** Completing the session you trained gets its own
+  celebration, naming the session and how long it took: *Rebuild — Session A
+  done in 54 min 💪*. Previously the only celebration big enough to notice
+  required clearing every challenge due that day, which at seven live
+  challenges essentially never happens.
+- The two-tick threshold is what stops a one-item Plank challenge ending a
+  session seconds after it begins. The duration is reported by the add-on rather
+  than read from the app's own copy, which mid-session is minutes stale.
+
 ## 1.62.0
 
 - **A new schedule: every N days after you last did it.** Pick *Every N days

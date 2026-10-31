@@ -21,7 +21,7 @@ from flask import Flask, Response, g, jsonify, render_template, request, send_fi
 import garmin_client
 import meals
 
-APP_VERSION = "1.62.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.63.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("GYM_DB_PATH", "/data/gym.db")
 OPTIONS_PATH = os.environ.get("GYM_OPTIONS_PATH", "/data/options.json")
@@ -4294,28 +4294,45 @@ def api_workouts():
     return jsonify(rows)
 
 
-def _all_due_complete(conn, day_iso):
-    """Is everything due on `day_iso` ticked, across every running challenge?
+TRAINED_CHALLENGE_MIN_TICKS = 2
 
-    Rest days and challenges that have not started contribute nothing, so a day
-    where only one challenge is due is complete when that one is.
+
+def _trained_challenge_complete(conn, session_started_at, day_iso):
+    """Did the session you were actually training just finish?
+
+    Replaces an "everything due today is ticked" rule that looked at every
+    challenge *except* the one being trained. A gym session pinned to Monday
+    and trained on a Saturday is not due, so it was skipped — meanwhile a
+    part-ticked supplement list and two outstanding Kegels held the session
+    open. The thing you came to do finished and nothing noticed.
+
+    So: a challenge counts as the one being trained if at least
+    TRAINED_CHALLENGE_MIN_TICKS of its items were ticked inside this session.
+    Whether it was *due* is irrelevant — you did it, which is the only claim
+    being made. The threshold is what stops a one-item Plank challenge ending
+    a session seconds after it starts.
+
+    Returns the challenge that finished, or None.
     """
-    day = date.fromisoformat(day_iso)
-    due_seen = False
+    rows = conn.execute(
+        "SELECT ci.challenge_id AS cid, COUNT(*) AS n FROM challenge_completions cc "
+        "JOIN challenge_items ci ON ci.id = cc.item_id "
+        "WHERE cc.day = ? AND cc.ts >= ? GROUP BY ci.challenge_id",
+        (day_iso, session_started_at),
+    ).fetchall()
+    trained = {r["cid"]: r["n"] for r in rows if r["n"] >= TRAINED_CHALLENGE_MIN_TICKS}
+    if not trained:
+        return None
     for ch in _challenges(conn):
+        if ch["id"] not in trained or _challenge_finished(ch):
+            continue
         items = _active_challenge_items(conn, ch["id"])
-        if _challenge_finished(ch) or not items:
+        if not items:
             continue
-        start, _ = _challenge_day_range(ch, day)
-        if start and day < start:
-            continue
-        if not _challenge_scheduled_on(ch, day, _last_complete_day(conn, ch, day)):
-            continue
-        due_seen = True
         done = _completions_by_day(conn, [i["id"] for i in items]).get(day_iso, set())
-        if len(done) < len(items):
-            return False
-    return due_seen
+        if len(done) >= len(items):
+            return ch
+    return None
 
 
 def _open_training(conn):
@@ -5956,6 +5973,8 @@ def api_challenge_toggle():
     # always did — it happened then, and the time of day is unknowable.
     done_on = min(day, today.isoformat())
 
+    finished_challenge = None
+    finished_seconds = None
     existing = db.execute(
         "SELECT id FROM challenge_completions WHERE item_id = ? AND day = ?", (item_id, day)
     ).fetchone()
@@ -5986,15 +6005,38 @@ def api_challenge_toggle():
             duration_sec=_row_value(item, "target_seconds"),
         )
         done = True
-        # The tick that finishes everything due also ends the training session,
-        # so the common case needs no second press. Only ever closes a session
-        # it could plausibly belong to — one started today.
+        # The tick that finishes the session you were training also ends the
+        # clock, so the common case needs no second press. Only ever closes a
+        # session it could plausibly belong to — one started today.
         open_row = _open_training(db)
         if open_row and (open_row["started_at"] or "")[:10] == today.isoformat():
-            if _all_due_complete(db, today.isoformat()):
-                _close_training(db, open_row, datetime.now(), "auto")
+            finished_challenge = _trained_challenge_complete(
+                db, open_row["started_at"], today.isoformat()
+            )
+            if finished_challenge is not None:
+                finished_at = datetime.now()
+                _close_training(db, open_row, finished_at, "auto")
+                try:
+                    finished_seconds = max(0, int(
+                        (finished_at - datetime.fromisoformat(open_row["started_at"]))
+                        .total_seconds()))
+                except (ValueError, TypeError):
+                    finished_seconds = None
     db.commit()
-    return jsonify({"status": "ok", "done": done, "streak": _challenge_streak(db)})
+    return jsonify({
+        "status": "ok", "done": done, "streak": _challenge_streak(db),
+        # The session you were training just finished. Said explicitly rather
+        # than left for the client to work out: only the server knows which
+        # challenge the session's ticks belonged to, and it is the moment worth
+        # marking — not whether every supplement was also remembered.
+        "training_finished": (
+            {"challenge": finished_challenge["name"], "challenge_id": finished_challenge["id"],
+             # Reported here because the client's copy is a snapshot from
+             # whenever it last refreshed, which mid-session is minutes stale.
+             "seconds": finished_seconds}
+            if finished_challenge is not None else None
+        ),
+    })
 
 
 @app.route("/api/challenge/logged", methods=["PUT"])

@@ -1346,14 +1346,18 @@ document.getElementById("challenge-cards").addEventListener("click", (e) => {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ item_id: item.id }),
   })
-    .then(() => {
+    .then((res) => {
       // Server is the source of truth — re-sync streak, week dots and the exact
       // workout rows (real ids, ordering) the optimistic pass approximated.
       loadChallenge();
       refreshWorkoutViews();
-      // The tick that finishes everything due also ends the session, so the
-      // clock has to hear about it.
+      // The tick that finishes the session you were training also ends the
+      // clock, so the clock has to hear about it.
       loadTraining();
+      // And it is worth marking. Only the server can tell which challenge the
+      // session's ticks belonged to, so it says, and this is the moment — not
+      // whether every supplement was also remembered.
+      if (res && res.training_finished) celebrateTraining(res.training_finished);
     })
     .catch(() => {
       applyChallengeToggle(item, !nextDone, found.challenge);
@@ -1453,6 +1457,17 @@ function renderTraining() {
         (mean ? ` · average ${fmtElapsed(mean)}` : "")
       : "Press start when you begin, so the session's length is measured rather than guessed.";
   }
+}
+
+// Finishing the session you came to do. Louder than the per-challenge toast and
+// quieter than clearing everything due: it is its own moment.
+function celebrateTraining(finished) {
+  confetti(80);
+  // From the server: the client's copy is a snapshot from its last refresh,
+  // which mid-session is minutes out of date.
+  const mins = finished.seconds ? Math.round(finished.seconds / 60) : null;
+  const length = mins ? ` in ${mins} min` : "";
+  toast(`${finished.challenge} done${length} 💪 Training finished.`, { multiplier: 2 });
 }
 
 function stopTrainingTimer() {

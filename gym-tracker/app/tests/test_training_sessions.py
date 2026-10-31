@@ -146,9 +146,15 @@ def _all_item_ids(client):
             for i in c.get("items", [])]
 
 
-def test_ticking_the_last_item_due_finishes_the_session(client, conn):
-    """The common case needs no second press."""
-    _item(client, conn)
+def test_finishing_the_session_you_trained_closes_the_clock(client, conn):
+    """The common case needs no second press.
+
+    Since 1.63.0 this follows the challenge you were *training* rather than
+    everything due that day. The old rule looked at every challenge except the
+    one being trained: a gym session pinned to Monday and trained on a Saturday
+    is not due, so it was skipped, while a part-ticked supplement list held the
+    session open.
+    """
     ids = _all_item_ids(client)
     assert len(ids) > 1
     client.post("/api/training/start")
@@ -157,11 +163,87 @@ def test_ticking_the_last_item_due_finishes_the_session(client, conn):
         client.post("/api/challenge/toggle", json={"item_id": item})
     assert _state(client)["current"] is not None, "closed with work still outstanding"
 
-    client.post("/api/challenge/toggle", json={"item_id": ids[-1]})
+    res = client.post("/api/challenge/toggle", json={"item_id": ids[-1]})
 
     body = _state(client)
-    assert body["current"] is None, "everything due was ticked and the session stayed open"
+    assert body["current"] is None, "the trained challenge completed and the clock stayed open"
     assert body["recent"][0]["ended_by"] == "auto"
+    # And it says so, so the UI can mark the moment.
+    finished = res.get_json()["training_finished"]
+    assert finished is not None
+    assert finished["seconds"] is not None
+
+
+def test_a_challenge_not_due_today_still_finishes_the_session(client, conn):
+    """The exact shape of the reported bug: trained on a day it was not
+    scheduled, so the old rule skipped it entirely and nothing closed."""
+    from datetime import date, timedelta
+
+    # Due only on a weekday that is not today.
+    other = (date.today() + timedelta(days=3)).weekday()
+    cid = client.post("/api/challenges", json={
+        "name": "Session A", "start_date": (date.today() - timedelta(days=7)).isoformat(),
+        "schedule_kind": "weekdays", "schedule_weekdays": str(other)}).get_json()["id"]
+    ex = conn.execute("SELECT id FROM exercises WHERE archived = 0 LIMIT 1").fetchone()["id"]
+    items = [client.post("/api/challenge/items", json={
+        "item_type": "exercise", "exercise_id": ex, "target_reps": 8,
+        "challenge_id": cid}).get_json()["id"] for _ in range(3)]
+
+    card = next(c for c in client.get("/api/challenges").get_json() if c["id"] == cid)
+    assert card["due_today"] is False, "the scenario needs a challenge that is not due"
+
+    client.post("/api/training/start")
+    for item in items:
+        res = client.post("/api/challenge/toggle", json={"item_id": item})
+
+    assert _state(client)["current"] is None, (
+        "trained a session that was not due today and the clock never closed"
+    )
+    assert res.get_json()["training_finished"]["challenge"] == "Session A"
+
+
+def test_an_unrelated_part_ticked_challenge_does_not_hold_it_open(client, conn):
+    """Two outstanding Kegels and a forgotten supplement must not keep the
+    clock running after the gym session is done."""
+    from datetime import date
+
+    other = client.post("/api/challenges", json={
+        "name": "Supplements", "start_date": date.today().isoformat()}).get_json()["id"]
+    sup = conn.execute("SELECT id FROM supplements LIMIT 1").fetchone()["id"]
+    for _ in range(2):
+        client.post("/api/challenge/items", json={
+            "item_type": "supplement", "supplement_id": sup, "challenge_id": other})
+
+    trained = _all_item_ids(client)
+    trained = [i for i in trained
+               if i not in [x["id"] for c in client.get("/api/challenges").get_json()
+                            if c["id"] == other for x in c["items"]]]
+    client.post("/api/training/start")
+    for item in trained:
+        client.post("/api/challenge/toggle", json={"item_id": item})
+
+    assert _state(client)["current"] is None, "an untouched challenge held the session open"
+
+
+def test_a_single_item_challenge_does_not_end_the_session(client, conn):
+    """Ticking a one-item Plank at the start must not finish a session that has
+    barely begun — which is what the two-tick threshold is for."""
+    from datetime import date
+
+    plank = client.post("/api/challenges", json={
+        "name": "Plank", "start_date": date.today().isoformat()}).get_json()["id"]
+    ex = conn.execute("SELECT id FROM exercises WHERE archived = 0 LIMIT 1").fetchone()["id"]
+    only = client.post("/api/challenge/items", json={
+        "item_type": "exercise", "exercise_id": ex, "target_seconds": 120,
+        "challenge_id": plank}).get_json()["id"]
+
+    client.post("/api/training/start")
+    res = client.post("/api/challenge/toggle", json={"item_id": only})
+
+    assert _state(client)["current"] is not None, (
+        "one tick of a one-item challenge ended the session"
+    )
+    assert res.get_json()["training_finished"] is None
 
 
 def test_a_session_started_on_another_day_is_not_auto_finished(client, conn):

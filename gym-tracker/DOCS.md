@@ -263,8 +263,17 @@ this version runs.
 
 The card above your challenges is a clock. Press **Start training** when you
 begin; it counts upward, and shows how much you have logged so far. Press
-**Finish** at the end — or just tick the last thing due, and it closes itself.
-The card then shows that session's length and your average.
+**Finish** at the end — or just finish the session you were training, and it
+closes itself and says so: *Rebuild — Session A done in 54 min 💪*. The card
+then shows that session's length and your average.
+
+**What counts as the session you were training**: a challenge you ticked at
+least two of its items for while the clock was running. Completing that closes
+it. Whether that challenge was *due* today makes no difference — you did it,
+which is the only thing being claimed, and a gym session trained on the "wrong"
+weekday counts exactly as much. The two-tick rule is what stops a one-item
+Plank challenge ending a session seconds after it starts, and a challenge you
+never touched can no longer hold the clock open.
 
 **Why press anything at all.** A session's length used to be worked out as the
 first exercise's tick minus **garmin_hr_window_minutes** — in other words, an
