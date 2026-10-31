@@ -21,7 +21,7 @@ from flask import Flask, Response, g, jsonify, render_template, request, send_fi
 import garmin_client
 import meals
 
-APP_VERSION = "1.63.0"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.63.1"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("GYM_DB_PATH", "/data/gym.db")
 OPTIONS_PATH = os.environ.get("GYM_OPTIONS_PATH", "/data/options.json")
@@ -1901,6 +1901,11 @@ def _garmin_sync_heart_rates(conn, client, today, device_upload):
                 by_day[day] = garmin_client.fetch_heart_rate_series(client, day)
             series = by_day[day]
             session_summary = _hr_summary(series, *extent)
+            # Whether the session reading means anything, which decides if it
+            # can stand in for an exercise whose own window was too thin.
+            session_is_plausible = (
+                (extent[1] - extent[0]).total_seconds() <= SESSION_GAP_MINUTES * 60
+            )
             start_iso = extent[0].isoformat(timespec="seconds")
             end_iso = extent[1].isoformat(timespec="seconds")
             windows = _exercise_windows(session, window_minutes, declared)
@@ -1909,13 +1914,21 @@ def _garmin_sync_heart_rates(conn, client, today, device_upload):
                 window = windows.get(row["id"])
                 summary = _hr_summary(series, *window) if window else None
                 scope = "exercise"
-                if summary is None:
+                if summary is None and session_is_plausible:
                     # Too few samples in this exercise's own stretch — a short
                     # gap between ticks, or a watch that was off the wrist for
                     # it. The session reading is what the previous versions
                     # would have given, so fall back to it rather than drop a
                     # reading, and say which one this is.
                     summary, scope = session_summary, "session"
+                elif summary is None:
+                    # ...but only while the session is one. Sessions chain on a
+                    # 90-minute gap, so an evening of Kegels, a gym session and
+                    # more Kegels becomes a single 155-minute block, and its
+                    # average is a reading of nothing in particular — it put the
+                    # barbell work's peak on a Kegel done two hours earlier.
+                    # Past that, no reading is the honest answer.
+                    summary, scope = None, None
                 if summary:
                     conn.execute(
                         "UPDATE workout_logs SET hr_avg = ?, hr_max = ?, hr_min = ?, "

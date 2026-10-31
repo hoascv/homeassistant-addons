@@ -767,7 +767,10 @@ Three rules keep that from inventing anything:
 
 If an exercise's own stretch holds too few samples to read — a quick gap between
 two ticks, or the watch off the wrist for it — the **session's** reading stands
-in rather than the entry going without. Each entry records which of the two it
+in rather than the entry going without, *provided the session is still a
+session*. Exercises chain into one on a 90-minute gap, so an evening of
+odds and ends can run to two or three hours; past that the average is a reading
+of nothing in particular, and the entry is left without one instead. Each entry records which of the two it
 holds, because a per-exercise reading and a session reading are not comparable.
 
 Readings taken before 1.58.0 were session-wide. The sync re-reads them a few

@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.63.1
+
+- **A sprawling session no longer lends its average to an exercise.** When an
+  exercise's own stretch holds too few heart-rate samples, the session's reading
+  stands in — which is right inside a session, and wrong when "the session" is
+  two and a half hours long. Exercises chain into one session on a 90-minute
+  gap, so an evening of Kegels, a gym session and more Kegels became a single
+  155-minute block, and three entries borrowed its average: the same *99 avg ·
+  131 max* on a Kegel at 20:29, a pull-up at 22:15 and a Kegel at 22:59 — with
+  the barbell work's peak attributed to Kegels done either side of it.
+- The stand-in is now only used while the session is **no longer than the gap
+  that defines one**. Past that it is a chain of unrelated activity rather than
+  a session, and no reading is the honest answer. Inside a real session, a thin
+  window still borrows exactly as before.
+
 ## 1.63.0
 
 - **Finishing your session now finishes the clock, and says so.** The training

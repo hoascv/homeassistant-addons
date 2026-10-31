@@ -1371,3 +1371,67 @@ def test_a_session_with_no_heart_rate_still_renders(conn, client, monkeypatch):
     session = client.get("/api/sessions").get_json()[0]
 
     assert session["hr_avg"] is None and session["hr_max"] is None
+
+
+def test_a_sprawling_session_does_not_lend_its_average_to_an_exercise(conn, monkeypatch):
+    """Regression, 1.63.1 — found in real data.
+
+    Sessions chain on a 90-minute gap, so an evening of Kegels, a gym session
+    and more Kegels became one 155-minute block. Three entries whose own window
+    was too thin fell back to its average: the same 99/131 on a Kegel at 20:29,
+    a pull-up at 22:15 and a Kegel at 22:59, with the barbell work's peak
+    attributed to all three.
+    """
+    from datetime import date
+
+    day = date.today().isoformat()
+    early = _log_exercise(conn, f"{day}T20:28:00", duration_sec=60)
+    quick = _log_exercise(conn, f"{day}T20:28:40")      # 40s later: too thin
+    gym = _log_exercise(conn, f"{day}T21:40:00")
+    late = _log_exercise(conn, f"{day}T22:55:00")
+    _patch_hr(monkeypatch, {day: _hr_series(day, [
+        ("20:20", 70), ("20:28", 72),
+        ("21:20", 120), ("21:30", 135), ("21:40", 131),   # the gym
+        ("22:40", 80), ("22:55", 78),
+    ])})
+
+    gymapp._garmin_do_sync(conn)
+
+    rows = {r["id"]: r for r in conn.execute(
+        "SELECT id, hr_avg, hr_max, hr_scope, session_start, session_end FROM workout_logs")}
+    span = rows[quick]
+    minutes = (gymapp.datetime.fromisoformat(span["session_end"])
+               - gymapp.datetime.fromisoformat(span["session_start"])).total_seconds() / 60
+    assert minutes > gymapp.SESSION_GAP_MINUTES, "the scenario needs a sprawling session"
+
+    assert rows[quick]["hr_avg"] is None, (
+        f"a 40-second Kegel was given the whole evening's average "
+        f"({rows[quick]['hr_avg']} bpm)"
+    )
+    assert rows[quick]["hr_scope"] is None
+    # The exercises that could be read on their own windows are unaffected.
+    assert rows[gym]["hr_avg"] is not None
+    assert rows[gym]["hr_scope"] == "exercise"
+
+
+def test_a_normal_session_still_lends_its_average(conn, monkeypatch):
+    """The fallback is bounded, not removed: inside a session that is actually
+    a session, a thin window still borrows rather than going blank."""
+    from datetime import date
+
+    day = date.today().isoformat()
+    first = _log_exercise(conn, f"{day}T18:45:00", duration_sec=15 * 60)
+    quick = _log_exercise(conn, f"{day}T18:45:20")        # 20s later
+    _patch_hr(monkeypatch, {day: _hr_series(day, [
+        ("18:35", 120), ("18:40", 150), ("18:44", 141),
+    ])})
+
+    gymapp._garmin_do_sync(conn)
+
+    rows = {r["id"]: r for r in conn.execute(
+        "SELECT id, hr_avg, hr_scope, session_start, session_end FROM workout_logs")}
+    minutes = (gymapp.datetime.fromisoformat(rows[quick]["session_end"])
+               - gymapp.datetime.fromisoformat(rows[quick]["session_start"])).total_seconds() / 60
+    assert minutes <= gymapp.SESSION_GAP_MINUTES
+    assert rows[quick]["hr_avg"] is not None, "a thin window in a real session lost its reading"
+    assert rows[quick]["hr_scope"] == "session"
