@@ -1,4 +1,5 @@
 import bisect
+import functools
 import hmac
 import html
 import importlib.metadata
@@ -21,7 +22,7 @@ from flask import Flask, Response, g, jsonify, render_template, request, send_fi
 import garmin_client
 import meals
 
-APP_VERSION = "1.63.1"  # keep in sync with the "version" field in config.yaml
+APP_VERSION = "1.64.0"  # keep in sync with the "version" field in config.yaml
 
 DB_PATH = os.environ.get("GYM_DB_PATH", "/data/gym.db")
 OPTIONS_PATH = os.environ.get("GYM_OPTIONS_PATH", "/data/options.json")
@@ -287,6 +288,34 @@ def _enforce_access():
     if user_id in allowed:
         return None
     return Response(_access_denied_html(user_id), status=403, mimetype="text/html")
+
+
+def _ingress_only(view):
+    """Refuse this route on the published port, token or no token.
+
+    The port exists so a data pipeline can read training data, and its only
+    credential is a shared token that lives in another add-on's configuration.
+    That is a reasonable key for weights and workouts and the wrong one
+    entirely for photographs of somebody's body, so these routes are reachable
+    only through Home Assistant's own authenticated proxy.
+
+    Note what this does and does not buy: it keeps the photos off the network.
+    They are still in the database, so they are still in any backup of it.
+    """
+    @functools.wraps(view)
+    def wrapper(*args, **kwargs):
+        if not request.headers.get(INGRESS_USER_ID_HEADER):
+            return jsonify({
+                "error": "not available on this port",
+                "detail": (
+                    "Progress photos are reachable only through Home Assistant, "
+                    "not over the published API port — a pipeline token is not "
+                    "the right key for them. Open the add-on in Home Assistant, "
+                    "or read them out of a backup with tools/extract_photos.py."
+                ),
+            }), 403
+        return view(*args, **kwargs)
+    return wrapper
 
 
 def _access_denied_html(user_id):
@@ -658,6 +687,35 @@ def init_db():
             UNIQUE(item_id, day)
         )
         """
+    )
+    # Progress photos: the body, over time. Stored here rather than as files
+    # because there are few of them and keeping them in the database means they
+    # travel with a backup — which is also the thing to be aware of, since that
+    # backup is a single file people copy around.
+    #
+    # Never reachable over the published port, and deliberately absent from
+    # TRACKED_TABLES so neither the images nor the fact of them reaches the
+    # change feed and the lakehouse behind it.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS progress_photos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            taken_on TEXT NOT NULL,
+            -- front / side / back. Comparing a front photo with a side one
+            -- says nothing, so the angle is part of the record rather than
+            -- left to whoever is looking.
+            angle TEXT NOT NULL DEFAULT 'front',
+            image BLOB NOT NULL,
+            mime TEXT NOT NULL,
+            notes TEXT,
+            created_at TEXT,
+            updated_at TEXT
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_progress_photos_day "
+        "ON progress_photos(taken_on DESC, angle)"
     )
     conn.execute(
         """
@@ -4464,6 +4522,118 @@ def api_training_finish():
     db.commit()
     fresh = db.execute("SELECT * FROM training_sessions WHERE id = ?", (row["id"],)).fetchone()
     return jsonify({"status": "finished", "session": _training_view(db, fresh, now)})
+
+
+MAX_PHOTO_BYTES = 1_000_000
+PHOTO_ANGLES = ("front", "side", "back")
+
+
+def _photo_view(row, weights=None):
+    day = row["taken_on"]
+    seen = (weights or {}).get(day) or {}
+    return {
+        "id": row["id"],
+        "taken_on": day,
+        "angle": row["angle"],
+        "notes": row["notes"],
+        "bytes": len(row["image"]) if "image" in row.keys() else None,
+        # The weigh-in from that day, if there was one. A photo next to the
+        # number is the comparison; a photo on its own is a photo.
+        "weight_kg": seen.get("weight_kg"),
+        "body_fat_pct": seen.get("body_fat_pct"),
+    }
+
+
+@app.route("/api/progress-photos")
+@_ingress_only
+def api_progress_photos():
+    """Every photo, newest first, with the weigh-in from the day it was taken."""
+    db = get_db()
+    rows = db.execute(
+        "SELECT id, taken_on, angle, notes FROM progress_photos "
+        "ORDER BY taken_on DESC, angle ASC, id DESC"
+    ).fetchall()
+    weights = {
+        r["day"]: dict(r) for r in db.execute(
+            "SELECT substr(ts, 1, 10) AS day, weight_kg, body_fat_pct FROM weight_logs "
+            "GROUP BY day"
+        )
+    }
+    photos = [_photo_view(r, weights) for r in rows]
+    by_angle = defaultdict(list)
+    for p in photos:
+        by_angle[p["angle"]].append(p)
+    return jsonify({
+        "photos": photos,
+        # What can actually be compared: an angle with at least two photos.
+        "comparable_angles": sorted(a for a, v in by_angle.items() if len(v) >= 2),
+        "days": sorted({p["taken_on"] for p in photos}, reverse=True),
+    })
+
+
+@app.route("/api/progress-photos", methods=["POST"])
+@_ingress_only
+def api_add_progress_photo():
+    db = get_db()
+    uploaded = request.files.get("file")
+    if uploaded is None or uploaded.filename == "":
+        return jsonify({"error": "no file provided"}), 400
+    data = uploaded.read(MAX_PHOTO_BYTES + 1)
+    if len(data) > MAX_PHOTO_BYTES:
+        return jsonify({
+            "error": f"photo is larger than {MAX_PHOTO_BYTES // 1000} KB — "
+                     "these live in the database, which is also your backup"
+        }), 400
+    mime = _sniff_image(data)
+    if mime is None:
+        return jsonify({"error": "not a JPEG, PNG or WebP image"}), 400
+
+    angle = (request.form.get("angle") or "front").strip().lower()
+    if angle not in PHOTO_ANGLES:
+        return jsonify({"error": f"angle must be one of {', '.join(PHOTO_ANGLES)}"}), 400
+    taken_on = (request.form.get("taken_on") or "").strip() or date.today().isoformat()
+    try:
+        parsed = date.fromisoformat(taken_on)
+    except ValueError:
+        return jsonify({"error": "taken_on must be YYYY-MM-DD"}), 400
+    if parsed > date.today():
+        return jsonify({"error": "that date is in the future"}), 400
+    notes = (request.form.get("notes") or "").strip() or None
+
+    now = _now_ts()
+    cur = db.execute(
+        "INSERT INTO progress_photos (taken_on, angle, image, mime, notes, created_at, "
+        "updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (taken_on, angle, data, mime, notes, now, now),
+    )
+    db.commit()
+    return jsonify({"status": "saved", "id": cur.lastrowid, "bytes": len(data)}), 201
+
+
+@app.route("/api/progress-photos/<int:photo_id>/image")
+@_ingress_only
+def api_progress_photo_image(photo_id):
+    row = get_db().execute(
+        "SELECT image, mime FROM progress_photos WHERE id = ?", (photo_id,)
+    ).fetchone()
+    if row is None:
+        return jsonify({"error": "no such photo"}), 404
+    return Response(row["image"], mimetype=row["mime"], headers={
+        # Private: a body photo must not sit in a shared cache, and the
+        # add-on is reached through a proxy.
+        "Cache-Control": "private, max-age=86400",
+    })
+
+
+@app.route("/api/progress-photos/<int:photo_id>", methods=["DELETE"])
+@_ingress_only
+def api_delete_progress_photo(photo_id):
+    db = get_db()
+    cur = db.execute("DELETE FROM progress_photos WHERE id = ?", (photo_id,))
+    db.commit()
+    if cur.rowcount == 0:
+        return jsonify({"error": "no such photo"}), 404
+    return jsonify({"status": "deleted"})
 
 
 @app.route("/api/sessions")

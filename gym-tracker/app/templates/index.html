@@ -85,6 +85,29 @@
     <p class="muted" id="meals-summary">–</p>
   </section>
 
+  <!-- Progress photos -->
+  <section class="card" id="photos-card">
+    <div class="card-head">
+      <h2>Progress photos</h2>
+      <button type="button" class="link-btn" id="photo-add-btn">Add photo</button>
+    </div>
+    <p class="empty-state" id="photos-empty">No photos yet. Take one from each angle
+      and the comparison becomes worth looking at in a month.</p>
+    <div id="photo-compare" hidden>
+      <div class="field-row">
+        <label>Angle<select id="photo-angle-pick"></select></label>
+        <label>Then<select id="photo-then"></select></label>
+        <label>Now<select id="photo-now"></select></label>
+      </div>
+      <div class="photo-pair">
+        <figure><img id="photo-img-then" alt="earlier photo"><figcaption id="photo-cap-then"></figcaption></figure>
+        <figure><img id="photo-img-now" alt="later photo"><figcaption id="photo-cap-now"></figcaption></figure>
+      </div>
+      <p class="photo-delta" id="photo-delta"></p>
+    </div>
+    <input type="file" id="photo-file" accept="image/jpeg,image/png,image/webp" capture="environment" hidden>
+  </section>
+
   <!-- Recent workouts -->
   <section class="card" id="recent-card">
     <div class="card-head">

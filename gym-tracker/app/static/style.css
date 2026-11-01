@@ -571,6 +571,20 @@ p.tpl-meta { margin: 0 0 0.6rem; white-space: normal; }
   margin: 0.3rem 0 0.2rem;
 }
 
+/* Two photos side by side is the whole feature: one alone says nothing. */
+.photo-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; margin-top: 0.6rem; }
+.photo-pair figure { margin: 0; }
+.photo-pair img {
+  width: 100%; aspect-ratio: 3 / 4; object-fit: cover;
+  border-radius: 9px; background: var(--surface-2); display: block;
+}
+.photo-pair figcaption {
+  font-size: 0.74rem; color: var(--text-muted); margin-top: 0.25rem;
+  font-variant-numeric: tabular-nums;
+}
+.photo-delta { font-size: 0.85rem; margin: 0.6rem 0 0; font-weight: 600; }
+.photo-delta .muted { font-weight: 400; color: var(--text-muted); }
+
 /* The training clock. Quiet when idle, and unmistakable when running — it is
    the one card whose state you need to read from across a gym. */
 .training-card { padding: 0.85rem 1rem; }

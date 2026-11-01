@@ -326,6 +326,39 @@ why the player keeps your screen awake while it runs.
 clock rather than counting, so coming back to the app shows the right number
 immediately. It won't replay the beeps you missed while it was in the background.
 
+### Progress photos
+
+The **Progress photos** card on Home keeps pictures of you, over time. Add one,
+tag it **front**, **side** or **back**, and pick any two dates to see them side
+by side. The weigh-in from each day sits under each photo, and a line below says
+what changed between them — *92 days apart · +1.0 kg · −2.2 pts body fat*.
+
+The angle is part of the record because comparing a front photo with a side one
+tells you nothing, and an angle with only one photo is not offered for
+comparison at all.
+
+**They never leave Home Assistant.** Every other record in this add-on can be
+read over the published port with `api_token`. These cannot: that token sits in
+another add-on's configuration so a data pipeline can read your training, and it
+is the wrong key for photographs of your body. They are also kept out of the
+change feed, so neither the images nor the fact that you took one reaches the
+lakehouse.
+
+**Reading them for analysis elsewhere.** They are stored in the database, so a
+backup is also the album. `tools/extract_photos.py` reads one and writes the
+images out as files next to a `manifest.json` holding each photo's date, angle,
+notes and that day's weight and body fat:
+
+```
+python3 tools/extract_photos.py gym-tracker-backup-20261101-083000.db -o photos/
+python3 tools/extract_photos.py <backup> --list          # see what is there
+python3 tools/extract_photos.py <backup> --angle front --since 2026-09-01
+```
+
+That a backup contains them is the thing to remember before sending one
+anywhere. Each photo is capped at **1 MB** for the same reason — two a week for
+a year is already far larger than everything else the database holds.
+
 ### Pictures
 
 Every exercise can have a picture. In the 🏋️ Library, tap the thumbnail beside

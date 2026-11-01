@@ -363,3 +363,36 @@ def test_the_training_celebration_uses_the_server_duration():
     body = js[start:start + 600]
     assert "finished.seconds" in body, "the celebration reads a stale local duration"
     assert "trainingData.current.seconds" not in body
+
+
+def test_the_photo_card_is_wired():
+    ids = _template_ids()
+    for element in ("photos-card", "photos-empty", "photo-compare", "photo-add-btn",
+                    "photo-file", "photo-angle-pick", "photo-then", "photo-now",
+                    "photo-img-then", "photo-img-now", "photo-delta"):
+        assert element in ids, f"the photo card is missing #{element}"
+    js = _read(os.path.join(STATIC, "app.js"))
+    assert "api/progress-photos" in js
+
+
+def test_the_photo_upload_lets_the_browser_set_the_boundary():
+    """A multipart POST with a hand-written Content-Type has no boundary, and
+    the server cannot parse it — it works locally and fails for real.
+
+    Comments are stripped first: the line explaining *why* the header is absent
+    contains the header's name, and matching raw text fails on the explanation
+    rather than on the code.
+    """
+    js = _read(os.path.join(STATIC, "app.js"))
+    code = "\n".join(re.sub(r"//.*$", "", line) for line in js.split("\n"))
+    start = code.index('fetch("api/progress-photos"')
+    call = code[start:code.index(")", code.index("}", start))]
+    assert "Content-Type" not in call, (
+        "the photo upload sets Content-Type by hand, which strips the multipart boundary"
+    )
+    assert "body" in call, "the FormData is never sent"
+
+
+def test_photos_are_loaded_at_boot():
+    js = _read(os.path.join(STATIC, "app.js"))
+    assert re.search(r"^loadPhotos\(\);", js, re.M)

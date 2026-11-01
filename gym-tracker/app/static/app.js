@@ -1405,6 +1405,126 @@ function refreshWorkoutViews() {
   if (backdrop && backdrop.classList.contains("open")) loadWorkoutHistory(workoutFilterExerciseId);
 }
 
+// --- Progress photos --------------------------------------------------------
+// The body over time. One photo says nothing, so the card is built around a
+// comparison: pick an angle, pick two dates, and the weigh-in from each day
+// sits underneath — which is what turns two pictures into a measurement.
+
+let photoData = null;
+
+async function loadPhotos() {
+  try { photoData = await fetchJSON("api/progress-photos"); }
+  catch (e) { return; }   // the published port refuses these; so does an error
+  renderPhotos();
+}
+
+function renderPhotos() {
+  const empty = document.getElementById("photos-empty");
+  const compare = document.getElementById("photo-compare");
+  const angles = (photoData && photoData.comparable_angles) || [];
+  if (!angles.length) {
+    const n = (photoData && photoData.photos || []).length;
+    empty.textContent = n
+      ? `${n} photo${n === 1 ? "" : "s"} so far — two from the same angle and this becomes a comparison.`
+      : "No photos yet. Take one from each angle and the comparison becomes worth looking at in a month.";
+    empty.hidden = false; compare.hidden = true;
+    return;
+  }
+  empty.hidden = true; compare.hidden = false;
+
+  const pick = document.getElementById("photo-angle-pick");
+  const chosen = angles.includes(pick.value) ? pick.value : angles[0];
+  pick.innerHTML = angles
+    .map((a) => `<option value="${a}"${a === chosen ? " selected" : ""}>${a}</option>`).join("");
+
+  const forAngle = photoData.photos.filter((p) => p.angle === chosen);
+  const then = document.getElementById("photo-then");
+  const now = document.getElementById("photo-now");
+  // Oldest first in "then", newest first in "now", each defaulting to its end —
+  // the comparison you almost always want is first against latest.
+  const opts = (list) => list
+    .map((p) => `<option value="${p.id}">${fmtDate(p.taken_on)}</option>`).join("");
+  const keep = (sel, fallback) =>
+    forAngle.some((p) => String(p.id) === sel.value) ? sel.value : String(fallback.id);
+  const oldest = forAngle[forAngle.length - 1], newest = forAngle[0];
+  const keptThen = keep(then, oldest), keptNow = keep(now, newest);
+  then.innerHTML = opts([...forAngle].reverse());
+  now.innerHTML = opts(forAngle);
+  then.value = keptThen; now.value = keptNow;
+
+  showPhotoPair();
+}
+
+function showPhotoPair() {
+  const byId = (id) => (photoData.photos || []).find((p) => String(p.id) === String(id));
+  const a = byId(document.getElementById("photo-then").value);
+  const b = byId(document.getElementById("photo-now").value);
+  const paint = (p, img, cap) => {
+    document.getElementById(img).src = p ? `api/progress-photos/${p.id}/image` : "";
+    document.getElementById(cap).textContent = p ? photoCaption(p) : "";
+  };
+  paint(a, "photo-img-then", "photo-cap-then");
+  paint(b, "photo-img-now", "photo-cap-now");
+  document.getElementById("photo-delta").innerHTML = photoDelta(a, b);
+}
+
+function photoCaption(p) {
+  const bits = [fmtDate(p.taken_on)];
+  if (p.weight_kg != null) bits.push(`${p.weight_kg} kg`);
+  if (p.body_fat_pct != null) bits.push(`${p.body_fat_pct}%`);
+  return bits.join(" · ");
+}
+
+// What changed between the two, stated only where there is something to state.
+function photoDelta(a, b) {
+  if (!a || !b || a.id === b.id) return "";
+  const days = Math.round(
+    (new Date(b.taken_on) - new Date(a.taken_on)) / 86400000);
+  if (!days) return "";
+  const parts = [`${Math.abs(days)} days apart`];
+  if (a.weight_kg != null && b.weight_kg != null) {
+    const d = b.weight_kg - a.weight_kg;
+    parts.push(`${d >= 0 ? "+" : ""}${d.toFixed(1)} kg`);
+  }
+  if (a.body_fat_pct != null && b.body_fat_pct != null) {
+    const d = b.body_fat_pct - a.body_fat_pct;
+    parts.push(`${d >= 0 ? "+" : ""}${d.toFixed(1)} pts body fat`);
+  }
+  const missing = (a.weight_kg == null || b.weight_kg == null)
+    ? ' <span class="muted">— no weigh-in on one of these days</span>' : "";
+  return escapeHtml(parts.join(" · ")) + missing;
+}
+
+["photo-angle-pick", "photo-then", "photo-now"].forEach((id) => {
+  document.getElementById(id).addEventListener("change", () => {
+    if (id === "photo-angle-pick") renderPhotos(); else showPhotoPair();
+  });
+});
+
+document.getElementById("photo-add-btn").addEventListener("click", () => {
+  document.getElementById("photo-file").click();
+});
+
+document.getElementById("photo-file").addEventListener("change", async (e) => {
+  const file = e.target.files && e.target.files[0];
+  e.target.value = "";                      // so the same file can be picked again
+  if (!file) return;
+  const angle = prompt("Angle — front, side or back?", "front");
+  if (!angle) return;
+  const body = new FormData();
+  body.append("file", file);
+  body.append("angle", angle.trim().toLowerCase());
+  try {
+    // No Content-Type header: the browser sets the multipart boundary itself,
+    // and naming it by hand produces a request the server cannot parse.
+    const res = await fetch("api/progress-photos", { method: "POST", body });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || "could not save the photo");
+    toast(`Photo saved — ${Math.round((data.bytes || 0) / 1024)} KB.`);
+    loadPhotos();
+  } catch (err) { toast(err.message); }
+});
+
 // --- The training clock -----------------------------------------------------
 // Duration used to be inferred as the first tick minus the configured
 // heart-rate window — a guessed thirty minutes. A start you press is a
@@ -4394,6 +4514,7 @@ loadSkippedDays();
 loadChallenge();
 loadChallengeStats();
 loadTraining();
+loadPhotos();
 loadSessions();
 loadRecentWorkouts();
 loadGarminCard();

@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.64.0
+
+- **Progress photos.** A new card on Home: add a photo, tag it **front**, **side**
+  or **back**, and compare any two dates side by side. The weigh-in from each
+  day sits underneath, and the line below says what changed — *92 days apart ·
+  +1.0 kg · −2.2 pts body fat*. One photo says nothing; two with the numbers
+  attached is a measurement.
+- **They never leave Home Assistant.** Unlike every other record, these are
+  refused on the published API port even with a valid `api_token` — that token
+  lives in another add-on's configuration so a data pipeline can read your
+  training, and it is the wrong key for photographs of your body. They are also
+  absent from the change feed, so neither the images nor the fact of them
+  reaches the lakehouse.
+- **Reading them for analysis elsewhere**: `tools/extract_photos.py` takes a
+  backup and writes the images out as files beside a `manifest.json` carrying
+  each one's date, angle, notes and that day's weight and body fat — so a
+  script needs one file rather than a join. `--list` shows what is there
+  without writing anything.
+- **Worth knowing where they live.** The photos are stored in the database, so
+  a backup is also the album — convenient for the above, and worth remembering
+  before sending a backup anywhere. Each is capped at 1 MB for the same reason.
+
 ## 1.63.1
 
 - **A sprawling session no longer lends its average to an exercise.** When an
