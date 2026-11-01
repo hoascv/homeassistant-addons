@@ -453,3 +453,39 @@ def test_training_reminder_needs_a_notify_service(client, conn, set_options, fak
     gymapp._training_reminder_tick(datetime.now(), conn)
 
     assert fake_ha_server == []
+
+
+def test_training_reminder_ignores_challenges_that_owe_nothing(client, conn, set_options, fake_ha_server):
+    """Its value is being quiet. A finished challenge, one that has not started
+    and one not due today must none of them produce a nudge."""
+    from datetime import date, timedelta
+
+    set_options(notify_service=NOTIFY, training_reminder_enabled=True,
+                training_reminder_idle_minutes=25)
+    ex = conn.execute("SELECT id FROM exercises WHERE archived = 0 LIMIT 1").fetchone()["id"]
+    today = date.today()
+    for name, start, end, kind, wd in (
+        ("Finished", today - timedelta(days=30), today - timedelta(days=1), "daily", None),
+        ("Not started", today + timedelta(days=5), None, "daily", None),
+        ("Not due", today - timedelta(days=5), None, "weekdays",
+         str((today + timedelta(days=2)).weekday())),
+    ):
+        body = {"name": name, "start_date": start.isoformat(), "schedule_kind": kind}
+        if end: body["end_date"] = end.isoformat()
+        if wd: body["schedule_weekdays"] = wd
+        cid = client.post("/api/challenges", json=body).get_json()["id"]
+        for _ in range(2):
+            client.post("/api/challenge/items", json={
+                "item_type": "exercise", "exercise_id": ex, "challenge_id": cid})
+
+    client.post("/api/training/start")
+    # Part-tick only the ones that owe nothing, so the seeded daily challenge
+    # is untouched and cannot be what keeps it quiet.
+    for c in client.get("/api/challenges").get_json():
+        if c["name"] in ("Finished", "Not started", "Not due") and c["items"]:
+            client.post("/api/challenge/toggle", json={"item_id": c["items"][0]["id"]})
+    _idle(conn, 40)
+
+    gymapp._training_reminder_tick(datetime.now(), conn)
+
+    assert fake_ha_server == [], f"nudged about a challenge that owes nothing: {fake_ha_server}"

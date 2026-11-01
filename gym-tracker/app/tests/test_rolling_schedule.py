@@ -228,3 +228,49 @@ def test_the_other_schedules_are_unchanged(client, conn):
         "name": "Interval one", "start_date": today.isoformat(),
         "schedule_kind": "interval", "schedule_interval": 1})
     assert bad.status_code == 400
+
+
+# --- rows the API would not produce, but a restore or a pipeline might ------
+
+
+def _raw_challenge(conn, **cols):
+    """A challenge written straight to the table, bypassing validation."""
+    keys = ", ".join(cols)
+    marks = ", ".join("?" for _ in cols)
+    cur = conn.execute(
+        f"INSERT INTO challenges (name, start_date, sort_order, archived, {keys}) "
+        f"VALUES ('Legacy', ?, 0, 0, {marks})",
+        ((date.today() - timedelta(days=10)).isoformat(), *cols.values()))
+    conn.commit()
+    ch = dict(conn.execute("SELECT * FROM challenges WHERE id = ?", (cur.lastrowid,)).fetchone())
+    return ch
+
+
+def test_a_rolling_row_with_no_interval_falls_back_to_due(conn):
+    """A quietly-never-due challenge is worse than one that asks too often, so
+    anything unreadable errs toward due."""
+    ch = _raw_challenge(conn, schedule_kind="rolling", schedule_interval=None)
+
+    assert gymapp._challenge_scheduled_on(ch, date.today(), None) is True
+
+
+def test_a_rolling_row_with_a_nonsense_interval_falls_back_to_due(conn):
+    ch = _raw_challenge(conn, schedule_kind="rolling", schedule_interval="soon")
+
+    assert gymapp._challenge_scheduled_on(ch, date.today(), None) is True
+    assert gymapp._challenge_scheduled_on(ch, date.today(), date.today()) is True
+
+
+def test_a_rolling_row_with_a_zero_interval_is_due_daily(conn):
+    """Zero would divide the schedule by nothing; it reads as "always"."""
+    ch = _raw_challenge(conn, schedule_kind="rolling", schedule_interval=0)
+
+    assert gymapp._challenge_scheduled_on(ch, date.today(), date.today()) is True
+
+
+def test_a_rolling_row_with_an_unreadable_start_date_is_due(conn):
+    """Only consulted when the challenge has never been completed."""
+    ch = _raw_challenge(conn, schedule_kind="rolling", schedule_interval=3)
+    ch["start_date"] = "whenever"
+
+    assert gymapp._challenge_scheduled_on(ch, date.today(), None) is True

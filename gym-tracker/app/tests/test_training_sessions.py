@@ -326,3 +326,25 @@ def test_a_start_long_before_the_first_tick_is_not_used(client, conn, monkeypatc
         "an eleven-hour window was accepted from a stale start"
     )
     assert row["hr_avg"] == round((125 + 133) / 2)
+
+
+# --- the quiet paths ---------------------------------------------------------
+
+
+def test_a_nonsense_limit_falls_back(client):
+    """The list takes ?limit=; a caller that got it wrong wanted recent
+    sessions, and a default answers that better than a 400."""
+    assert client.get("/api/training?limit=loads").status_code == 200
+    assert client.get("/api/training?limit=99999").status_code == 200
+    assert client.get("/api/training?limit=0").status_code == 200
+
+
+def test_a_session_with_an_unreadable_start_is_skipped_not_fatal(client, conn):
+    """A restore or a pipeline write could leave one; the card must still load."""
+    conn.execute("INSERT INTO training_sessions (started_at) VALUES ('not a time')")
+    conn.commit()
+
+    res = client.get("/api/training")
+
+    assert res.status_code == 200
+    assert res.get_json()["current"] is None, "an unreadable session was presented as running"
